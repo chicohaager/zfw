@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <link rel="icon" type="image/svg+xml" href="./appicon.svg">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="robots" content="noindex">
+  <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
+  <title>ZFW Firewall</title>
+  <link rel="stylesheet" href="./styles.css?v=0.2.1">
+</head>
+<body class="dark">
+  <header>
+    <div class="title-row">
+      <h1><span class="logo">&#128737;</span> ZFW Firewall</h1>
+      <span class="version" id="app-version">v0.1</span>
+    </div>
+    <p class="subtitle">Host-Firewall &amp; Security-Dashboard f&uuml;r ZimaOS &mdash; die Firewall, die ZimaOS nicht mitbringt.</p>
+    <div id="status-bar" class="status-bar">
+      <span class="stat"><span class="stat-num" id="stat-fw">&ndash;</span><span class="stat-lbl">Firewall</span></span>
+      <span class="stat"><span class="stat-num" id="stat-exposed">&ndash;</span><span class="stat-lbl">LAN-offen</span></span>
+      <span class="stat"><span class="stat-num" id="stat-blocked">&ndash;</span><span class="stat-lbl">gesperrt</span></span>
+      <span class="stat"><span class="stat-num" id="stat-findings">&ndash;</span><span class="stat-lbl">offene Funde</span></span>
+      <button id="refresh-btn" class="btn-secondary">Aktualisieren</button>
+    </div>
+    <div id="status" role="status" aria-live="polite"></div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab-btn active" data-tab="firewall" role="tab">Firewall</button>
+    <button class="tab-btn" data-tab="rules" role="tab">Regeln</button>
+    <button class="tab-btn" data-tab="exposure" role="tab">Exposition</button>
+    <button class="tab-btn" data-tab="audit" role="tab">Audit</button>
+    <button class="tab-btn" data-tab="versions" role="tab">Versionen</button>
+  </nav>
+
+  <main>
+    <section id="tab-firewall" class="tab-panel active" role="tabpanel">
+      <p class="panel-hint">
+        Status der ZFW-Host-Firewall. <b>Safe-Apply</b> setzt die Regeln mit einem 120-Sekunden-Totmann &mdash;
+        wird nicht innerhalb der Zeit <em>Best&auml;tigen</em> geklickt, rollt die Firewall automatisch zur&uuml;ck
+        (Schutz gegen Aussperren).
+      </p>
+      <div id="fw-status" class="status-grid"><div class="loading">L&auml;dt&hellip;</div></div>
+      <div class="action-row">
+        <button id="btn-apply-safe" class="btn-primary">Safe-Apply (120&nbsp;s Totmann)</button>
+        <button id="btn-commit" class="btn-secondary">Best&auml;tigen</button>
+        <button id="btn-apply" class="btn-secondary">Apply (ohne Totmann)</button>
+        <button id="btn-revert" class="btn-danger">Firewall entfernen</button>
+      </div>
+      <pre id="fw-output" class="output" hidden></pre>
+    </section>
+
+    <section id="tab-rules" class="tab-panel" role="tabpanel">
+      <p class="panel-hint">
+        Firewall-Regeln werden <b>von oben nach unten</b> ausgewertet &mdash; die erste
+        passende Regel gewinnt. Reihenfolge mit &#9650;/&#9660; &auml;ndern. Nach dem
+        Speichern im Firewall-Tab <b>Safe-Apply</b> klicken.
+      </p>
+      <div id="rules-panel"><div class="loading">L&auml;dt&hellip;</div></div>
+    </section>
+
+    <section id="tab-exposure" class="tab-panel" role="tabpanel">
+      <p class="panel-hint">
+        Alle lauschenden TCP-Ports, live.
+        <span class="badge badge-lan">LAN</span> im ganzen Netz erreichbar &middot;
+        <span class="badge badge-blocked">gesperrt</span> von ZFW geblockt &middot;
+        <span class="badge badge-local">localhost</span> nur lokal.
+      </p>
+      <div id="exposure-list"><div class="loading">L&auml;dt&hellip;</div></div>
+    </section>
+
+    <section id="tab-audit" class="tab-panel" role="tabpanel">
+      <p class="panel-hint">
+        Befunde des Security-Audits vom 21.05.2026, live gegen die aktuelle Firewall-Konfiguration bewertet.
+      </p>
+      <div id="audit-list"><div class="loading">L&auml;dt&hellip;</div></div>
+    </section>
+
+    <section id="tab-versions" class="tab-panel" role="tabpanel">
+      <p class="panel-hint">Kernkomponenten des Hosts mit bekanntem CVE-Stand.</p>
+      <div id="versions-list"><div class="loading">L&auml;dt&hellip;</div></div>
+    </section>
+  </main>
+
+  <div id="rule-modal" class="modal-overlay" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+      <h2 id="rm-title">Neue Regel</h2>
+      <div class="modal-body">
+        <label class="fld">Name
+          <input id="rm-name" type="text" placeholder="z. B. SSH vom LAN">
+        </label>
+        <label class="fld">Aktion
+          <select id="rm-action">
+            <option value="allow">Erlauben</option>
+            <option value="deny">Sperren</option>
+          </select>
+        </label>
+        <label class="fld">Quelle
+          <select id="rm-srctype">
+            <option value="any">Alle</option>
+            <option value="ip">Einzel-IP</option>
+            <option value="range">IP-Bereich (CIDR)</option>
+            <option value="country">Land</option>
+          </select>
+        </label>
+        <label class="fld" id="rm-srcval-fld"><span id="rm-srcval-label">Quell-Adresse</span>
+          <input id="rm-srcval" type="text" placeholder="192.168.1.0/24">
+        </label>
+        <p id="rm-geo-hint" class="rm-hint" hidden>Geo-Sperre wirkt nur bei direktem Port-Forward &mdash; nicht hinter Pangolin/Cloudflare-Tunnel (dort am VPS filtern).</p>
+        <label class="fld">Ports
+          <select id="rm-porttype">
+            <option value="all">Alle Ports</option>
+            <option value="list">Bestimmte Ports</option>
+          </select>
+        </label>
+        <label class="fld" id="rm-portval-fld">Ports (Komma-getrennt)
+          <input id="rm-portval" type="text" placeholder="22, 80, 443">
+        </label>
+        <label class="fld">Protokoll
+          <select id="rm-proto">
+            <option value="tcp">TCP</option>
+            <option value="udp">UDP</option>
+            <option value="both">Beide</option>
+          </select>
+        </label>
+        <label class="fld">Zone
+          <select id="rm-zone">
+            <option value="auto">Automatisch</option>
+            <option value="host">Host-Dienst</option>
+            <option value="docker">Docker-Container</option>
+          </select>
+        </label>
+        <p class="rm-hint">Automatisch: zfw erkennt selbst, ob ein Port host-nativ oder ein Docker-Container-Port ist.</p>
+        <label class="fld-check"><input id="rm-enabled" type="checkbox" checked> Regel aktiv</label>
+        <p id="rm-error" class="rm-error" hidden></p>
+      </div>
+      <div class="modal-actions">
+        <button id="rm-cancel" class="btn-secondary">Abbrechen</button>
+        <button id="rm-save" class="btn-primary">Speichern</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./app.js?v=0.2.1"></script>
+</body>
+</html>

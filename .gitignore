@@ -1,0 +1,19 @@
+# Build output
+/dist/
+
+# Compiled daemon — produced by build.sh into the sysext tree
+/raw/usr/bin/zfwd
+
+# Runtime-generated ruleset — the daemon compiles rules.json into this
+/engine/compiled.sh
+
+# Go test / coverage artifacts
+*.test
+*.out
+coverage.txt
+
+# Editor / OS noise
+.DS_Store
+*.swp
+.idea/
+.vscode/

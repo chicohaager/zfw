@@ -1,0 +1,77 @@
+#!/bin/bash
+# zfw engine v2 — applies the daemon-compiled ruleset.
+#
+# In v0.2 the rule logic lives in the zfwd daemon: it compiles rules.json into
+# compiled.sh. This engine is the privileged executor — it runs that script
+# and owns the dead-man / revert safety machinery.
+#
+# Usage:  zfw {apply [--safe] | commit | revert | status}
+set -u
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COMPILED="${ZFW_COMPILED:-$SELF_DIR/compiled.sh}"
+DEADMAN="zfw-deadman"
+
+IPT="$(command -v iptables-legacy 2>/dev/null || command -v iptables)"
+IPT6="$(command -v ip6tables-legacy 2>/dev/null || command -v ip6tables 2>/dev/null || true)"
+
+log(){ echo "[zfw] $*"; }
+
+revert(){
+  $IPT -D INPUT -j ZFW-IN 2>/dev/null || true
+  $IPT -F ZFW-IN 2>/dev/null || true
+  $IPT -X ZFW-IN 2>/dev/null || true
+  if $IPT -L DOCKER-USER -n >/dev/null 2>&1; then
+    $IPT -F DOCKER-USER 2>/dev/null || true
+    $IPT -A DOCKER-USER -j RETURN 2>/dev/null || true   # restore docker stock
+  fi
+  if [ -n "$IPT6" ]; then
+    $IPT6 -D INPUT -j ZFW-IN6 2>/dev/null || true
+    $IPT6 -F ZFW-IN6 2>/dev/null || true
+    $IPT6 -X ZFW-IN6 2>/dev/null || true
+  fi
+}
+
+arm_deadman(){
+  systemctl stop "${DEADMAN}.timer" 2>/dev/null || true
+  systemctl reset-failed "${DEADMAN}.service" 2>/dev/null || true
+  systemd-run --on-active=120 --unit="$DEADMAN" \
+    /bin/bash "${BASH_SOURCE[0]}" _autorevert >/dev/null 2>&1
+  log "DEADMAN ARMED — auto-revert in 120s unless you run:  zfw commit"
+}
+
+case "${1:-}" in
+  apply)
+    [ -r "$COMPILED" ] || { echo "[zfw] ERROR: compiled ruleset missing: $COMPILED" >&2; exit 1; }
+    if ! bash "$COMPILED"; then
+      echo "[zfw] ERROR: applying compiled ruleset failed" >&2
+      exit 1
+    fi
+    log "firewall applied"
+    if [ "${2:-}" = "--safe" ]; then arm_deadman; fi
+    exit 0
+    ;;
+  commit)
+    systemctl stop "${DEADMAN}.timer" 2>/dev/null || true
+    systemctl reset-failed "${DEADMAN}.service" 2>/dev/null || true
+    log "committed — deadman cancelled, rules persist"
+    ;;
+  revert)
+    revert
+    log "firewall reverted — all ZFW rules removed, stock state restored"
+    ;;
+  _autorevert)
+    log "DEADMAN FIRED — reverting firewall"
+    revert
+    ;;
+  status)
+    echo "--- ZFW-IN ---";      $IPT -S ZFW-IN 2>/dev/null || echo "(not loaded)"
+    echo "--- DOCKER-USER ---"; $IPT -S DOCKER-USER 2>/dev/null || echo "(absent)"
+    [ -n "$IPT6" ] && { echo "--- ZFW-IN6 ---"; $IPT6 -S ZFW-IN6 2>/dev/null || echo "(not loaded)"; }
+    echo "--- deadman ---";     systemctl is-active "${DEADMAN}.timer" 2>/dev/null || echo "inactive"
+    ;;
+  *)
+    echo "usage: zfw {apply [--safe] | commit | revert | status}"
+    exit 1
+    ;;
+esac

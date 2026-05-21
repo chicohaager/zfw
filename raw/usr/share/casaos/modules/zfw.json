@@ -1,0 +1,17 @@
+{
+  "name": "zfw",
+  "ui": {
+    "name": "zfw",
+    "title": { "en_us": "ZFW Firewall", "de_de": "ZFW Firewall" },
+    "prefetch": true,
+    "show": true,
+    "entry": "/modules/zfw/index.html",
+    "icon": "/modules/zfw/appicon.svg",
+    "description": "Host firewall & security dashboard for ZimaOS",
+    "formality": {
+      "type": "newtab",
+      "props": { "width": "100vh", "height": "100vh", "hasModalCard": true, "animation": "zoom-in" }
+    }
+  },
+  "services": [ { "name": "zfw-ui" } ]
+}

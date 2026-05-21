@@ -1,0 +1,27 @@
+[Unit]
+Description=ZFW - Host-Firewall UI & Security Dashboard
+# zimaos-gateway hosts the reverse-proxy route; registration retries anyway.
+After=zimaos-gateway.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/bin/mkdir -p /DATA/AppData/zfw
+ExecStart=/usr/bin/zfwd
+Environment=BIND_ADDR=127.0.0.1
+Environment=PORT=8489
+Environment=ROUTE_PATH=/v2/zfw
+Environment=GATEWAY_URL_FILE=/var/run/casaos/management.url
+Environment=STATIC_DIR=/usr/share/casaos/www/modules/zfw
+Environment=ZFW_BIN=/DATA/zfw/zfw
+Environment=ZFW_CONF=/DATA/zfw/allowlist.conf
+Environment=DATA_DIR=/DATA/AppData/zfw
+Environment=TZ=Europe/Berlin
+NoNewPrivileges=true
+StandardOutput=journal
+StandardError=journal
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
