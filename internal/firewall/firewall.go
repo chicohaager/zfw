@@ -162,7 +162,7 @@ func (m *Manager) SaveConfig(c Config) error {
 	fmt.Fprintf(&b, "DOCKER_DROP_LAN=%s\n", strings.Join(c.DockerDropLAN, ","))
 	fmt.Fprintf(&b, "V6_DROP=%s\n", strings.Join(c.V6Drop, ","))
 	tmp := m.Conf + ".tmp"
-	if err := os.WriteFile(tmp, []byte(b.String()), 0o644); err != nil {
+	if err := os.WriteFile(tmp, []byte(b.String()), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, m.Conf)

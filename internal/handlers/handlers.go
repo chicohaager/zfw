@@ -4,6 +4,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -45,6 +46,10 @@ func (s *Server) Recompile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Never compile unvalidated rules: the result is run as root by the engine.
+	if err := rules.Validate(rs); err != nil {
+		return fmt.Errorf("Regelsatz ungültig: %w", err)
+	}
 	ccSet := map[string]bool{}
 	for _, r := range rs.Rules {
 		if r.Source.Type == "country" {
@@ -67,7 +72,8 @@ func (s *Server) Recompile(ctx context.Context) error {
 		}
 	}
 	script := compiler.Compile(rs, system.DockerPorts(ctx), geoFiles)
-	return os.WriteFile(s.compiledPath, []byte(script), 0o755)
+	// 0600: the compiled script is executed as root — keep it owner-only.
+	return os.WriteFile(s.compiledPath, []byte(script), 0o600)
 }
 
 // Routes returns the API mux.

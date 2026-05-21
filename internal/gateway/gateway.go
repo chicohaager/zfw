@@ -86,6 +86,38 @@ func (m *Manager) Register() error {
 	return nil
 }
 
+// LookupTarget returns the proxy target the gateway has registered for the
+// given route path (e.g. "/.well-known/jwks.json"), so the daemon need not
+// hard-code platform service ports.
+func (m *Manager) LookupTarget(ctx context.Context, path string) (string, error) {
+	base, err := m.mgmtURL()
+	if err != nil {
+		return "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/gateway/routes", nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := m.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return "", fmt.Errorf("gateway routes: HTTP %d", resp.StatusCode)
+	}
+	var routes []route
+	if err := json.NewDecoder(resp.Body).Decode(&routes); err != nil {
+		return "", err
+	}
+	for _, rt := range routes {
+		if rt.Path == path {
+			return rt.Target, nil
+		}
+	}
+	return "", fmt.Errorf("route %q nicht registriert", path)
+}
+
 // RegisterWithRetry keeps trying Register until it succeeds or ctx is done,
 // then re-registers every 5 minutes so the route survives a gateway restart
 // (which drops all registered routes). Register() is idempotent.

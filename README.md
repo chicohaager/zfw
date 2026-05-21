@@ -88,10 +88,11 @@ ZFW is two layers:
   `iptables` rules, runs as root from a systemd unit, and supports a dead-man
   `--safe` mode.
 - **Module** (this repository) — a Go daemon (`zfwd`) and the web UI. The daemon
-  binds **`127.0.0.1` only** and registers the reverse-proxy route `/v2/zfw` with the
-  ZimaOS gateway, so the UI is reachable same-origin via port 80 **without ever
-  opening a new LAN port** — the firewall's own control panel must not be a hole in
-  the firewall.
+  binds **`127.0.0.1` only**; the ZimaOS gateway proxies the route `/v2/zfw` so the
+  UI is reachable same-origin via port 80. Because the gateway forwards module
+  routes **without authenticating them**, the daemon verifies a valid ZimaOS session
+  token (an ES256 JWT, checked against the platform JWKS) on every API request — the
+  firewall's own control panel must not be an unauthenticated hole in the firewall.
 
 ```
 cmd/zfwd            daemon entry point

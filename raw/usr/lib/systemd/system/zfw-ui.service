@@ -16,6 +16,8 @@ Environment=STATIC_DIR=/usr/share/casaos/www/modules/zfw
 Environment=ZFW_BIN=/DATA/zfw/zfw
 Environment=ZFW_CONF=/DATA/zfw/allowlist.conf
 Environment=DATA_DIR=/DATA/AppData/zfw
+# Optional override; if unset the daemon discovers the JWKS via the gateway.
+Environment=ZFW_JWKS_URL=http://127.0.0.1:37815/.well-known/jwks.json
 Environment=TZ=Europe/Berlin
 NoNewPrivileges=true
 StandardOutput=journal

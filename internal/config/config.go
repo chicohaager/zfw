@@ -17,6 +17,7 @@ type Config struct {
 	CompiledFile   string // daemon-compiled ruleset the engine applies
 	GeoDir         string // per-country IP data + ipset files (/DATA/zfw/geo)
 	DataDir        string // module state directory
+	JWKSURL        string // ZimaOS JWKS endpoint for session-token validation
 }
 
 func env(k, def string) string {
@@ -40,5 +41,6 @@ func Load() Config {
 		CompiledFile:   env("ZFW_COMPILED", "/DATA/zfw/compiled.sh"),
 		GeoDir:         env("ZFW_GEO", "/DATA/zfw/geo"),
 		DataDir:        env("DATA_DIR", "/DATA/AppData/zfw"),
+		JWKSURL:        env("ZFW_JWKS_URL", "http://127.0.0.1:37815/.well-known/jwks.json"),
 	}
 }

@@ -25,10 +25,12 @@ function setStatus(msg, kind = '') {
 }
 
 async function api(path, opts = {}) {
-  const r = await fetch(API_BASE + path, {
-    headers: { 'Content-Type': 'application/json' },
-    ...opts,
-  });
+  // The ZimaOS gateway does not attach the session token to module calls,
+  // so the daemon's auth middleware needs it sent explicitly.
+  const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+  const tok = localStorage.getItem('access_token');
+  if (tok) headers['Authorization'] = 'Bearer ' + tok;
+  const r = await fetch(API_BASE + path, { ...opts, headers });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
   return data;
