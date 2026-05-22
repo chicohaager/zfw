@@ -43,12 +43,24 @@ arm_deadman(){
 case "${1:-}" in
   apply)
     [ -r "$COMPILED" ] || { echo "[zfw] ERROR: compiled ruleset missing: $COMPILED" >&2; exit 1; }
+    safe=""
+    [ "${2:-}" = "--safe" ] && safe=1
+    # Arm the dead-man BEFORE touching iptables (ZFW-8): compiled.sh runs
+    # under `set -e`, so a bad rule aborts it half-applied. The 120s
+    # auto-revert has to be the active safety net at that moment — arming it
+    # afterwards never runs once the apply has already died.
+    if [ -n "$safe" ]; then arm_deadman; fi
     if ! bash "$COMPILED"; then
-      echo "[zfw] ERROR: applying compiled ruleset failed" >&2
+      echo "[zfw] ERROR: applying compiled ruleset failed — reverting partial state" >&2
+      revert
+      if [ -n "$safe" ]; then
+        systemctl stop "${DEADMAN}.timer" 2>/dev/null || true
+        systemctl reset-failed "${DEADMAN}.service" 2>/dev/null || true
+      fi
+      log "partial state reverted — firewall is OFF (stock ACCEPT); fix rules and re-apply"
       exit 1
     fi
     log "firewall applied"
-    if [ "${2:-}" = "--safe" ]; then arm_deadman; fi
     exit 0
     ;;
   commit)
