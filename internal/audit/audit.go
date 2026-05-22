@@ -8,7 +8,7 @@ import "github.com/chicohaager/zfw/internal/firewall"
 // Finding is one audit item with a live status.
 type Finding struct {
 	ID     string `json:"id"`
-	Sev    string `json:"sev"`    // HIGH | MED | LOW
+	Sev    string `json:"sev"` // HIGH | MED | LOW
 	Title  string `json:"title"`
 	Detail string `json:"detail"`
 	Status string `json:"status"` // open | mitigated | fixed

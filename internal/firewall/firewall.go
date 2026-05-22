@@ -27,8 +27,8 @@ type Config struct {
 
 // Status is the live firewall state read from iptables and systemd.
 type Status struct {
-	Active         bool `json:"active"`          // ZFW-IN chain exists
-	Hooked         bool `json:"hooked"`          // INPUT jumps to ZFW-IN
+	Active         bool `json:"active"` // ZFW-IN chain exists
+	Hooked         bool `json:"hooked"` // INPUT jumps to ZFW-IN
 	InputRules     int  `json:"input_rules"`
 	DockerDrops    int  `json:"docker_drops"`
 	IPv6Active     bool `json:"ipv6_active"`

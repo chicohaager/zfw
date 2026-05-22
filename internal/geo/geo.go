@@ -35,8 +35,12 @@ func New(dir string) *Manager {
 // SetName is the ipset name for a country code.
 func SetName(cc string) string { return "zfw-cc-" + strings.ToLower(strings.TrimSpace(cc)) }
 
-func (m *Manager) zonePath(cc string) string  { return filepath.Join(m.dir, strings.ToLower(cc)+".zone") }
-func (m *Manager) ipsetPath(cc string) string { return filepath.Join(m.dir, strings.ToLower(cc)+".ipset") }
+func (m *Manager) zonePath(cc string) string {
+	return filepath.Join(m.dir, strings.ToLower(cc)+".zone")
+}
+func (m *Manager) ipsetPath(cc string) string {
+	return filepath.Join(m.dir, strings.ToLower(cc)+".ipset")
+}
 
 // IpsetPath is the ipset-restore file path for a country code.
 func (m *Manager) IpsetPath(cc string) string { return m.ipsetPath(cc) }

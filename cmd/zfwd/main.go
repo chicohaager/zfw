@@ -130,13 +130,14 @@ func main() {
 	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-		// CSRF: reject cross-origin state-changing requests.
+		// CSRF: a state-changing request must prove it is same-origin.
+		// Browsers always attach Origin to POST/PUT/DELETE fetches; a request
+		// with neither Origin nor a matching Referer is a non-browser or a
+		// forged caller, so it is rejected rather than waved through (ZFW-4).
 		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
-			if o := r.Header.Get("Origin"); o != "" {
-				if u, err := url.Parse(o); err != nil || u.Host != r.Host {
-					http.Error(w, "cross-origin request rejected", http.StatusForbidden)
-					return
-				}
+			if !sameOrigin(r) {
+				http.Error(w, "cross-origin request rejected", http.StatusForbidden)
+				return
 			}
 		}
 
@@ -187,4 +188,19 @@ func main() {
 	if err := httpSrv.Shutdown(shutCtx); err != nil {
 		log.Printf("graceful shutdown error: %v", err)
 	}
+}
+
+// sameOrigin reports whether a state-changing request carries proof that it
+// originates from the daemon's own origin. Origin is checked first, then
+// Referer as a fallback; a request with neither header fails the check.
+func sameOrigin(r *http.Request) bool {
+	if o := r.Header.Get("Origin"); o != "" {
+		u, err := url.Parse(o)
+		return err == nil && u.Host == r.Host
+	}
+	if ref := r.Header.Get("Referer"); ref != "" {
+		u, err := url.Parse(ref)
+		return err == nil && u.Host == r.Host
+	}
+	return false
 }

@@ -19,7 +19,24 @@ Environment=DATA_DIR=/DATA/AppData/zfw
 # Optional override; if unset the daemon discovers the JWKS via the gateway.
 Environment=ZFW_JWKS_URL=http://127.0.0.1:37815/.well-known/jwks.json
 Environment=TZ=Europe/Berlin
+# --- Hardening (ZFW-5) ---
+# zfwd execs the privileged firewall engine (iptables, ipset, modprobe,
+# systemd-run, systemctl) as child processes that inherit this sandbox, so
+# capability, syscall and kernel-module confinement are deliberately omitted
+# here — they would break rule application. The namespace and filesystem
+# protections below are safe with that constraint.
 NoNewPrivileges=true
+ProtectSystem=true
+ProtectHome=true
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelLogs=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
 StandardOutput=journal
 StandardError=journal
 Restart=always
