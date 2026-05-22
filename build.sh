@@ -77,7 +77,7 @@ rm -f "$DIST"/*.tar.gz
 mkdir -p "$DIST/$PKG"
 cp "$DIST/$NAME.raw" "$DIST/$NAME.raw.sha256" \
    "$ROOT/engine/zfw" "$ROOT/install.sh" \
-   "$ROOT/README.md" "$ROOT/BEST-PRACTICES.md" \
+   "$ROOT/README.md" "$ROOT/BEST-PRACTICES.md" "$ROOT/SECURITY-REPORT.md" \
    "$DIST/$PKG/"
 chmod 0755 "$DIST/$PKG/install.sh" "$DIST/$PKG/zfw"
 ( cd "$DIST" && tar -czf "$PKG.tar.gz" "$PKG" )
