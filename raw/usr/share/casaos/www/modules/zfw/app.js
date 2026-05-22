@@ -64,15 +64,15 @@ async function loadFirewall() {
   const fw = d.firewall || {};
   const on = !!(fw.active && fw.hooked);
   const sfw = $('#stat-fw');
-  sfw.textContent = on ? 'aktiv' : 'aus';
+  sfw.textContent = on ? 'active' : 'off';
   sfw.className = 'stat-num ' + (on ? 'ok' : 'crit');
   $('#fw-status').innerHTML =
-    fwItem('Firewall aktiv', on) +
-    fwItem('IPv6-Schutz', !!fw.ipv6_active) +
+    fwItem('Firewall active', on) +
+    fwItem('IPv6 protection', !!fw.ipv6_active) +
     fwItem('Boot-persistent', !!fw.service_enabled) +
-    fwItem('INPUT-Regeln', fw.input_rules || 0) +
+    fwItem('INPUT rules', fw.input_rules || 0) +
     fwItem('DOCKER-USER DROPs', fw.docker_drops || 0) +
-    fwItem('Totmann scharf', !!fw.deadman, 'warn');
+    fwItem('Dead-man armed', !!fw.deadman, 'warn');
 }
 
 async function doFw(path, body, msg) {
@@ -82,24 +82,24 @@ async function doFw(path, body, msg) {
     const d = await api(path, { method: 'POST', body: JSON.stringify(body || {}) });
     const out = $('#fw-output');
     out.hidden = false;
-    out.textContent = String(d.output || d.status || '').trim() || '(kein Output)';
+    out.textContent = String(d.output || d.status || '').trim() || '(no output)';
     setStatus(d.status || 'OK', 'ok');
     await loadFirewall();
     await loadExposure();
     await loadAudit();
   } catch (e) {
-    setStatus('Fehler: ' + e.message, 'err');
+    setStatus('Error: ' + e.message, 'err');
   } finally {
     $$('#tab-firewall .action-row button').forEach(b => b.disabled = false);
   }
 }
 
-$('#btn-apply-safe').addEventListener('click', () => doFw('/apply', { safe: true }, 'Safe-Apply läuft…'));
-$('#btn-apply').addEventListener('click', () => doFw('/apply', { safe: false }, 'Apply läuft…'));
-$('#btn-commit').addEventListener('click', () => doFw('/commit', {}, 'Bestätige…'));
+$('#btn-apply-safe').addEventListener('click', () => doFw('/apply', { safe: true }, 'Safe-Apply running…'));
+$('#btn-apply').addEventListener('click', () => doFw('/apply', { safe: false }, 'Apply running…'));
+$('#btn-commit').addEventListener('click', () => doFw('/commit', {}, 'Confirming…'));
 $('#btn-revert').addEventListener('click', () => {
-  if (!confirm('Firewall wirklich komplett entfernen? Der Host ist danach ungefiltert.')) return;
-  doFw('/revert', {}, 'Entferne Firewall…');
+  if (!confirm('Really remove the firewall completely? The host will be unfiltered afterwards.')) return;
+  doFw('/revert', {}, 'Removing firewall…');
 });
 
 /* ---------- rules ---------- */
@@ -123,9 +123,9 @@ function renderRules() {
   const n = ruleSet.rules.length;
   const rows = ruleSet.rules.map((r, i) => {
     const actCls = r.action === 'allow' ? 'act-allow' : 'act-deny';
-    const actLbl = r.action === 'allow' ? 'Erlauben' : 'Sperren';
-    const src = r.source && r.source.type !== 'any' ? esc(r.source.value) : 'Alle';
-    const ports = r.ports && r.ports.type === 'list' ? esc((r.ports.list || []).join(', ')) : 'Alle';
+    const actLbl = r.action === 'allow' ? 'Allow' : 'Deny';
+    const src = r.source && r.source.type !== 'any' ? esc(r.source.value) : 'Any';
+    const ports = r.ports && r.ports.type === 'list' ? esc((r.ports.list || []).join(', ')) : 'All';
     const zone = { auto: 'Auto', host: 'Host', docker: 'Docker' }[r.zone] || esc(r.zone);
     return `<tr class="${r.enabled ? '' : 'rule-off'}" data-id="${esc(r.id)}">
       <td class="mono">${i + 1}</td>
@@ -136,28 +136,28 @@ function renderRules() {
       <td>${zone}</td>
       <td><label class="switch"><input type="checkbox" ${r.enabled ? 'checked' : ''} data-act="toggle"><span></span></label></td>
       <td class="rule-ops">
-        <button data-act="up" ${i === 0 ? 'disabled' : ''} title="hoch">▲</button>
-        <button data-act="down" ${i === n - 1 ? 'disabled' : ''} title="runter">▼</button>
+        <button data-act="up" ${i === 0 ? 'disabled' : ''} title="up">▲</button>
+        <button data-act="down" ${i === n - 1 ? 'disabled' : ''} title="down">▼</button>
       </td>
-      <td><button data-act="edit" class="btn-secondary">Bearbeiten</button></td>
-      <td><button data-act="del" class="btn-danger" title="löschen">×</button></td>
+      <td><button data-act="edit" class="btn-secondary">Edit</button></td>
+      <td><button data-act="del" class="btn-danger" title="delete">×</button></td>
     </tr>`;
   }).join('');
   $('#rules-panel').innerHTML = `
     <div class="card defpol">
-      <span class="defpol-lbl">Standard-Aktion für nicht passenden LAN-Verkehr:</span>
-      <label><input type="radio" name="defpol" value="deny" ${dp === 'deny' ? 'checked' : ''}> Sperren <small>(Allowlist)</small></label>
-      <label><input type="radio" name="defpol" value="allow" ${dp === 'allow' ? 'checked' : ''}> Durchlassen <small>(Blocklist)</small></label>
+      <span class="defpol-lbl">Default action for unmatched LAN traffic:</span>
+      <label><input type="radio" name="defpol" value="deny" ${dp === 'deny' ? 'checked' : ''}> Deny <small>(allowlist)</small></label>
+      <label><input type="radio" name="defpol" value="allow" ${dp === 'allow' ? 'checked' : ''}> Allow <small>(blocklist)</small></label>
     </div>
     <div class="action-row">
-      <button id="btn-new-rule" class="btn-primary">+ Neue Regel</button>
-      <button id="btn-save-rules" class="btn-secondary${rulesDirty ? ' dirty' : ''}">Regeln speichern</button>
-      <span class="save-hint"${rulesDirty ? '' : ' hidden'}>ungespeicherte Änderungen — speichern, dann im Firewall-Tab Safe-Apply</span>
+      <button id="btn-new-rule" class="btn-primary">+ New rule</button>
+      <button id="btn-save-rules" class="btn-secondary${rulesDirty ? ' dirty' : ''}">Save rules</button>
+      <span class="save-hint"${rulesDirty ? '' : ' hidden'}>unsaved changes — save, then Safe-Apply on the Firewall tab</span>
     </div>
     <table class="tbl rules-tbl"><thead><tr>
-      <th>#</th><th>Name</th><th>Aktion</th><th>Quelle</th><th>Ports</th><th>Zone</th>
-      <th>Aktiv</th><th>Reihenfolge</th><th></th><th></th>
-    </tr></thead><tbody>${rows || '<tr><td colspan="10" class="loading">Noch keine Regeln — „+ Neue Regel".</td></tr>'}</tbody></table>`;
+      <th>#</th><th>Name</th><th>Action</th><th>Source</th><th>Ports</th><th>Zone</th>
+      <th>Enabled</th><th>Order</th><th></th><th></th>
+    </tr></thead><tbody>${rows || '<tr><td colspan="10" class="loading">No rules yet — use “+ New rule”.</td></tr>'}</tbody></table>`;
   wireRules();
 }
 
@@ -185,7 +185,7 @@ function ruleAction(id, act) {
     rs[i].enabled = !rs[i].enabled;
     markDirty();
   } else if (act === 'del') {
-    if (!confirm(`Regel „${rs[i].name}" löschen?`)) return;
+    if (!confirm(`Delete rule “${rs[i].name}”?`)) return;
     rs.splice(i, 1);
     markDirty();
   } else if (act === 'up' && i > 0) {
@@ -201,13 +201,13 @@ function ruleAction(id, act) {
 
 async function saveRules() {
   ruleSet.rules.forEach((r, i) => { r.order = (i + 1) * 10; });
-  setStatus('Speichere Regeln…');
+  setStatus('Saving rules…');
   try {
     await api('/rules', { method: 'POST', body: JSON.stringify(ruleSet) });
-    setStatus('Regeln gespeichert — jetzt im Firewall-Tab Safe-Apply', 'ok');
+    setStatus('Rules saved — now Safe-Apply on the Firewall tab', 'ok');
     await loadRules();
   } catch (e) {
-    setStatus('Fehler: ' + e.message, 'err');
+    setStatus('Error: ' + e.message, 'err');
   }
 }
 
@@ -217,7 +217,7 @@ let editingRuleId = null;
 function openRuleEditor(rule) {
   const isEdit = !!(rule && rule.id);
   editingRuleId = isEdit ? rule.id : null;
-  $('#rm-title').textContent = isEdit ? 'Regel bearbeiten' : 'Neue Regel';
+  $('#rm-title').textContent = isEdit ? 'Edit rule' : 'New rule';
   const r = rule || {
     name: '', action: 'allow',
     source: { type: 'range', value: (ruleSet && ruleSet.lan) || '' },
@@ -255,7 +255,7 @@ function updateModalFields() {
   $('#rm-srcval-fld').hidden = st === 'any';
   $('#rm-portval-fld').hidden = $('#rm-porttype').value !== 'list';
   $('#rm-geo-hint').hidden = !isGeo;
-  $('#rm-srcval-label').textContent = isGeo ? 'Ländercodes (ISO, Komma-getrennt)' : 'Quell-Adresse';
+  $('#rm-srcval-label').textContent = isGeo ? 'Country codes (ISO, comma-separated)' : 'Source address';
   $('#rm-srcval').placeholder = isGeo ? 'DE, RU, CN' : '192.168.1.0/24';
 }
 
@@ -277,16 +277,16 @@ function isCIDR(s) {
 
 function saveRuleFromEditor() {
   const name = $('#rm-name').value.trim();
-  if (!name) return modalError('Name fehlt.');
+  if (!name) return modalError('Name is required.');
   const srctype = $('#rm-srctype').value;
   let srcval = $('#rm-srcval').value.trim();
-  if (srctype === 'ip' && !isIP(srcval)) return modalError('Quell-IP ungültig.');
-  if (srctype === 'range' && !isCIDR(srcval)) return modalError('Quell-Bereich muss ein CIDR sein (z. B. 192.168.1.0/24).');
+  if (srctype === 'ip' && !isIP(srcval)) return modalError('Source IP is invalid.');
+  if (srctype === 'range' && !isCIDR(srcval)) return modalError('Source range must be a CIDR (e.g. 192.168.1.0/24).');
   if (srctype === 'country') {
     const codes = srcval.split(/[\s,]+/).filter(Boolean);
-    if (!codes.length) return modalError('Mindestens einen Ländercode angeben.');
+    if (!codes.length) return modalError('Enter at least one country code.');
     if (codes.some(c => !/^[A-Za-z]{2}$/.test(c))) {
-      return modalError('Ländercode = 2 Buchstaben (ISO-3166, z. B. DE).');
+      return modalError('Country code = 2 letters (ISO-3166, e.g. DE).');
     }
     srcval = codes.map(c => c.toUpperCase()).join(',');
   }
@@ -294,9 +294,9 @@ function saveRuleFromEditor() {
   let list = [];
   if (porttype === 'list') {
     list = $('#rm-portval').value.split(/[\s,]+/).filter(Boolean).map(Number);
-    if (!list.length) return modalError('Mindestens einen Port angeben.');
+    if (!list.length) return modalError('Enter at least one port.');
     if (list.some(p => !Number.isInteger(p) || p < 1 || p > 65535)) {
-      return modalError('Ungültiger Port — erlaubt ist 1–65535.');
+      return modalError('Invalid port — allowed range is 1–65535.');
     }
   }
   const rule = {
@@ -321,7 +321,7 @@ function saveRuleFromEditor() {
   }
   closeRuleEditor();
   markDirty();
-  setStatus('Regel übernommen — „Regeln speichern" nicht vergessen.', 'ok');
+  setStatus('Rule applied — don’t forget “Save rules”.', 'ok');
 }
 
 $('#rm-cancel').addEventListener('click', closeRuleEditor);
@@ -341,7 +341,7 @@ async function loadExposure() {
   let exposed = 0, blocked = 0;
   const map = {
     lan: ['badge-lan', 'LAN'],
-    blocked: ['badge-blocked', 'gesperrt'],
+    blocked: ['badge-blocked', 'blocked'],
     local: ['badge-local', 'localhost'],
   };
   const rows = d.map(s => {
@@ -353,7 +353,7 @@ async function loadExposure() {
       <td>${esc(s.proc || '—')}</td>
       <td class="mono">${esc(s.bind)}</td>
       <td><span class="badge ${cls}">${lbl}</span></td>
-      <td><button class="btn-secondary exp-rule" data-port="${esc(s.port)}">+ Regel</button></td>
+      <td><button class="btn-secondary exp-rule" data-port="${esc(s.port)}">+ Rule</button></td>
     </tr>`;
   }).join('');
   const se = $('#stat-exposed');
@@ -363,8 +363,8 @@ async function loadExposure() {
   sb.textContent = blocked;
   sb.className = 'stat-num ok';
   $('#exposure-list').innerHTML = d.length
-    ? `<table class="tbl"><thead><tr><th>Port</th><th>Prozess</th><th>Bind</th><th>Erreichbar</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
-    : '<div class="loading">Keine lauschenden Ports gefunden.</div>';
+    ? `<table class="tbl"><thead><tr><th>Port</th><th>Process</th><th>Bind</th><th>Reachable</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+    : '<div class="loading">No listening ports found.</div>';
   $$('#exposure-list .exp-rule').forEach(b => b.addEventListener('click',
     () => openRuleEditorForPort(parseInt(b.dataset.port, 10))));
 }
@@ -379,7 +379,7 @@ async function loadAudit() {
     if (f.status === 'open') open++;
     const sev = { HIGH: 'sev-high', MED: 'sev-med', LOW: 'sev-low' }[f.sev] || 'sev-low';
     const st = { open: 'st-open', mitigated: 'st-mit', fixed: 'st-fixed' }[f.status] || 'st-open';
-    const stl = { open: 'offen', mitigated: 'LAN-gesperrt', fixed: 'behoben' }[f.status] || f.status;
+    const stl = { open: 'open', mitigated: 'LAN-blocked', fixed: 'fixed' }[f.status] || f.status;
     return `<div class="finding ${st}">
       <div class="finding-head">
         <span class="sev ${sev}">${esc(f.sev)}</span>
@@ -393,7 +393,7 @@ async function loadAudit() {
   const sf = $('#stat-findings');
   sf.textContent = open;
   sf.className = 'stat-num ' + (open > 0 ? 'warn' : 'ok');
-  $('#audit-list').innerHTML = rows || '<div class="loading">Keine Befunde.</div>';
+  $('#audit-list').innerHTML = rows || '<div class="loading">No findings.</div>';
 }
 
 /* ---------- versions ---------- */
@@ -405,12 +405,12 @@ async function loadVersions() {
       <div class="vmain"><span class="vname">${esc(c.name)}</span><span class="vver mono">${esc(c.version)}</span></div>
       <p class="vnote">${esc(c.note)}</p>
     </div>`;
-  }).join('') || '<div class="loading">Keine Daten.</div>';
+  }).join('') || '<div class="loading">No data.</div>';
 }
 
 /* ---------- init ---------- */
 async function refreshAll() {
-  setStatus('Lade…');
+  setStatus('Loading…');
   try {
     await loadFirewall();
     await loadRules();
@@ -419,7 +419,7 @@ async function refreshAll() {
     await loadVersions();
     setStatus('');
   } catch (e) {
-    setStatus('Fehler: ' + e.message, 'err');
+    setStatus('Error: ' + e.message, 'err');
   }
 }
 
