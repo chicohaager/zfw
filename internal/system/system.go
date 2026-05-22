@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -107,8 +108,23 @@ type Component struct {
 	Level   string `json:"level"` // "ok" | "warn" | "crit"
 }
 
+// versions are cached briefly: each call spawns several subprocesses, so an
+// authenticated client cannot use /api/versions to amplify host load (ZFW-S9).
+var (
+	verMu     sync.Mutex
+	verCache  []Component
+	verCached time.Time
+)
+
+const verTTL = 60 * time.Second
+
 // Versions reports key host component versions with known-CVE annotations.
 func Versions(ctx context.Context) []Component {
+	verMu.Lock()
+	defer verMu.Unlock()
+	if verCache != nil && time.Since(verCached) < verTTL {
+		return verCache
+	}
 	var cs []Component
 
 	cs = append(cs, Component{
@@ -144,6 +160,7 @@ func Versions(ctx context.Context) []Component {
 		Name: "iptables", Version: orDash(ipt),
 		Note: "Backend: iptables-legacy (Docker-kompatibel)", Level: "ok",
 	})
+	verCache, verCached = cs, time.Now()
 	return cs
 }
 

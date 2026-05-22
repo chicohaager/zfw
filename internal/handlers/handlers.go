@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chicohaager/zfw/internal/audit"
@@ -20,8 +22,13 @@ import (
 	"github.com/chicohaager/zfw/internal/system"
 )
 
+// maxGeoCountries caps how many distinct country geo-sets one rule set may
+// reference — each triggers a synchronous download during recompile (ZFW-S4).
+const maxGeoCountries = 40
+
 // Server holds the dependencies for the HTTP API.
 type Server struct {
+	mu           sync.Mutex // serialises apply/commit/revert/recompile
 	fw           *firewall.Manager
 	rulesPath    string
 	compiledPath string
@@ -57,6 +64,9 @@ func (s *Server) Recompile(ctx context.Context) error {
 				ccSet[strings.ToLower(cc)] = true
 			}
 		}
+	}
+	if len(ccSet) > maxGeoCountries {
+		return fmt.Errorf("zu viele Länder (%d) — höchstens %d Geo-Sets", len(ccSet), maxGeoCountries)
 	}
 	geoFiles := map[string]string{}
 	if len(ccSet) > 0 {
@@ -160,6 +170,8 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 			fail(w, http.StatusBadRequest, "ungültiges JSON: "+err.Error())
 			return
 		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		if err := rules.Validate(rs); err != nil {
 			fail(w, http.StatusBadRequest, err.Error())
 			return
@@ -188,7 +200,15 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Safe bool `json:"safe"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	// A malformed body must not silently fall back to safe=false — that would
+	// apply rules without the 120s dead-man (ZFW-S3). An empty body (EOF) is
+	// allowed and keeps the default.
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
+		fail(w, http.StatusBadRequest, "ungültiges JSON: "+err.Error())
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	ctx, cancel := reqCtx()
 	defer cancel()
 	// Recompile so the engine applies the current rule set.
@@ -209,6 +229,8 @@ func (s *Server) commit(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusMethodNotAllowed, "POST erforderlich")
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	ctx, cancel := reqCtx()
 	defer cancel()
 	out, err := s.fw.Commit(ctx)
@@ -224,6 +246,8 @@ func (s *Server) revert(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusMethodNotAllowed, "POST erforderlich")
 		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	ctx, cancel := reqCtx()
 	defer cancel()
 	out, err := s.fw.Revert(ctx)

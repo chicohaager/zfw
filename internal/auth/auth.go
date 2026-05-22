@@ -1,9 +1,9 @@
 // Package auth verifies ZimaOS session tokens so the firewall control API is
 // not reachable unauthenticated. ZimaOS issues ES256 JWTs (the web UI keeps
 // one in localStorage.access_token); this package checks a token's signature
-// against the platform JWKS and rejects anything unsigned, wrong-algorithm or
-// expired. The ZimaOS gateway proxies module routes without authenticating
-// them, so every module must do this check itself.
+// against the platform JWKS and rejects anything unsigned, wrong-algorithm,
+// not-yet-valid or expired. The ZimaOS gateway proxies module routes without
+// authenticating them, so every module must do this check itself.
 package auth
 
 import (
@@ -26,8 +26,23 @@ import (
 // jwksTTL is how long a fetched key set is reused before a refresh.
 const jwksTTL = 10 * time.Minute
 
+// jwksMaxStale caps how long a cached key set may keep being served once
+// refreshes start failing. Past this the verifier fails closed rather than
+// trusting keys that may since have been rotated or revoked (ZFW-S6).
+const jwksMaxStale = 1 * time.Hour
+
+// clockSkew is the tolerance applied when checking the nbf claim.
+const clockSkew = 60 * time.Second
+
 // b64 is the base64url encoding (no padding) used throughout JWT/JWK.
 var b64 = base64.RawURLEncoding
+
+// keyEntry is one JWKS verification key together with its key id (the kid may
+// be empty when the JWKS does not label its keys).
+type keyEntry struct {
+	kid string
+	pub *ecdsa.PublicKey
+}
 
 // Verifier checks ES256 JWTs against a cached, periodically refreshed JWKS.
 type Verifier struct {
@@ -35,15 +50,21 @@ type Verifier struct {
 	http    *http.Client
 
 	mu      sync.RWMutex
-	keys    []*ecdsa.PublicKey
+	keys    []keyEntry
 	fetched time.Time
 }
 
-// NewVerifier returns a Verifier that loads its keys from jwksURL.
+// NewVerifier returns a Verifier that loads its keys from jwksURL. The HTTP
+// client refuses redirects so the JWKS fetch cannot be bounced off-host.
 func NewVerifier(jwksURL string) *Verifier {
 	return &Verifier{
 		jwksURL: jwksURL,
-		http:    &http.Client{Timeout: 5 * time.Second},
+		http: &http.Client{
+			Timeout: 5 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return errors.New("redirect beim JWKS-Abruf abgelehnt")
+			},
+		},
 	}
 }
 
@@ -51,6 +72,7 @@ func NewVerifier(jwksURL string) *Verifier {
 type jwk struct {
 	Kty string `json:"kty"`
 	Crv string `json:"crv"`
+	Kid string `json:"kid"`
 	X   string `json:"x"`
 	Y   string `json:"y"`
 }
@@ -79,7 +101,7 @@ func (v *Verifier) refreshKeys(ctx context.Context) error {
 	if err := json.Unmarshal(body, &set); err != nil {
 		return err
 	}
-	var keys []*ecdsa.PublicKey
+	var keys []keyEntry
 	for _, k := range set.Keys {
 		if k.Kty != "EC" || k.Crv != "P-256" {
 			continue
@@ -89,10 +111,13 @@ func (v *Verifier) refreshKeys(ctx context.Context) error {
 		if errX != nil || errY != nil {
 			continue
 		}
-		keys = append(keys, &ecdsa.PublicKey{
-			Curve: elliptic.P256(),
-			X:     new(big.Int).SetBytes(x),
-			Y:     new(big.Int).SetBytes(y),
+		keys = append(keys, keyEntry{
+			kid: k.Kid,
+			pub: &ecdsa.PublicKey{
+				Curve: elliptic.P256(),
+				X:     new(big.Int).SetBytes(x),
+				Y:     new(big.Int).SetBytes(y),
+			},
 		})
 	}
 	if len(keys) == 0 {
@@ -111,8 +136,9 @@ func (v *Verifier) Warm(ctx context.Context) error {
 }
 
 // currentKeys returns the cached keys, refreshing them when stale or absent.
-// A refresh failure is tolerated as long as a previous key set is cached.
-func (v *Verifier) currentKeys() ([]*ecdsa.PublicKey, error) {
+// A refresh failure is tolerated only while the cached set is still younger
+// than jwksMaxStale; past that the verifier fails closed.
+func (v *Verifier) currentKeys() ([]keyEntry, error) {
 	v.mu.RLock()
 	keys, fetched := v.keys, v.fetched
 	v.mu.RUnlock()
@@ -122,8 +148,8 @@ func (v *Verifier) currentKeys() ([]*ecdsa.PublicKey, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := v.refreshKeys(ctx); err != nil {
-		if len(keys) > 0 {
-			return keys, nil // keep serving with the cached set
+		if len(keys) > 0 && time.Since(fetched) < jwksMaxStale {
+			return keys, nil // keep serving with the still-recent cached set
 		}
 		return nil, err
 	}
@@ -134,7 +160,9 @@ func (v *Verifier) currentKeys() ([]*ecdsa.PublicKey, error) {
 }
 
 // Verify checks a raw JWT string: the header is ES256, the r‖s signature
-// matches a JWKS key over SHA-256 of the signing input, and exp is not past.
+// matches a JWKS key (selected by kid when the token names one) over SHA-256
+// of the signing input, and the token is currently within its validity
+// window (exp is mandatory, nbf is honoured with a small clock skew).
 func (v *Verifier) Verify(token string) error {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
@@ -146,6 +174,7 @@ func (v *Verifier) Verify(token string) error {
 	}
 	var hdr struct {
 		Alg string `json:"alg"`
+		Kid string `json:"kid"`
 	}
 	if err := json.Unmarshal(hdrRaw, &hdr); err != nil {
 		return errors.New("Header nicht lesbar")
@@ -167,7 +196,13 @@ func (v *Verifier) Verify(token string) error {
 	}
 	verified := false
 	for _, k := range keys {
-		if ecdsa.Verify(k, digest[:], r, s) {
+		// When the token names a kid, only a key with the same kid may
+		// verify it — this keeps key rotation correct. Keys published
+		// without a kid stay eligible for any token.
+		if hdr.Kid != "" && k.kid != "" && k.kid != hdr.Kid {
+			continue
+		}
+		if ecdsa.Verify(k.pub, digest[:], r, s) {
 			verified = true
 			break
 		}
@@ -182,12 +217,22 @@ func (v *Verifier) Verify(token string) error {
 	}
 	var claims struct {
 		Exp int64 `json:"exp"`
+		Nbf int64 `json:"nbf"`
 	}
 	if err := json.Unmarshal(plRaw, &claims); err != nil {
 		return errors.New("Payload nicht lesbar")
 	}
-	if claims.Exp != 0 && time.Now().Unix() >= claims.Exp {
+	// A ZimaOS session token must carry an expiry — a token without exp is
+	// rejected rather than trusted forever (ZFW-S2).
+	if claims.Exp == 0 {
+		return errors.New("Token ohne Ablaufdatum (exp)")
+	}
+	now := time.Now()
+	if now.Unix() >= claims.Exp {
 		return errors.New("Token abgelaufen")
+	}
+	if claims.Nbf != 0 && now.Add(clockSkew).Unix() < claims.Nbf {
+		return errors.New("Token noch nicht gültig (nbf)")
 	}
 	return nil
 }

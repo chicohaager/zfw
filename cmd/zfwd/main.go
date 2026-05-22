@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -90,11 +91,22 @@ func main() {
 	{
 		dctx, dcancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if target, err := gw.LookupTarget(dctx, "/.well-known/jwks.json"); err == nil {
-			jwksURL = strings.TrimRight(target, "/") + "/.well-known/jwks.json"
+			cand := strings.TrimRight(target, "/") + "/.well-known/jwks.json"
+			// The gateway routes table is mutable, so the discovered JWKS
+			// target is trusted only when it points at loopback — otherwise
+			// the auth trust anchor could be redirected off-host (ZFW-S1).
+			if isLoopbackURL(cand) {
+				jwksURL = cand
+			} else {
+				log.Printf("discovered JWKS target %q not loopback — keeping pinned default %s", target, jwksURL)
+			}
 		} else {
 			log.Printf("JWKS discovery failed, using default (%s): %v", jwksURL, err)
 		}
 		dcancel()
+	}
+	if !isLoopbackURL(jwksURL) {
+		log.Printf("WARNING: JWKS URL %s is not loopback — session-auth trust anchor is off-host", jwksURL)
 	}
 	verifier := auth.NewVerifier(jwksURL)
 	{
@@ -203,4 +215,19 @@ func sameOrigin(r *http.Request) bool {
 		return err == nil && u.Host == r.Host
 	}
 	return false
+}
+
+// isLoopbackURL reports whether u is an http/https URL whose host is a
+// loopback address. The JWKS trust anchor must stay on-host.
+func isLoopbackURL(u string) bool {
+	p, err := url.Parse(u)
+	if err != nil || (p.Scheme != "http" && p.Scheme != "https") {
+		return false
+	}
+	host := p.Hostname()
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

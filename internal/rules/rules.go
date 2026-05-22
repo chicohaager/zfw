@@ -86,10 +86,25 @@ func Save(path string, rs RuleSet) error {
 	return os.Rename(tmp, path)
 }
 
+// Size caps keep a crafted rules.json from compiling into an oversized
+// root-run script or fanning out into excessive geo downloads (ZFW-S4).
+const (
+	maxRules         = 256
+	maxPortsPerRule  = 128
+	maxV6DropPorts   = 128
+	maxRuleCountries = 32
+)
+
 // Validate rejects anything that could corrupt the compiled ruleset.
 func Validate(rs RuleSet) error {
 	if rs.DefaultPolicy != "deny" && rs.DefaultPolicy != "allow" {
 		return fmt.Errorf("default_policy muss deny oder allow sein")
+	}
+	if len(rs.Rules) > maxRules {
+		return fmt.Errorf("zu viele Regeln: %d (max %d)", len(rs.Rules), maxRules)
+	}
+	if len(rs.V6Drop) > maxV6DropPorts {
+		return fmt.Errorf("zu viele v6_drop-Ports: %d (max %d)", len(rs.V6Drop), maxV6DropPorts)
 	}
 	if rs.LAN != "" {
 		if _, _, err := net.ParseCIDR(rs.LAN); err != nil {
@@ -154,6 +169,9 @@ func validateRule(r Rule) error {
 		if len(codes) == 0 {
 			return fmt.Errorf("kein Land angegeben")
 		}
+		if len(codes) > maxRuleCountries {
+			return fmt.Errorf("zu viele Länder: %d (max %d)", len(codes), maxRuleCountries)
+		}
 		for _, c := range codes {
 			if len(c) != 2 || !isAlpha(c) {
 				return fmt.Errorf("Ländercode %q ungültig (ISO-3166 alpha-2, z. B. DE)", c)
@@ -167,6 +185,9 @@ func validateRule(r Rule) error {
 	case "list":
 		if len(r.Ports.List) == 0 {
 			return fmt.Errorf("Ports-Liste ist leer")
+		}
+		if len(r.Ports.List) > maxPortsPerRule {
+			return fmt.Errorf("zu viele Ports: %d (max %d)", len(r.Ports.List), maxPortsPerRule)
 		}
 		for _, p := range r.Ports.List {
 			if p < 1 || p > 65535 {

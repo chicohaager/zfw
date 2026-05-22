@@ -8,6 +8,10 @@
 # Usage:  zfw {apply [--safe] | commit | revert | status}
 set -u
 
+# Pin a deterministic PATH: the dead-man auto-revert runs as a systemd-run
+# transient unit whose environment may carry only a minimal PATH (ZFW-S7).
+export PATH="/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
+
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPILED="${ZFW_COMPILED:-$SELF_DIR/compiled.sh}"
 DEADMAN="zfw-deadman"
@@ -16,6 +20,28 @@ IPT="$(command -v iptables-legacy 2>/dev/null || command -v iptables)"
 IPT6="$(command -v ip6tables-legacy 2>/dev/null || command -v ip6tables 2>/dev/null || true)"
 
 log(){ echo "[zfw] $*"; }
+
+# secure_file refuses a file that is not root-owned or is group/world-writable
+# before it is executed as root (ZFW-S8).
+secure_file(){
+  local f="$1" u m
+  read -r u m < <(stat -c '%U %a' "$f" 2>/dev/null) || true
+  if [ -z "${u:-}" ]; then
+    echo "[zfw] ERROR: cannot stat $f — refusing" >&2
+    return 1
+  fi
+  if [ "$u" != "root" ]; then
+    echo "[zfw] ERROR: $f not root-owned (owner=$u) — refusing" >&2
+    return 1
+  fi
+  case "${m:-}" in
+    *[2367][0-7] | *[2367])
+      echo "[zfw] ERROR: $f is group/world-writable (mode=$m) — refusing" >&2
+      return 1
+      ;;
+  esac
+  return 0
+}
 
 revert(){
   $IPT -D INPUT -j ZFW-IN 2>/dev/null || true
@@ -43,6 +69,7 @@ arm_deadman(){
 case "${1:-}" in
   apply)
     [ -r "$COMPILED" ] || { echo "[zfw] ERROR: compiled ruleset missing: $COMPILED" >&2; exit 1; }
+    secure_file "$COMPILED" || exit 1
     safe=""
     [ "${2:-}" = "--safe" ] && safe=1
     # Arm the dead-man BEFORE touching iptables (ZFW-8): compiled.sh runs

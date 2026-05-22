@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -189,11 +190,32 @@ func validate(c Config) error {
 
 // Apply runs the engine. When safe is true a 120s dead-man auto-revert is armed.
 func (m *Manager) Apply(ctx context.Context, safe bool) (string, error) {
+	// The engine script is executed as root — refuse to run it unless it is
+	// owned by root and not group/world-writable (ZFW-S8).
+	if err := secureRootFile(m.Bin); err != nil {
+		return "", fmt.Errorf("engine-Script unsicher: %w", err)
+	}
 	args := []string{"apply"}
 	if safe {
 		args = append(args, "--safe")
 	}
 	return run(ctx, m.Bin, args...)
+}
+
+// secureRootFile verifies path is owned by root and not group/world-writable
+// before it is executed with root privileges.
+func secureRootFile(path string) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid != 0 {
+		return fmt.Errorf("%s nicht root-owned (uid=%d)", path, st.Uid)
+	}
+	if fi.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("%s ist group/world-writable (%#o)", path, fi.Mode().Perm())
+	}
+	return nil
 }
 
 // Commit cancels an armed dead-man timer so the rules persist.

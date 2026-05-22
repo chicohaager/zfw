@@ -48,7 +48,7 @@ func (m *Manager) IpsetPath(cc string) string { return m.ipsetPath(cc) }
 // Ensure makes sure each country's data is cached and its ipset-restore file
 // is current. A network error is tolerated when a cache already exists.
 func (m *Manager) Ensure(ctx context.Context, codes []string, logf func(string, ...any)) error {
-	if err := os.MkdirAll(m.dir, 0o755); err != nil {
+	if err := os.MkdirAll(m.dir, 0o700); err != nil {
 		return err
 	}
 	for _, raw := range codes {
@@ -99,7 +99,7 @@ func (m *Manager) fetch(ctx context.Context, cc string) error {
 		return fmt.Errorf("leere Antwort")
 	}
 	tmp := m.zonePath(cc) + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o644); err != nil {
+	if err := os.WriteFile(tmp, body, 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, m.zonePath(cc))
@@ -132,7 +132,7 @@ func (m *Manager) renderIpset(cc string) error {
 		return fmt.Errorf("keine gültigen CIDR-Einträge")
 	}
 	tmp := m.ipsetPath(cc) + ".tmp"
-	if err := os.WriteFile(tmp, []byte(sb.String()), 0o644); err != nil {
+	if err := os.WriteFile(tmp, []byte(sb.String()), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, m.ipsetPath(cc))
