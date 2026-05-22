@@ -158,4 +158,6 @@ limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
 
-**v0.1.0** — built, deployed and browser-verified on a ZimaOS 1.6.1 host.
+**v0.2.6** — built, deployed and browser-verified on a ZimaOS 1.6.1 host;
+ZimaOS session authentication, CSRF protection and systemd sandboxing in
+place, and the codebase has passed a code and security review.
