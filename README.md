@@ -153,6 +153,9 @@ ZFW's **Safe-Apply** applies the rules and arms a 120-second timer; unless you c
 automatically. The current SSH session is never dropped — established connections are
 accepted first.
 
+For a full operating guide — staying reachable, rule ordering, geo-blocking
+limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
+
 ## Status
 
 **v0.1.0** — built, deployed and browser-verified on a ZimaOS 1.6.1 host.
