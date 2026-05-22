@@ -16,7 +16,7 @@ echo "=== zfw module build ==="
 echo "Version: $VERSION"
 
 # 1. Format-check, vet, test, then compile the Go daemon (cgo-free, static).
-echo "[1/3] gofmt + go vet + test + build..."
+echo "[1/4] gofmt + go vet + test + build..."
 mkdir -p "$RAW/usr/bin"
 cd "$ROOT"
 unformatted="$(gofmt -l .)"
@@ -37,7 +37,7 @@ chmod +x "$RAW/usr/bin/zfwd"
 echo "  -> $(ls -lh "$RAW/usr/bin/zfwd" | awk '{print $5}')"
 
 # 2. Verify the sysext / CasaOS layout.
-echo "[2/3] Verifying layout..."
+echo "[2/4] Verifying layout..."
 required="
 $RAW/usr/lib/extension-release.d/extension-release.$NAME
 $RAW/usr/lib/systemd/system/zfw-ui.service
@@ -58,7 +58,7 @@ done
 [ $missing -eq 0 ] || { echo "Layout incomplete, aborting."; exit 1; }
 
 # 3. Pack as squashfs. ZimaOS kernel 6.12.x has no zstd/xz — gzip is mandatory.
-echo "[3/3] Packing squashfs (gzip)..."
+echo "[3/4] Packing squashfs (gzip)..."
 mkdir -p "$DIST"
 rm -f "$DIST/$NAME.raw" "$DIST/$NAME.raw.sha256"
 mksquashfs "$RAW" "$DIST/$NAME.raw" \
@@ -68,6 +68,13 @@ mksquashfs "$RAW" "$DIST/$NAME.raw" \
   -no-progress \
   >/dev/null
 ( cd "$DIST" && sha256sum "$NAME.raw" > "$NAME.raw.sha256" )
+
+# 4. Assemble the install bundle so dist/ is a self-contained installer:
+#    the module, the engine script and install.sh side by side.
+echo "[4/4] Assembling install bundle..."
+cp "$ROOT/engine/zfw" "$DIST/zfw"
+cp "$ROOT/install.sh" "$DIST/install.sh"
+chmod 0755 "$DIST/zfw" "$DIST/install.sh"
 
 echo
 echo "=== Done ==="
