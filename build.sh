@@ -69,12 +69,19 @@ mksquashfs "$RAW" "$DIST/$NAME.raw" \
   >/dev/null
 ( cd "$DIST" && sha256sum "$NAME.raw" > "$NAME.raw.sha256" )
 
-# 4. Assemble the install bundle so dist/ is a self-contained installer:
-#    the module, the engine script and install.sh side by side.
-echo "[4/4] Assembling install bundle..."
-cp "$ROOT/engine/zfw" "$DIST/zfw"
-cp "$ROOT/install.sh" "$DIST/install.sh"
-chmod 0755 "$DIST/zfw" "$DIST/install.sh"
+# 4. Pack the complete hand-off package: module + engine + installer + docs.
+echo "[4/4] Packing release package..."
+PKG="$NAME-$VERSION"
+rm -rf "$DIST/$PKG"
+rm -f "$DIST"/*.tar.gz
+mkdir -p "$DIST/$PKG"
+cp "$DIST/$NAME.raw" "$DIST/$NAME.raw.sha256" \
+   "$ROOT/engine/zfw" "$ROOT/install.sh" \
+   "$ROOT/README.md" "$ROOT/BEST-PRACTICES.md" \
+   "$DIST/$PKG/"
+chmod 0755 "$DIST/$PKG/install.sh" "$DIST/$PKG/zfw"
+( cd "$DIST" && tar -czf "$PKG.tar.gz" "$PKG" )
+rm -rf "$DIST/$PKG"
 
 echo
 echo "=== Done ==="

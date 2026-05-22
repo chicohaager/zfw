@@ -107,7 +107,7 @@ raw/                the sysext file tree (binary, systemd unit, manifest, static
 ## Build
 
 ```sh
-sh build.sh        # -> dist/zfw.raw  (+ .sha256)
+sh build.sh        # -> dist/zfw-<version>.tar.gz  (the release package)
 ```
 
 Requires `go` 1.22+ and `squashfs-tools` (`mksquashfs`). The image is packed with
@@ -115,18 +115,19 @@ gzip — the ZimaOS kernel is built without zstd/xz squashfs support.
 
 ## Deploy
 
-`build.sh` writes a self-contained install bundle to `dist/` — the `zfw.raw`
-module, the `zfw` engine script and `install.sh`. Copy that directory to the
-ZimaOS host and run the installer as root:
+`build.sh` writes a complete release package to `dist/zfw-<version>.tar.gz` —
+the `zfw.raw` module, the `zfw` engine script, `install.sh` and the docs.
+Copy it to the ZimaOS host and run the installer as root:
 
 ```sh
-scp -r dist root@<host>:/tmp/
-ssh root@<host> 'cd /tmp/dist && sh install.sh'
+scp dist/zfw-<version>.tar.gz root@<host>:/tmp/
+ssh root@<host> 'cd /tmp && tar xzf zfw-<version>.tar.gz && cd zfw-* && sh install.sh'
 ```
 
 `install.sh` places the sysext module in `/var/lib/extensions/`, installs the
-engine script to `/DATA/zfw/zfw` (`root:root`, `0700`), merges the sysext and
-(re)starts `zfw-ui.service`. Re-run it any time to update an install in place.
+engine script to `/DATA/zfw/zfw` (`root:root`, `0700`), verifies the module
+checksum, merges the sysext and (re)starts `zfw-ui.service`. Re-run it any
+time to update an install in place.
 
 Open it from the ZimaOS dashboard (tile **ZFW Firewall**), or directly at
 `http://<host>/modules/zfw/index.html`.
