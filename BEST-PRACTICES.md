@@ -244,3 +244,7 @@ only one.
 - [ ] Change applied with **Safe-Apply**, verified on a fresh connection,
       then **Confirm**ed
 - [ ] Audit-tab findings driven towards *fixed*
+
+---
+
+*Author: Holger Kuehn aka Lintuxer · © 2026 Virtual Services*
