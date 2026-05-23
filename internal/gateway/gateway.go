@@ -115,7 +115,7 @@ func (m *Manager) LookupTarget(ctx context.Context, path string) (string, error)
 			return rt.Target, nil
 		}
 	}
-	return "", fmt.Errorf("route %q nicht registriert", path)
+	return "", fmt.Errorf("route %q not registered", path)
 }
 
 // RegisterWithRetry keeps trying Register until it succeeds or ctx is done,

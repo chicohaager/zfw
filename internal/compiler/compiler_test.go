@@ -130,3 +130,63 @@ func TestCountryDenyMultiple(t *testing.T) {
 	mustContain(t, out, "-m set --match-set zfw-cc-ru src -j DROP")
 	mustContain(t, out, "-m set --match-set zfw-cc-cn src -j DROP")
 }
+
+// TestHostPortRange locks in v0.2.16's port-range support: a rule with
+// Ports.Type=="range" must emit a single iptables `--dport X:Y` line, not
+// enumerate every port in between. Closes the "block VNC 5900-5999" use
+// case without producing 100 multiport entries.
+func TestHostPortRange(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", HostIP: "192.168.50.23", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			ID: "r1", Order: 10, Enabled: true,
+			Name: "Block VNC range", Action: "deny",
+			Source:   rules.Source{Type: "any"},
+			Ports:    rules.Ports{Type: "range", From: 5900, To: 5999},
+			Protocol: "tcp", Zone: "host",
+		}},
+	}, nil, nil)
+	mustContain(t, out, "$IPT -A ZFW-IN -p tcp --dport 5900:5999 -j DROP")
+	mustNotContain(t, out, "multiport")
+}
+
+// TestDockerPortRange covers the docker-zone variant — published-port range
+// must be expressed with conntrack's range syntax.
+func TestDockerPortRange(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", HostIP: "192.168.50.23", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			ID: "r1", Order: 10, Enabled: true,
+			Name: "Allow container range", Action: "allow",
+			Source:   rules.Source{Type: "any"},
+			Ports:    rules.Ports{Type: "range", From: 8000, To: 8100},
+			Protocol: "tcp", Zone: "docker",
+		}},
+	}, nil, nil)
+	mustContain(t, out, "--ctorigdstport 8000:8100 -j RETURN")
+}
+
+// TestIPv6ChainAlwaysEmitted locks in the v0.2.15 IPv6 fix: ZFW-IN6 must be
+// emitted on every build (not only when V6Drop is non-empty) so the SLAAC
+// LAN gap stays closed by default.
+func TestIPv6ChainAlwaysEmitted(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", HostIP: "192.168.50.23", DefaultPolicy: "deny",
+	}, nil, nil)
+	mustContain(t, out, "$IPT6 -N ZFW-IN6")
+	mustContain(t, out, "$IPT6 -A ZFW-IN6 -p ipv6-icmp -j RETURN")
+	mustContain(t, out, "$IPT6 -A ZFW-IN6 -s fe80::/10 -j RETURN")
+	mustContain(t, out, "ZFW-IN6-DROP")
+	mustContain(t, out, "$IPT6 -A ZFW-IN6 -j DROP")
+}
+
+// TestDockerBridgeBypass locks in v0.2.13: docker0 and br-+ interfaces must
+// bypass the catch-all DROP so container-to-host traffic isn't silently
+// killed (mDNS / DNS / etc.).
+func TestDockerBridgeBypass(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", HostIP: "192.168.50.23", DefaultPolicy: "deny",
+	}, nil, nil)
+	mustContain(t, out, "$IPT -A ZFW-IN -i docker0 -j ACCEPT")
+	mustContain(t, out, "$IPT -A ZFW-IN -i br-+ -j ACCEPT")
+}

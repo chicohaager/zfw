@@ -28,7 +28,15 @@ func Compile(rs rules.RuleSet, dockerPorts map[int]bool, geoFiles map[string]str
 	// line in this script is guarded with `|| true` or sits in an if/&&/||.
 	b.WriteString("set -eu\n")
 	b.WriteString(`IPT="$(command -v iptables-legacy 2>/dev/null || command -v iptables)"` + "\n")
-	b.WriteString(`IPT6="$(command -v ip6tables-legacy 2>/dev/null || command -v ip6tables 2>/dev/null || true)"` + "\n\n")
+	b.WriteString(`IPT6="$(command -v ip6tables-legacy 2>/dev/null || command -v ip6tables 2>/dev/null || true)"` + "\n")
+	// xt_LOG is a module on ZimaOS (not built-in) — load it before the LOG
+	// targets below or `-j LOG` errors with "No chain/target/match by that
+	// name". nf_log_syslog is its softdep backend (logs to journald/kmsg).
+	// xt_limit is NOT shipped on this kernel, so rate-limiting relies on
+	// (a) the LOG sitting right before the catch-all DROP — only packets
+	// that already failed every allow-rule are logged, and (b) journald's
+	// own RateLimitBurst.
+	b.WriteString("modprobe xt_LOG nf_log_syslog 2>/dev/null || true\n\n")
 
 	// ---- geo country sets (ipset) ----
 	if len(geoFiles) > 0 {
@@ -57,6 +65,13 @@ func Compile(rs rules.RuleSet, dockerPorts map[int]bool, geoFiles map[string]str
 		"-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
 		"-m conntrack --ctstate INVALID -j DROP",
 		"-i lo -j ACCEPT",
+		// Container-to-host traffic enters INPUT via the docker bridges, so
+		// it must bypass the catch-all DROP or things like a container that
+		// resolves mDNS / talks to the host's DNS would be silently blocked.
+		// docker0 is the default bridge, br-+ is the wildcard for the
+		// user-defined networks Compose creates with names like br-7bf3...
+		"-i docker0 -j ACCEPT",
+		"-i br-+ -j ACCEPT",
 		"-i virbr0 -j ACCEPT",
 		"-i tailscale0 -j ACCEPT",
 		"-i zt+ -j ACCEPT",
@@ -78,6 +93,12 @@ func Compile(rs rules.RuleSet, dockerPorts map[int]bool, geoFiles map[string]str
 	if rs.DefaultPolicy == "allow" {
 		b.WriteString("$IPT -A ZFW-IN -j RETURN\n")
 	} else {
+		// Log the catch-all DROP so the UI's Events tab can show what got
+		// blocked. Volume control: only NEW conntrack-state packets are
+		// logged (an established connection's later packets would have hit
+		// the ESTABLISHED,RELATED ACCEPT at the top of the chain, so by the
+		// time a packet reaches here it is almost always a fresh probe).
+		b.WriteString("$IPT -A ZFW-IN -m conntrack --ctstate NEW -j LOG --log-prefix \"ZFW-IN-DROP \" --log-level 6\n")
 		b.WriteString("$IPT -A ZFW-IN -j DROP\n")
 	}
 	b.WriteString("$IPT -C INPUT -j ZFW-IN 2>/dev/null || $IPT -I INPUT 1 -j ZFW-IN\n\n")
@@ -102,33 +123,143 @@ func Compile(rs rules.RuleSet, dockerPorts map[int]bool, geoFiles map[string]str
 		}
 	}
 	if rs.DefaultPolicy == "deny" && rs.LAN != "" {
+		// Log container-port drops separately so the Events tab can tell
+		// host-zone hits from docker-zone hits. NEW-only for the same
+		// volume reason as ZFW-IN.
+		fmt.Fprintf(&b, "  $IPT -A DOCKER-USER -s %s -m conntrack --ctstate NEW -j LOG --log-prefix \"ZFW-DOCK-DROP \" --log-level 6\n", rs.LAN)
 		fmt.Fprintf(&b, "  $IPT -A DOCKER-USER -s %s -j DROP\n", rs.LAN)
 	}
 	b.WriteString("  $IPT -A DOCKER-USER -j RETURN\n")
 	b.WriteString("fi\n\n")
 
-	// ---- ZFW-IN6: IPv6 blocklist ----
-	if len(rs.V6Drop) > 0 {
-		b.WriteString("# ===== ZFW-IN6 (IPv6 blocklist) =====\n")
-		b.WriteString(`if [ -n "$IPT6" ]; then` + "\n")
-		b.WriteString("  $IPT6 -N ZFW-IN6 2>/dev/null || true\n")
-		b.WriteString("  $IPT6 -F ZFW-IN6\n")
-		b.WriteString("  $IPT6 -A ZFW-IN6 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN\n")
-		b.WriteString("  $IPT6 -A ZFW-IN6 -i lo -j RETURN\n")
-		for _, p := range rs.V6Drop {
-			fmt.Fprintf(&b, "  $IPT6 -A ZFW-IN6 -p tcp --dport %d -j DROP\n", p)
+	// ---- ZFW-IN6: IPv6 INPUT (always emitted) ----
+	// ZimaOS ships with SLAAC enabled by default, so a host is reachable on
+	// IPv6 the moment a router advertises a prefix. Pre-v0.2.15 we only
+	// emitted ZFW-IN6 when the legacy V6Drop blacklist had entries and
+	// finished with -j RETURN — i.e. effectively no protection. Now ZFW-IN6
+	// mirrors ZFW-IN: always emitted, bypass for trusted interfaces and
+	// protocols that IPv6 cannot work without (ICMPv6 for ND/MTU/MLD,
+	// DHCPv6 client, link-local fe80::/10, multicast ff00::/8), then the
+	// host-zone allow-rules mirrored from the IPv4 chain, and a default-
+	// deny with a LOG target so the Events tab can surface IPv6 drops.
+	b.WriteString("# ===== ZFW-IN6 (IPv6 INPUT — always emitted from v0.2.15) =====\n")
+	b.WriteString(`if [ -n "$IPT6" ]; then` + "\n")
+	b.WriteString("  $IPT6 -N ZFW-IN6 2>/dev/null || true\n")
+	b.WriteString("  $IPT6 -F ZFW-IN6\n")
+	b.WriteString("  $IPT6 -A ZFW-IN6 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN\n")
+	b.WriteString("  $IPT6 -A ZFW-IN6 -m conntrack --ctstate INVALID -j DROP\n")
+	b.WriteString("  $IPT6 -A ZFW-IN6 -i lo -j RETURN\n")
+	b.WriteString("  $IPT6 -A ZFW-IN6 -i docker0 -j RETURN\n")
+	b.WriteString("  $IPT6 -A ZFW-IN6 -i br-+ -j RETURN\n")
+	b.WriteString("  $IPT6 -A ZFW-IN6 -i virbr0 -j RETURN\n")
+	b.WriteString("  $IPT6 -A ZFW-IN6 -i tailscale0 -j RETURN\n")
+	b.WriteString("  $IPT6 -A ZFW-IN6 -i zt+ -j RETURN\n")
+	// ICMPv6 is non-negotiable on IPv6 — without it Neighbor Discovery,
+	// path-MTU and Multicast Listener Discovery all break.
+	b.WriteString("  $IPT6 -A ZFW-IN6 -p ipv6-icmp -j RETURN\n")
+	// DHCPv6 client (server-to-client port). Harmless if no DHCPv6 is used.
+	b.WriteString("  $IPT6 -A ZFW-IN6 -p udp --dport 546 -j RETURN\n")
+	// Link-local and multicast addresses: needed for ND, MLD, mDNSv6.
+	b.WriteString("  $IPT6 -A ZFW-IN6 -s fe80::/10 -j RETURN\n")
+	b.WriteString("  $IPT6 -A ZFW-IN6 -s ff00::/8 -j RETURN\n")
+	// Mirror host-zone allow-rules over IPv6. Source restrictions only
+	// translate when the rule's source is an IPv6 CIDR — otherwise the
+	// IPv6 mirror is destination-port-only (effectively "allow this port
+	// from anywhere on IPv6"). Per-rule SLAAC-prefix scoping is a v0.3
+	// item on the roadmap.
+	for _, r := range rl {
+		if !r.Enabled {
+			continue
 		}
-		b.WriteString("  $IPT6 -A ZFW-IN6 -j RETURN\n")
-		b.WriteString("  $IPT6 -C INPUT -j ZFW-IN6 2>/dev/null || $IPT6 -I INPUT 1 -j ZFW-IN6\n")
-		b.WriteString("fi\n")
+		for _, line := range hostLines6(r, dockerPorts) {
+			fmt.Fprintf(&b, "  $IPT6 -A ZFW-IN6 %s\n", line)
+		}
 	}
+	// Legacy V6Drop blocklist still honoured for explicit per-port denies
+	// (e.g. forbid TCP 5900 on IPv6 even though it might also be in the
+	// allow-list). These run before the catch-all so they win.
+	for _, p := range rs.V6Drop {
+		fmt.Fprintf(&b, "  $IPT6 -A ZFW-IN6 -p tcp --dport %d -j DROP\n", p)
+	}
+	// Default policy. With deny we close the chain with LOG+DROP, matching
+	// the IPv4 chain; with allow we just RETURN so any unmatched packet
+	// falls back to the system INPUT policy.
+	if rs.DefaultPolicy == "allow" {
+		b.WriteString("  $IPT6 -A ZFW-IN6 -j RETURN\n")
+	} else {
+		b.WriteString("  $IPT6 -A ZFW-IN6 -m conntrack --ctstate NEW -j LOG --log-prefix \"ZFW-IN6-DROP \" --log-level 6\n")
+		b.WriteString("  $IPT6 -A ZFW-IN6 -j DROP\n")
+	}
+	b.WriteString("  $IPT6 -C INPUT -j ZFW-IN6 2>/dev/null || $IPT6 -I INPUT 1 -j ZFW-IN6\n")
+	b.WriteString("fi\n")
 	return b.String()
 }
+
+// hostLines6 is the IPv6 variant of hostLines. It returns iptables args
+// (after "-A ZFW-IN6") for a rule's host-targeted portion. Source filters
+// are applied only when the rule's source is an IPv6 CIDR/IP — IPv4
+// sources don't translate. A "country" source is skipped (ipset support
+// for IPv6 needs a separate sets, deferred to a later release).
+func hostLines6(r rules.Rule, dockerPorts map[int]bool) []string {
+	ps, ok := portsForZone(r, dockerPorts, "host")
+	if !ok {
+		return nil
+	}
+	target := "RETURN"
+	if r.Action == "deny" {
+		target = "DROP"
+	}
+	src := source6Arg(r.Source)
+	if src == "skip" {
+		return nil
+	}
+	var lines []string
+	if ps.All {
+		if r.Protocol == "both" {
+			lines = append(lines, joinArgs(src, "-j", target))
+		} else {
+			lines = append(lines, joinArgs(src, "-p", r.Protocol, "-j", target))
+		}
+		return lines
+	}
+	for _, proto := range protoList(r.Protocol) {
+		lines = append(lines, joinArgs(src, "-p", proto, portArg(ps), "-j", target))
+	}
+	return lines
+}
+
+// source6Arg returns the IPv6 source-match fragment for a rule, or "skip"
+// when the rule's source is IPv4-only and therefore cannot be expressed on
+// the ip6tables chain.
+func source6Arg(s rules.Source) string {
+	switch s.Type {
+	case "any":
+		return ""
+	case "ip", "range":
+		if strings.Contains(s.Value, ":") {
+			return "-s " + s.Value
+		}
+		return "skip"
+	default:
+		// country sources need IPv6-specific ipset support — skip for now.
+		return "skip"
+	}
+}
+
+// portSpec is the compiled form of a rule's Ports field — a discriminated
+// view that the emitters can switch on without re-reading the source rule.
+type portSpec struct {
+	All      bool  // every port: emit no --dport clause
+	List     []int // multiport list
+	From, To int   // inclusive range (when From != 0)
+}
+
+func (ps portSpec) isRange() bool { return ps.From != 0 }
 
 // hostLines returns the iptables args (after "-A ZFW-IN") for a rule's
 // host-targeted portion, or nil if the rule does not target the host chain.
 func hostLines(r rules.Rule, dockerPorts map[int]bool) []string {
-	all, ports, ok := portsForZone(r, dockerPorts, "host")
+	ps, ok := portsForZone(r, dockerPorts, "host")
 	if !ok {
 		return nil
 	}
@@ -138,7 +269,7 @@ func hostLines(r rules.Rule, dockerPorts map[int]bool) []string {
 	}
 	var lines []string
 	for _, src := range sourceArgs(r.Source) {
-		if all {
+		if ps.All {
 			if r.Protocol == "both" {
 				lines = append(lines, joinArgs(src, "-j", target))
 			} else {
@@ -147,7 +278,7 @@ func hostLines(r rules.Rule, dockerPorts map[int]bool) []string {
 			continue
 		}
 		for _, proto := range protoList(r.Protocol) {
-			lines = append(lines, joinArgs(src, "-p", proto, multiport(ports), "-j", target))
+			lines = append(lines, joinArgs(src, "-p", proto, portArg(ps), "-j", target))
 		}
 	}
 	return lines
@@ -157,7 +288,7 @@ func hostLines(r rules.Rule, dockerPorts map[int]bool) []string {
 // docker-targeted portion. Published ports are matched on the original
 // (pre-DNAT) destination port via conntrack.
 func dockerLines(r rules.Rule, dockerPorts map[int]bool) []string {
-	all, ports, ok := portsForZone(r, dockerPorts, "docker")
+	ps, ok := portsForZone(r, dockerPorts, "docker")
 	if !ok {
 		return nil
 	}
@@ -167,7 +298,7 @@ func dockerLines(r rules.Rule, dockerPorts map[int]bool) []string {
 	}
 	var lines []string
 	for _, src := range sourceArgs(r.Source) {
-		if all {
+		if ps.All {
 			if r.Protocol == "both" {
 				lines = append(lines, joinArgs(src, "-j", target))
 			} else {
@@ -175,8 +306,18 @@ func dockerLines(r rules.Rule, dockerPorts map[int]bool) []string {
 			}
 			continue
 		}
+		// Container-published ports are matched on the original (pre-DNAT)
+		// destination port via conntrack — which accepts both a single port
+		// and a "from:to" range expression.
 		for _, proto := range protoList(r.Protocol) {
-			for _, p := range ports {
+			if ps.isRange() {
+				lines = append(lines, joinArgs(src, "-p", proto,
+					"-m", "conntrack",
+					"--ctorigdstport", fmt.Sprintf("%d:%d", ps.From, ps.To),
+					"-j", target))
+				continue
+			}
+			for _, p := range ps.List {
 				lines = append(lines, joinArgs(src, "-p", proto,
 					"-m", "conntrack", "--ctorigdstport", strconv.Itoa(p), "-j", target))
 			}
@@ -185,32 +326,64 @@ func dockerLines(r rules.Rule, dockerPorts map[int]bool) []string {
 	return lines
 }
 
+// portArg renders a portSpec into the iptables --dport / multiport fragment.
+// Caller must not pass an All spec — that case is handled earlier.
+func portArg(ps portSpec) string {
+	if ps.isRange() {
+		return fmt.Sprintf("--dport %d:%d", ps.From, ps.To)
+	}
+	return multiport(ps.List)
+}
+
 // portsForZone splits a rule's ports between the host chain and the docker
 // chain, honouring rule.Zone (with "auto" resolved per port via dockerPorts).
-func portsForZone(r rules.Rule, dockerPorts map[int]bool, want string) (all bool, ports []int, ok bool) {
+// A "range" rule always goes to the host chain in auto mode — splitting a
+// range across host and docker would lose its single-line iptables form.
+func portsForZone(r rules.Rule, dockerPorts map[int]bool, want string) (portSpec, bool) {
+	zoned := func(ps portSpec) (portSpec, bool) { return ps, true }
+	allSpec := portSpec{All: true}
+	listSpec := portSpec{List: r.Ports.List}
+	rangeSpec := portSpec{From: r.Ports.From, To: r.Ports.To}
+
 	switch r.Zone {
 	case "host":
 		if want != "host" {
-			return false, nil, false
+			return portSpec{}, false
 		}
-		if r.Ports.Type == "all" {
-			return true, nil, true
+		switch r.Ports.Type {
+		case "all":
+			return zoned(allSpec)
+		case "range":
+			return zoned(rangeSpec)
+		default:
+			return zoned(listSpec)
 		}
-		return false, r.Ports.List, true
 	case "docker":
 		if want != "docker" {
-			return false, nil, false
+			return portSpec{}, false
 		}
-		if r.Ports.Type == "all" {
-			return true, nil, true
+		switch r.Ports.Type {
+		case "all":
+			return zoned(allSpec)
+		case "range":
+			return zoned(rangeSpec)
+		default:
+			return zoned(listSpec)
 		}
-		return false, r.Ports.List, true
 	default: // auto
 		if r.Ports.Type == "all" {
 			if want == "host" {
-				return true, nil, true
+				return zoned(allSpec)
 			}
-			return false, nil, false
+			return portSpec{}, false
+		}
+		if r.Ports.Type == "range" {
+			// Auto + range: send the whole range to host (splitting across
+			// chains would require multiple range expressions).
+			if want == "host" {
+				return zoned(rangeSpec)
+			}
+			return portSpec{}, false
 		}
 		var hp, dp []int
 		for _, p := range r.Ports.List {
@@ -222,14 +395,14 @@ func portsForZone(r rules.Rule, dockerPorts map[int]bool, want string) (all bool
 		}
 		if want == "host" {
 			if len(hp) == 0 {
-				return false, nil, false
+				return portSpec{}, false
 			}
-			return false, hp, true
+			return zoned(portSpec{List: hp})
 		}
 		if len(dp) == 0 {
-			return false, nil, false
+			return portSpec{}, false
 		}
-		return false, dp, true
+		return zoned(portSpec{List: dp})
 	}
 }
 

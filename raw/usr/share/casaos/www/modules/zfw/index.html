@@ -7,9 +7,9 @@
   <meta name="robots" content="noindex">
   <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
   <title>ZFW Firewall</title>
-  <link rel="stylesheet" href="./styles.css?v=0.2.5">
+  <link rel="stylesheet" href="./styles.css?v=0.2.19">
 </head>
-<body class="dark">
+<body>
   <header>
     <div class="title-row">
       <h1><span class="logo">&#128737;</span> ZFW Firewall</h1>
@@ -20,6 +20,7 @@
       <span class="stat"><span class="stat-num" id="stat-fw">&ndash;</span><span class="stat-lbl">Firewall</span></span>
       <span class="stat"><span class="stat-num" id="stat-exposed">&ndash;</span><span class="stat-lbl">Exposed</span></span>
       <span class="stat"><span class="stat-num" id="stat-blocked">&ndash;</span><span class="stat-lbl">Blocked</span></span>
+      <span class="stat"><span class="stat-num" id="stat-events">&ndash;</span><span class="stat-lbl">Drops (1h)</span></span>
       <span class="stat"><span class="stat-num" id="stat-findings">&ndash;</span><span class="stat-lbl">Open findings</span></span>
       <button id="refresh-btn" class="btn-secondary">Refresh</button>
     </div>
@@ -30,6 +31,7 @@
     <button class="tab-btn active" data-tab="firewall" role="tab">Firewall</button>
     <button class="tab-btn" data-tab="rules" role="tab">Rules</button>
     <button class="tab-btn" data-tab="exposure" role="tab">Exposure</button>
+    <button class="tab-btn" data-tab="events" role="tab">Events</button>
     <button class="tab-btn" data-tab="audit" role="tab">Audit</button>
     <button class="tab-btn" data-tab="versions" role="tab">Versions</button>
   </nav>
@@ -68,6 +70,17 @@
         <span class="badge badge-local">localhost</span> local only.
       </p>
       <div id="exposure-list"><div class="loading">Loading&hellip;</div></div>
+    </section>
+
+    <section id="tab-events" class="tab-panel" role="tabpanel">
+      <p class="panel-hint">
+        Recent packets blocked by ZFW &mdash; <b>host</b> drops hit the
+        ZFW-IN chain, <b>docker</b> drops hit DOCKER-USER. Logging is
+        rate-limited to 60/min per chain so a port scan can never flood
+        your journal. Older events are kept by journald with the system's
+        usual retention.
+      </p>
+      <div id="events-list"><div class="loading">Loading&hellip;</div></div>
     </section>
 
     <section id="tab-audit" class="tab-panel" role="tabpanel">
@@ -112,11 +125,20 @@
           <select id="rm-porttype">
             <option value="all">All ports</option>
             <option value="list">Specific ports</option>
+            <option value="range">Port range</option>
           </select>
         </label>
         <label class="fld" id="rm-portval-fld">Ports (comma-separated)
           <input id="rm-portval" type="text" placeholder="22, 80, 443">
         </label>
+        <div class="fld" id="rm-portrange-fld" hidden>
+          <span>Port range (inclusive)</span>
+          <div class="port-range-row">
+            <input id="rm-portfrom" type="number" min="1" max="65535" placeholder="5900">
+            <span class="port-range-sep">to</span>
+            <input id="rm-portto" type="number" min="1" max="65535" placeholder="5999">
+          </div>
+        </div>
         <label class="fld">Protocol
           <select id="rm-proto">
             <option value="tcp">TCP</option>
@@ -142,6 +164,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=0.2.5"></script>
+  <script src="./app.js?v=0.2.19"></script>
 </body>
 </html>

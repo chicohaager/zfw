@@ -10,7 +10,8 @@ package main
 
 import (
 	"context"
-	"log"
+	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -31,14 +32,29 @@ import (
 	"github.com/chicohaager/zfw/internal/watchdog"
 )
 
+// slogf adapts a printf-style logger call to slog.Info. Used as a callback
+// argument for library code (gateway.RegisterWithRetry, watchdog.EnsureInstalled)
+// that still takes the legacy `func(string, ...any)` signature so those
+// packages stay slog-agnostic.
+func slogf(format string, args ...any) {
+	slog.Info(fmt.Sprintf(format, args...))
+}
+
 func main() {
+	// Use the text handler — key=value lines stay readable in journalctl
+	// without a JSON pipeline, and slog adds source location automatically
+	// when AddSource is enabled.
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr,
+		&slog.HandlerOptions{AddSource: true})))
+
 	cfg := config.Load()
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
-	log.Printf("zfwd starting: bind=%s:%s route=%s engine=%s",
-		cfg.BindAddr, cfg.Port, cfg.RoutePath, cfg.ZfwBin)
+	slog.Info("zfwd starting",
+		"bind", cfg.BindAddr+":"+cfg.Port,
+		"route", cfg.RoutePath,
+		"engine", cfg.ZfwBin)
 
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
-		log.Printf("mkdir data_dir (non-fatal): %v", err)
+		slog.Warn("mkdir data_dir (non-fatal)", "err", err, "dir", cfg.DataDir)
 	}
 
 	// The engine, allowlist.conf and the compiled ruleset live here and run
@@ -46,16 +62,18 @@ func main() {
 	// the writable /DATA partition can plant a script (ZFW-3).
 	zfwDir := filepath.Dir(cfg.RulesFile)
 	if err := os.MkdirAll(zfwDir, 0o700); err != nil {
-		log.Printf("mkdir zfw dir (non-fatal): %v", err)
+		slog.Warn("mkdir zfw dir (non-fatal)", "err", err, "dir", zfwDir)
 	} else if err := os.Chmod(zfwDir, 0o700); err != nil {
-		log.Printf("chmod zfw dir (non-fatal): %v", err)
+		slog.Warn("chmod zfw dir (non-fatal)", "err", err, "dir", zfwDir)
 	}
 
 	fw := firewall.New(cfg.ZfwBin, cfg.ZfwConf)
 	srv := handlers.NewServer(fw, cfg.RulesFile, cfg.CompiledFile, cfg.GeoDir)
 
-	// v0.2 rule model: migrate the legacy allowlist.conf on first run, then
-	// compile the rule set into the script the engine applies.
+	// v0.2 rule model: migrate the legacy allowlist.conf on first run; on a
+	// truly fresh host (no allowlist either) seed a recommended starter
+	// rule set so the UI opens onto something usable instead of an empty
+	// page that locks the user out the moment they hit Safe-Apply.
 	if _, err := os.Stat(cfg.RulesFile); os.IsNotExist(err) {
 		if tier, lerr := fw.LoadConfig(); lerr == nil {
 			mctx, mcancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -67,16 +85,29 @@ func main() {
 			}
 			rs := rules.FromTiers(tier, ports)
 			if serr := rules.Save(cfg.RulesFile, rs); serr != nil {
-				log.Printf("rule migration (non-fatal): %v", serr)
+				slog.Warn("rule migration (non-fatal)", "err", serr)
 			} else {
-				log.Printf("migrated allowlist.conf -> rules.json (%d rules)", len(rs.Rules))
+				slog.Info("migrated allowlist.conf -> rules.json", "rules", len(rs.Rules))
+			}
+		} else {
+			lan, hostIP := system.DetectLAN()
+			dctx, dcancel := context.WithTimeout(context.Background(), 10*time.Second)
+			dp := system.DockerPorts(dctx)
+			dcancel()
+			rs := rules.Defaults(lan, hostIP, dp)
+			if serr := rules.Save(cfg.RulesFile, rs); serr != nil {
+				slog.Warn("default rule seed (non-fatal)", "err", serr)
+			} else {
+				slog.Info("seeded default rules.json — not applied; user must Safe-Apply",
+					"lan", lan, "host", hostIP,
+					"rules", len(rs.Rules), "docker_ports", len(dp))
 			}
 		}
 	}
 	{
 		rctx, rcancel := context.WithTimeout(context.Background(), 20*time.Second)
 		if err := srv.Recompile(rctx); err != nil {
-			log.Printf("initial recompile (non-fatal): %v", err)
+			slog.Warn("initial recompile (non-fatal)", "err", err)
 		}
 		rcancel()
 	}
@@ -98,25 +129,28 @@ func main() {
 			if isLoopbackURL(cand) {
 				jwksURL = cand
 			} else {
-				log.Printf("discovered JWKS target %q not loopback — keeping pinned default %s", target, jwksURL)
+				slog.Warn("discovered JWKS target not loopback — keeping pinned default",
+					"target", target, "default", jwksURL)
 			}
 		} else {
-			log.Printf("JWKS discovery failed, using default (%s): %v", jwksURL, err)
+			slog.Warn("JWKS discovery failed, using default",
+				"default", jwksURL, "err", err)
 		}
 		dcancel()
 	}
 	if !isLoopbackURL(jwksURL) {
-		log.Printf("WARNING: JWKS URL %s is not loopback — session-auth trust anchor is off-host", jwksURL)
+		slog.Warn("JWKS URL is not loopback — session-auth trust anchor is off-host",
+			"jwks_url", jwksURL)
 	}
 	verifier := auth.NewVerifier(jwksURL)
 	{
 		wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := verifier.Warm(wctx); err != nil {
-			log.Printf("JWKS warm-up failed (retried lazily): %v", err)
+			slog.Warn("JWKS warm-up failed (retried lazily)", "err", err)
 		}
 		wcancel()
 	}
-	log.Printf("session auth enabled (JWKS=%s)", jwksURL)
+	slog.Info("session auth enabled", "jwks_url", jwksURL)
 
 	mux := http.NewServeMux()
 	// Every API call needs a valid ZimaOS session token; /api/health stays
@@ -167,13 +201,13 @@ func main() {
 	defer stop()
 
 	// Keep the reverse-proxy route registered so the UI reaches this daemon.
-	go gw.RegisterWithRetry(ctx, log.Printf)
+	go gw.RegisterWithRetry(ctx, slogf)
 
 	// Install the boot watchdog on the persistent root (ZimaOS sysext units
 	// can lose the multi-user.target race — see KB §18.9).
 	go func() {
-		if err := watchdog.EnsureInstalled(log.Printf); err != nil {
-			log.Printf("watchdog setup (non-fatal): %v", err)
+		if err := watchdog.EnsureInstalled(slogf); err != nil {
+			slog.Warn("watchdog setup (non-fatal)", "err", err)
 		}
 	}()
 
@@ -187,18 +221,19 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("listening on %s", httpSrv.Addr)
+		slog.Info("listening", "addr", httpSrv.Addr)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %v", err)
+			slog.Error("listen failed", "err", err)
+			os.Exit(1)
 		}
 	}()
 
 	<-ctx.Done()
-	log.Printf("shutdown signal received, stopping")
+	slog.Info("shutdown signal received, stopping")
 	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := httpSrv.Shutdown(shutCtx); err != nil {
-		log.Printf("graceful shutdown error: %v", err)
+		slog.Warn("graceful shutdown error", "err", err)
 	}
 }
 

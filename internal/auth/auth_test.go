@@ -65,7 +65,7 @@ func TestVerifyExpiredToken(t *testing.T) {
 	v := NewVerifier(srv.URL)
 	tok := signES256(t, key, time.Now().Add(-time.Hour).Unix())
 	if err := v.Verify(tok); err == nil {
-		t.Fatal("abgelaufener Token wurde akzeptiert")
+		t.Fatal("expired token was accepted")
 	}
 }
 
@@ -77,7 +77,7 @@ func TestVerifyForeignSignature(t *testing.T) {
 	v := NewVerifier(srv.URL)
 	tok := signES256(t, signKey, time.Now().Add(time.Hour).Unix())
 	if err := v.Verify(tok); err == nil {
-		t.Fatal("Token mit fremder Signatur wurde akzeptiert")
+		t.Fatal("token with foreign signature was accepted")
 	}
 }
 

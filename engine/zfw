@@ -15,6 +15,10 @@ export PATH="/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPILED="${ZFW_COMPILED:-$SELF_DIR/compiled.sh}"
 DEADMAN="zfw-deadman"
+# Boot-persistence unit installed by `commit` and removed by `revert`. The
+# unit replays the committed compiled.sh at boot after docker.service is up
+# (so DOCKER-USER exists before we add rules to it).
+PERSIST_UNIT="/etc/systemd/system/zfw.service"
 
 IPT="$(command -v iptables-legacy 2>/dev/null || command -v iptables)"
 IPT6="$(command -v ip6tables-legacy 2>/dev/null || command -v ip6tables 2>/dev/null || true)"
@@ -58,6 +62,26 @@ revert(){
   fi
 }
 
+write_persist_unit(){
+  cat > "$PERSIST_UNIT" <<'UNIT'
+[Unit]
+Description=ZFW Host Firewall — restore committed rules at boot
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/DATA/zfw/zfw
+ConditionPathExists=/DATA/zfw/compiled.sh
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/DATA/zfw/zfw apply
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  chmod 0644 "$PERSIST_UNIT"
+}
+
 arm_deadman(){
   systemctl stop "${DEADMAN}.timer" 2>/dev/null || true
   systemctl reset-failed "${DEADMAN}.service" 2>/dev/null || true
@@ -93,11 +117,21 @@ case "${1:-}" in
   commit)
     systemctl stop "${DEADMAN}.timer" 2>/dev/null || true
     systemctl reset-failed "${DEADMAN}.service" 2>/dev/null || true
-    log "committed — deadman cancelled, rules persist"
+    # Install + enable the boot-restore unit so the committed rules survive
+    # reboot. Idempotent: re-running commit just rewrites the same unit.
+    write_persist_unit
+    systemctl daemon-reload
+    systemctl enable zfw.service >/dev/null 2>&1 || true
+    log "committed — deadman cancelled, boot-persistence enabled (zfw.service)"
     ;;
   revert)
     revert
-    log "firewall reverted — all ZFW rules removed, stock state restored"
+    # Disable + remove the boot-restore unit so a fresh boot returns to the
+    # stock state. daemon-reload after the rm so systemd forgets the unit.
+    systemctl disable zfw.service >/dev/null 2>&1 || true
+    rm -f "$PERSIST_UNIT" 2>/dev/null || true
+    systemctl daemon-reload 2>/dev/null || true
+    log "firewall reverted — all ZFW rules removed, stock state restored, boot-persistence disabled"
     ;;
   _autorevert)
     log "DEADMAN FIRED — reverting firewall"

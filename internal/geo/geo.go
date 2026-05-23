@@ -64,7 +64,7 @@ func (m *Manager) Ensure(ctx context.Context, codes []string, logf func(string, 
 		if !fresh {
 			if err := m.fetch(ctx, cc); err != nil {
 				if _, statErr := os.Stat(zone); statErr != nil {
-					return fmt.Errorf("Land %s: kein Cache und Download fehlgeschlagen: %w", cc, err)
+					return fmt.Errorf("country %s: no cache and download failed: %w", cc, err)
 				}
 				if logf != nil {
 					logf("geo: %s — Update fehlgeschlagen, nutze Cache: %v", cc, err)
@@ -72,7 +72,7 @@ func (m *Manager) Ensure(ctx context.Context, codes []string, logf func(string, 
 			}
 		}
 		if err := m.renderIpset(cc); err != nil {
-			return fmt.Errorf("Land %s: %w", cc, err)
+			return fmt.Errorf("country %s: %w", cc, err)
 		}
 	}
 	return nil
@@ -96,7 +96,7 @@ func (m *Manager) fetch(ctx context.Context, cc string) error {
 		return err
 	}
 	if len(body) == 0 {
-		return fmt.Errorf("leere Antwort")
+		return fmt.Errorf("empty response")
 	}
 	tmp := m.zonePath(cc) + ".tmp"
 	if err := os.WriteFile(tmp, body, 0o600); err != nil {
@@ -129,7 +129,7 @@ func (m *Manager) renderIpset(cc string) error {
 		n++
 	}
 	if n == 0 {
-		return fmt.Errorf("keine gültigen CIDR-Einträge")
+		return fmt.Errorf("no valid CIDR entries")
 	}
 	tmp := m.ipsetPath(cc) + ".tmp"
 	if err := os.WriteFile(tmp, []byte(sb.String()), 0o600); err != nil {

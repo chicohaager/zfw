@@ -5,6 +5,7 @@ package system
 import (
 	"bufio"
 	"context"
+	"net"
 	"os"
 	"os/exec"
 	"sort"
@@ -13,6 +14,46 @@ import (
 	"sync"
 	"time"
 )
+
+// DetectLAN guesses the primary LAN CIDR and host IP by asking the kernel
+// which source IP it would pick to reach an arbitrary public address — no
+// packets are sent, the UDP dial only resolves the default-route source.
+// Both return values fall back to safe placeholders when detection fails so
+// the caller never has to handle errors.
+func DetectLAN() (lanCIDR, hostIP string) {
+	lanCIDR = "192.168.1.0/24"
+	conn, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	local, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		return
+	}
+	hostIP = local.IP.String()
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return
+	}
+	for _, iface := range ifs {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok || !ipnet.IP.Equal(local.IP) {
+				continue
+			}
+			if _, network, err := net.ParseCIDR(ipnet.String()); err == nil {
+				lanCIDR = network.String()
+			}
+			return
+		}
+	}
+	return
+}
 
 func run(ctx context.Context, name string, args ...string) string {
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -129,13 +170,13 @@ func Versions(ctx context.Context) []Component {
 
 	cs = append(cs, Component{
 		Name: "ZimaOS", Version: orDash(osRelease("VERSION")),
-		Note: "App-Layer-CVEs alle ≤1.5.3 gefixt", Level: "ok",
+		Note: "All app-layer CVEs ≤1.5.3 are fixed", Level: "ok",
 	})
 
 	kern := firstLine(run(ctx, "uname", "-r"))
-	kc := Component{Name: "Linux-Kernel", Version: orDash(kern), Note: "aktuell", Level: "ok"}
+	kc := Component{Name: "Linux kernel", Version: orDash(kern), Note: "up to date", Level: "ok"}
 	if kernelVulnerable(kern) {
-		kc.Note = "CVE-2026-31431 (Copy Fail) — lokaler Root; Fix erst ~6.12.86, nur per Firmware-Update"
+		kc.Note = "CVE-2026-31431 (Copy Fail) — local root; fix only in ~6.12.86, firmware update only"
 		kc.Level = "warn"
 	}
 	cs = append(cs, kc)
@@ -143,13 +184,13 @@ func Versions(ctx context.Context) []Component {
 	docker := extractVersion(run(ctx, "docker", "--version"))
 	cs = append(cs, Component{
 		Name: "Docker Engine", Version: orDash(docker),
-		Note: "docker cp-Escapes < 29.3.1 (konditionell)", Level: levelIf(dockerOld(docker)),
+		Note: "docker cp escapes < 29.3.1 (conditional)", Level: levelIf(dockerOld(docker)),
 	})
 
 	ssh := opensshVersion(run(ctx, "ssh", "-V"))
 	cs = append(cs, Component{
 		Name: "OpenSSH", Version: orDash(ssh),
-		Note: "regreSSHion (CVE-2024-6387) nicht betroffen ab 9.8p1", Level: "ok",
+		Note: "regreSSHion (CVE-2024-6387) not affected from 9.8p1 onward", Level: "ok",
 	})
 
 	ipt := extractVersion(run(ctx, "iptables-legacy", "--version"))
@@ -158,7 +199,7 @@ func Versions(ctx context.Context) []Component {
 	}
 	cs = append(cs, Component{
 		Name: "iptables", Version: orDash(ipt),
-		Note: "Backend: iptables-legacy (Docker-kompatibel)", Level: "ok",
+		Note: "Backend: iptables-legacy (Docker-compatible)", Level: "ok",
 	})
 	verCache, verCached = cs, time.Now()
 	return cs

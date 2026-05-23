@@ -125,7 +125,9 @@ function renderRules() {
     const actCls = r.action === 'allow' ? 'act-allow' : 'act-deny';
     const actLbl = r.action === 'allow' ? 'Allow' : 'Deny';
     const src = r.source && r.source.type !== 'any' ? esc(r.source.value) : 'Any';
-    const ports = r.ports && r.ports.type === 'list' ? esc((r.ports.list || []).join(', ')) : 'All';
+    let ports = 'All';
+    if (r.ports && r.ports.type === 'list') ports = esc((r.ports.list || []).join(', '));
+    else if (r.ports && r.ports.type === 'range') ports = esc(r.ports.from + '–' + r.ports.to);
     const zone = { auto: 'Auto', host: 'Host', docker: 'Docker' }[r.zone] || esc(r.zone);
     return `<tr class="${r.enabled ? '' : 'rule-off'}" data-id="${esc(r.id)}">
       <td class="mono">${i + 1}</td>
@@ -151,6 +153,7 @@ function renderRules() {
     </div>
     <div class="action-row">
       <button id="btn-new-rule" class="btn-primary">+ New rule</button>
+      <button id="btn-recommended-defaults" class="btn-secondary" title="Replace all rules with the recommended starter set (auto-detected LAN, deny default, 5 baseline allow rules)">Recommended defaults</button>
       <button id="btn-save-rules" class="btn-secondary${rulesDirty ? ' dirty' : ''}">Save rules</button>
       <span class="save-hint"${rulesDirty ? '' : ' hidden'}>unsaved changes — save, then Safe-Apply on the Firewall tab</span>
     </div>
@@ -167,6 +170,7 @@ function wireRules() {
     markDirty();
   }));
   $('#btn-new-rule').addEventListener('click', () => openRuleEditor(null));
+  $('#btn-recommended-defaults').addEventListener('click', applyRecommendedDefaults);
   $('#btn-save-rules').addEventListener('click', saveRules);
   $$('#rules-panel tbody tr[data-id]').forEach(tr => {
     const id = tr.dataset.id;
@@ -196,6 +200,27 @@ function ruleAction(id, act) {
     markDirty();
   } else if (act === 'edit') {
     openRuleEditor(rs[i]);
+  }
+}
+
+// applyRecommendedDefaults replaces the current rules with the server's
+// recommended starter set (auto-detected LAN, deny-default, 5 allow-rules
+// for the services a ZimaOS host typically must keep reachable). Confirms
+// before overwriting existing rules; the user still has to click Safe-Apply
+// on the Firewall tab for the rules to take effect.
+async function applyRecommendedDefaults() {
+  if (ruleSet && Array.isArray(ruleSet.rules) && ruleSet.rules.length > 0) {
+    if (!confirm('Replace all current rules with the recommended starter set?\n\n' +
+                 '5 baseline rules will be installed (ZimaOS Web UI, SSH, Samba TCP, Samba UDP, mDNS).\n' +
+                 'Default policy will become deny.')) return;
+  }
+  setStatus('Applying recommended defaults…');
+  try {
+    await api('/rules/defaults', { method: 'POST' });
+    setStatus('Defaults installed — review here, then Safe-Apply on the Firewall tab.', 'ok');
+    await loadRules();
+  } catch (e) {
+    setStatus('Error: ' + e.message, 'err');
   }
 }
 
@@ -230,6 +255,8 @@ function openRuleEditor(rule) {
   $('#rm-srcval').value = (r.source && r.source.value) || '';
   $('#rm-porttype').value = (r.ports && r.ports.type) || 'list';
   $('#rm-portval').value = ((r.ports && r.ports.list) || []).join(', ');
+  $('#rm-portfrom').value = (r.ports && r.ports.from) || '';
+  $('#rm-portto').value = (r.ports && r.ports.to) || '';
   $('#rm-proto').value = r.protocol || 'tcp';
   $('#rm-zone').value = r.zone || 'auto';
   $('#rm-enabled').checked = r.enabled !== false;
@@ -252,8 +279,10 @@ function openRuleEditorForPort(port) {
 function updateModalFields() {
   const st = $('#rm-srctype').value;
   const isGeo = st === 'country';
+  const pt = $('#rm-porttype').value;
   $('#rm-srcval-fld').hidden = st === 'any';
-  $('#rm-portval-fld').hidden = $('#rm-porttype').value !== 'list';
+  $('#rm-portval-fld').hidden = pt !== 'list';
+  $('#rm-portrange-fld').hidden = pt !== 'range';
   $('#rm-geo-hint').hidden = !isGeo;
   $('#rm-srcval-label').textContent = isGeo ? 'Country codes (ISO, comma-separated)' : 'Source address';
   $('#rm-srcval').placeholder = isGeo ? 'DE, RU, CN' : '192.168.1.0/24';
@@ -292,20 +321,35 @@ function saveRuleFromEditor() {
   }
   const porttype = $('#rm-porttype').value;
   let list = [];
+  let portFrom = 0, portTo = 0;
   if (porttype === 'list') {
     list = $('#rm-portval').value.split(/[\s,]+/).filter(Boolean).map(Number);
     if (!list.length) return modalError('Enter at least one port.');
     if (list.some(p => !Number.isInteger(p) || p < 1 || p > 65535)) {
       return modalError('Invalid port — allowed range is 1–65535.');
     }
+  } else if (porttype === 'range') {
+    portFrom = Number($('#rm-portfrom').value);
+    portTo   = Number($('#rm-portto').value);
+    if (!Number.isInteger(portFrom) || portFrom < 1 || portFrom > 65535) {
+      return modalError('Port range: "from" must be 1–65535.');
+    }
+    if (!Number.isInteger(portTo) || portTo < 1 || portTo > 65535) {
+      return modalError('Port range: "to" must be 1–65535.');
+    }
+    if (portFrom > portTo) {
+      return modalError('Port range: "from" must be ≤ "to".');
+    }
   }
+  const portsObj = { type: porttype, list: list };
+  if (porttype === 'range') { portsObj.from = portFrom; portsObj.to = portTo; }
   const rule = {
     id: editingRuleId || '',
     enabled: $('#rm-enabled').checked,
     name,
     action: $('#rm-action').value,
     source: { type: srctype, value: srctype === 'any' ? '' : srcval },
-    ports: { type: porttype, list: list },
+    ports: portsObj,
     protocol: $('#rm-proto').value,
     zone: $('#rm-zone').value,
   };
@@ -396,6 +440,40 @@ async function loadAudit() {
   $('#audit-list').innerHTML = rows || '<div class="loading">No findings.</div>';
 }
 
+/* ---------- events ---------- */
+async function loadEvents() {
+  // Query the last hour, newest-first. The server parses journald with the
+  // ZFW-IN-DROP / ZFW-DOCK-DROP log prefixes; nothing is persisted by us.
+  const sinceTs = Math.floor(Date.now() / 1000) - 3600;
+  const d = await api('/events?since=' + sinceTs + '&limit=300');
+  $('#stat-events').textContent = d.length;
+  $('#stat-events').className = 'stat-num ' + (d.length > 0 ? 'warn' : 'ok');
+  if (!d.length) {
+    $('#events-list').innerHTML = '<div class="loading">No drops in the last hour. Either nothing is probing your host or the firewall has not been applied yet — Safe-Apply on the Firewall tab installs the log targets.</div>';
+    return;
+  }
+  const zoneMap = {
+    host:   ['badge-blocked', 'host'],
+    host6:  ['badge-blocked', 'host (v6)'],
+    docker: ['badge-lan',     'docker'],
+  };
+  const rows = d.map(e => {
+    const t = new Date(e.time);
+    const ts = t.toLocaleTimeString() + ' ' + t.toLocaleDateString();
+    const [cls, lbl] = zoneMap[e.zone] || ['badge-local', e.zone];
+    return `<tr>
+      <td class="mono">${esc(ts)}</td>
+      <td class="mono">${esc(e.source || '?')}</td>
+      <td class="mono">${e.port || '—'}</td>
+      <td>${esc((e.protocol || '').toUpperCase())}</td>
+      <td><span class="badge ${cls}">${lbl}</span></td>
+    </tr>`;
+  }).join('');
+  $('#events-list').innerHTML = `<table class="tbl">
+    <thead><tr><th>Time</th><th>Source IP</th><th>Dest port</th><th>Proto</th><th>Zone</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
 /* ---------- versions ---------- */
 async function loadVersions() {
   const d = await api('/versions');
@@ -415,6 +493,7 @@ async function refreshAll() {
     await loadFirewall();
     await loadRules();
     await loadExposure();
+    await loadEvents();
     await loadAudit();
     await loadVersions();
     setStatus('');

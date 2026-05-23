@@ -3,6 +3,7 @@ package handlers
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"github.com/chicohaager/zfw/internal/audit"
 	"github.com/chicohaager/zfw/internal/buildinfo"
 	"github.com/chicohaager/zfw/internal/compiler"
+	"github.com/chicohaager/zfw/internal/events"
 	"github.com/chicohaager/zfw/internal/firewall"
 	"github.com/chicohaager/zfw/internal/geo"
 	"github.com/chicohaager/zfw/internal/rules"
@@ -26,22 +28,40 @@ import (
 // reference — each triggers a synchronous download during recompile (ZFW-S4).
 const maxGeoCountries = 40
 
+// Firewall is the subset of *firewall.Manager that the HTTP handlers depend
+// on. Defined here (the consumer side) so tests can pass a fake without
+// needing real systemd / iptables, and so the rest of the firewall package
+// stays free of test-only abstractions.
+type Firewall interface {
+	Status(ctx context.Context) firewall.Status
+	LoadConfig() (firewall.Config, error)
+	SaveConfig(firewall.Config) error
+	Apply(ctx context.Context, safe bool) (string, error)
+	Commit(ctx context.Context) (string, error)
+	Revert(ctx context.Context) (string, error)
+}
+
 // Server holds the dependencies for the HTTP API.
 type Server struct {
 	mu           sync.Mutex // serialises apply/commit/revert/recompile
-	fw           *firewall.Manager
+	fw           Firewall
 	rulesPath    string
 	compiledPath string
 	geo          *geo.Manager
+	mutateRL     *rateBucket // shared by all non-GET endpoints
 }
 
-// NewServer returns a Server.
-func NewServer(fw *firewall.Manager, rulesPath, compiledPath, geoDir string) *Server {
+// NewServer returns a Server. fw may be *firewall.Manager in production or
+// any Firewall implementation in tests.
+func NewServer(fw Firewall, rulesPath, compiledPath, geoDir string) *Server {
 	return &Server{
 		fw:           fw,
 		rulesPath:    rulesPath,
 		compiledPath: compiledPath,
 		geo:          geo.New(geoDir),
+		// Burst 10, sustained 1/s — a user clicking Safe-Apply repeatedly
+		// passes the burst; a runaway script is throttled to one call/sec.
+		mutateRL: newRateBucket(1, 10),
 	}
 }
 
@@ -55,7 +75,7 @@ func (s *Server) Recompile(ctx context.Context) error {
 	}
 	// Never compile unvalidated rules: the result is run as root by the engine.
 	if err := rules.Validate(rs); err != nil {
-		return fmt.Errorf("Regelsatz ungültig: %w", err)
+		return fmt.Errorf("rule set invalid: %w", err)
 	}
 	ccSet := map[string]bool{}
 	for _, r := range rs.Rules {
@@ -66,7 +86,7 @@ func (s *Server) Recompile(ctx context.Context) error {
 		}
 	}
 	if len(ccSet) > maxGeoCountries {
-		return fmt.Errorf("zu viele Länder (%d) — höchstens %d Geo-Sets", len(ccSet), maxGeoCountries)
+		return fmt.Errorf("too many countries (%d) — at most %d geo sets", len(ccSet), maxGeoCountries)
 	}
 	geoFiles := map[string]string{}
 	if len(ccSet) > 0 {
@@ -92,13 +112,17 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/health", s.health)
 	mux.HandleFunc("/api/status", s.status)
 	mux.HandleFunc("/api/config", s.config)
-	mux.HandleFunc("/api/rules", s.rules)
-	mux.HandleFunc("/api/apply", s.apply)
-	mux.HandleFunc("/api/commit", s.commit)
-	mux.HandleFunc("/api/revert", s.revert)
+	mux.HandleFunc("/api/rules", s.rateLimited(s.rules))
+	mux.HandleFunc("/api/rules/defaults", s.rateLimited(s.rulesDefaults))
+	mux.HandleFunc("/api/apply", s.rateLimited(s.apply))
+	mux.HandleFunc("/api/commit", s.rateLimited(s.commit))
+	mux.HandleFunc("/api/revert", s.rateLimited(s.revert))
 	mux.HandleFunc("/api/exposure", s.exposure)
 	mux.HandleFunc("/api/audit", s.auditHandler)
 	mux.HandleFunc("/api/versions", s.versions)
+	mux.HandleFunc("/api/events", s.events)
+	mux.HandleFunc("/api/openapi.json", s.openapi)
+	mux.HandleFunc("/api/openapi.yaml", s.openapi)
 	return mux
 }
 
@@ -120,6 +144,27 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": buildinfo.Version})
 }
 
+// openapiSpec is embedded at compile time so the daemon serves its own
+// OpenAPI 3.0 contract under /api/openapi.{json,yaml} without depending on
+// a file shipped next to the binary. Source: docs/openapi.yaml in the repo.
+//
+//go:embed openapi.yaml
+var openapiSpec []byte
+
+// openapi serves the embedded spec. Both /api/openapi.json and
+// /api/openapi.yaml return the same bytes (the file is YAML; OpenAPI tools
+// accept the JSON URL because YAML is a JSON superset for the relevant
+// constructs).
+func (s *Server) openapi(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	w.Header().Set("Content-Type", "application/yaml; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(openapiSpec)
+}
+
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx()
 	defer cancel()
@@ -138,12 +183,12 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 // config is the legacy v0.1 tier endpoint, kept until the UI moves to rules.
 func (s *Server) config(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		fail(w, http.StatusMethodNotAllowed, "POST erforderlich")
+		fail(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	var c firewall.Config
 	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
-		fail(w, http.StatusBadRequest, "ungültiges JSON: "+err.Error())
+		fail(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 	if err := s.fw.SaveConfig(c); err != nil {
@@ -160,14 +205,21 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		rs, err := rules.Load(s.rulesPath)
 		if err != nil {
-			fail(w, http.StatusInternalServerError, "Regeln laden: "+err.Error())
+			// A fresh install has no rules.json yet — surface that as an
+			// empty deny-default set so the UI renders "No rules yet"
+			// instead of a red 500 error.
+			if os.IsNotExist(err) {
+				writeJSON(w, http.StatusOK, rules.RuleSet{DefaultPolicy: "deny"})
+				return
+			}
+			fail(w, http.StatusInternalServerError, "load rules: "+err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, rs)
 	case http.MethodPost:
 		var rs rules.RuleSet
 		if err := json.NewDecoder(r.Body).Decode(&rs); err != nil {
-			fail(w, http.StatusBadRequest, "ungültiges JSON: "+err.Error())
+			fail(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
 		s.mu.Lock()
@@ -177,24 +229,48 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := rules.Save(s.rulesPath, rs); err != nil {
-			fail(w, http.StatusInternalServerError, "speichern: "+err.Error())
+			fail(w, http.StatusInternalServerError, "save: "+err.Error())
 			return
 		}
 		ctx, cancel := reqCtx()
 		defer cancel()
 		if err := s.Recompile(ctx); err != nil {
-			fail(w, http.StatusInternalServerError, "kompilieren: "+err.Error())
+			fail(w, http.StatusInternalServerError, "compile: "+err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 	default:
-		fail(w, http.StatusMethodNotAllowed, "GET oder POST")
+		fail(w, http.StatusMethodNotAllowed, "GET or POST")
 	}
+}
+
+// rulesDefaults regenerates and persists the recommended starter rule set
+// (auto-detected LAN, deny-default plus the five allow rules from
+// rules.Defaults). Drives the UI's "Apply recommended defaults" button —
+// the user must still click Safe-Apply on the Firewall tab to deploy them,
+// so the 120 s dead-man timer remains the last line of defence.
+func (s *Server) rulesDefaults(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		fail(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	ctx, cancel := reqCtx()
+	defer cancel()
+	lan, hostIP := system.DetectLAN()
+	dp := system.DockerPorts(ctx)
+	rs := rules.Defaults(lan, hostIP, dp)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := rules.Save(s.rulesPath, rs); err != nil {
+		fail(w, http.StatusInternalServerError, "save: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, rs)
 }
 
 func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		fail(w, http.StatusMethodNotAllowed, "POST erforderlich")
+		fail(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	var body struct {
@@ -204,7 +280,7 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 	// apply rules without the 120s dead-man (ZFW-S3). An empty body (EOF) is
 	// allowed and keeps the default.
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err != io.EOF {
-		fail(w, http.StatusBadRequest, "ungültiges JSON: "+err.Error())
+		fail(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
 	s.mu.Lock()
@@ -213,7 +289,13 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	// Recompile so the engine applies the current rule set.
 	if err := s.Recompile(ctx); err != nil {
-		fail(w, http.StatusInternalServerError, "kompilieren: "+err.Error())
+		if os.IsNotExist(err) {
+			// Fresh install: rules.json does not exist yet. Don't surface
+			// the raw file-not-found error — tell the user what to do.
+			fail(w, http.StatusBadRequest, "no rules saved yet — open the Rules tab, add a rule and click Save")
+			return
+		}
+		fail(w, http.StatusInternalServerError, "compile: "+err.Error())
 		return
 	}
 	out, err := s.fw.Apply(ctx, body.Safe)
@@ -226,7 +308,7 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) commit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		fail(w, http.StatusMethodNotAllowed, "POST erforderlich")
+		fail(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	s.mu.Lock()
@@ -243,7 +325,7 @@ func (s *Server) commit(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) revert(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		fail(w, http.StatusMethodNotAllowed, "POST erforderlich")
+		fail(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
 	s.mu.Lock()
@@ -256,6 +338,39 @@ func (s *Server) revert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reverted", "output": out})
+}
+
+// events returns the recent firewall DROP events parsed from the kernel
+// log. Defaults: last hour, up to 200 entries, newest-first. Query
+// parameters `since` (unix seconds) and `limit` override these.
+func (s *Server) events(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	since := time.Now().Add(-1 * time.Hour)
+	if v := r.URL.Query().Get("since"); v != "" {
+		if ts, err := strconv.ParseInt(v, 10, 64); err == nil {
+			since = time.Unix(ts, 0)
+		}
+	}
+	limit := 200
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 5000 {
+			limit = n
+		}
+	}
+	ctx, cancel := reqCtx()
+	defer cancel()
+	evs, err := events.Read(ctx, since, limit)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "events: "+err.Error())
+		return
+	}
+	if evs == nil {
+		evs = []events.Event{}
+	}
+	writeJSON(w, http.StatusOK, evs)
 }
 
 func (s *Server) exposure(w http.ResponseWriter, r *http.Request) {

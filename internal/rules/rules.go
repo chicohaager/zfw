@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -19,9 +20,18 @@ type Source struct {
 }
 
 // Ports is a rule's destination port set.
+//
+// Type semantics:
+//   - "all":   every port (compiler emits no --dport clause)
+//   - "list":  the ports in List (compiler emits -m multiport --dports …)
+//   - "range": the half-open span [From,To] inclusive (compiler emits
+//     --dport From:To). Useful for VNC 5900-5999 etc. without
+//     enumerating 100 individual entries.
 type Ports struct {
-	Type string `json:"type"` // all | list
+	Type string `json:"type"`
 	List []int  `json:"list"`
+	From int    `json:"from,omitempty"`
+	To   int    `json:"to,omitempty"`
 }
 
 // Rule is one ordered firewall rule.
@@ -53,6 +63,60 @@ func NewID() string {
 		return "r00000000"
 	}
 	return fmt.Sprintf("r%x", b)
+}
+
+// Defaults returns a starter rule set built from a live system inventory.
+// The hard-coded baseline covers ZimaOS host infrastructure the user almost
+// certainly needs reachable on the LAN (web UI, SSH, Samba shares, mDNS
+// discovery). One additional allow-rule is generated per live
+// Docker-published port so containers the user is already running are not
+// silently killed when the defaults are applied. The default-deny policy
+// blocks everything else — closing the LAN footguns flagged by the audit
+// (VM VNC without password, NFS/RPC, ttyd, etc.) by construction.
+//
+// dockerPorts may be nil; in that case only the baseline is returned. The
+// caller passes the result of system.DockerPorts(ctx) — the inventory must
+// be live, not cached, so a stopped container does not leave a stale rule
+// pinned in the starter set.
+func Defaults(lan, hostIP string, dockerPorts map[int]bool) RuleSet {
+	src := Source{Type: "range", Value: lan}
+	mk := func(order int, name, action, proto, zone string, ports ...int) Rule {
+		return Rule{
+			ID:       NewID(),
+			Order:    order,
+			Enabled:  true,
+			Name:     name,
+			Action:   action,
+			Source:   src,
+			Ports:    Ports{Type: "list", List: ports},
+			Protocol: proto,
+			Zone:     zone,
+		}
+	}
+	rs := []Rule{
+		mk(10, "ZimaOS Web UI", "allow", "tcp", "host", 80, 443),
+		mk(20, "SSH (admin)", "allow", "tcp", "host", 22),
+		mk(30, "Samba file sharing (TCP)", "allow", "tcp", "host", 139, 445),
+		mk(40, "Samba file sharing (UDP)", "allow", "udp", "host", 137, 138),
+		mk(50, "mDNS discovery", "allow", "udp", "host", 5353),
+	}
+	// Live Docker-published ports — sorted so the rule list is deterministic.
+	ports := make([]int, 0, len(dockerPorts))
+	for p := range dockerPorts {
+		ports = append(ports, p)
+	}
+	sort.Ints(ports)
+	order := 60
+	for _, p := range ports {
+		rs = append(rs, mk(order, fmt.Sprintf("Docker app on :%d", p), "allow", "tcp", "docker", p))
+		order += 10
+	}
+	return RuleSet{
+		LAN:           lan,
+		HostIP:        hostIP,
+		DefaultPolicy: "deny",
+		Rules:         rs,
+	}
 }
 
 // Load reads and parses rules.json.
@@ -98,30 +162,30 @@ const (
 // Validate rejects anything that could corrupt the compiled ruleset.
 func Validate(rs RuleSet) error {
 	if rs.DefaultPolicy != "deny" && rs.DefaultPolicy != "allow" {
-		return fmt.Errorf("default_policy muss deny oder allow sein")
+		return fmt.Errorf("default_policy must be deny or allow")
 	}
 	if len(rs.Rules) > maxRules {
-		return fmt.Errorf("zu viele Regeln: %d (max %d)", len(rs.Rules), maxRules)
+		return fmt.Errorf("too many rules: %d (max %d)", len(rs.Rules), maxRules)
 	}
 	if len(rs.V6Drop) > maxV6DropPorts {
-		return fmt.Errorf("zu viele v6_drop-Ports: %d (max %d)", len(rs.V6Drop), maxV6DropPorts)
+		return fmt.Errorf("too many v6_drop ports: %d (max %d)", len(rs.V6Drop), maxV6DropPorts)
 	}
 	if rs.LAN != "" {
 		if _, _, err := net.ParseCIDR(rs.LAN); err != nil {
-			return fmt.Errorf("lan muss ein CIDR sein (z. B. 192.168.1.0/24)")
+			return fmt.Errorf("lan must be a CIDR (e.g. 192.168.1.0/24)")
 		}
 	}
 	if rs.HostIP != "" && net.ParseIP(rs.HostIP) == nil {
-		return fmt.Errorf("host_ip muss eine IP-Adresse sein")
+		return fmt.Errorf("host_ip must be an IP address")
 	}
 	for _, p := range rs.V6Drop {
 		if p < 1 || p > 65535 {
-			return fmt.Errorf("v6_drop: ungültiger Port %d", p)
+			return fmt.Errorf("v6_drop: invalid port %d", p)
 		}
 	}
 	for _, r := range rs.Rules {
 		if err := validateRule(r); err != nil {
-			return fmt.Errorf("Regel %q: %w", r.Name, err)
+			return fmt.Errorf("rule %q: %w", r.Name, err)
 		}
 	}
 	return nil
@@ -149,59 +213,69 @@ func isAlpha(s string) bool {
 
 func validateRule(r Rule) error {
 	if r.Name == "" {
-		return fmt.Errorf("Name fehlt")
+		return fmt.Errorf("name is required")
 	}
 	if r.Action != "allow" && r.Action != "deny" {
-		return fmt.Errorf("action muss allow oder deny sein")
+		return fmt.Errorf("action must be allow or deny")
 	}
 	switch r.Source.Type {
 	case "any":
 	case "ip":
 		if net.ParseIP(r.Source.Value) == nil {
-			return fmt.Errorf("source-IP ungültig")
+			return fmt.Errorf("source IP is invalid")
 		}
 	case "range":
 		if _, _, err := net.ParseCIDR(r.Source.Value); err != nil {
-			return fmt.Errorf("source-range muss ein CIDR sein")
+			return fmt.Errorf("source range must be a CIDR")
 		}
 	case "country":
 		codes := SplitCountries(r.Source.Value)
 		if len(codes) == 0 {
-			return fmt.Errorf("kein Land angegeben")
+			return fmt.Errorf("no country specified")
 		}
 		if len(codes) > maxRuleCountries {
-			return fmt.Errorf("zu viele Länder: %d (max %d)", len(codes), maxRuleCountries)
+			return fmt.Errorf("too many countries: %d (max %d)", len(codes), maxRuleCountries)
 		}
 		for _, c := range codes {
 			if len(c) != 2 || !isAlpha(c) {
-				return fmt.Errorf("Ländercode %q ungültig (ISO-3166 alpha-2, z. B. DE)", c)
+				return fmt.Errorf("country code %q is invalid (ISO-3166 alpha-2, e.g. DE)", c)
 			}
 		}
 	default:
-		return fmt.Errorf("source.type ungültig")
+		return fmt.Errorf("source.type is invalid")
 	}
 	switch r.Ports.Type {
 	case "all":
 	case "list":
 		if len(r.Ports.List) == 0 {
-			return fmt.Errorf("Ports-Liste ist leer")
+			return fmt.Errorf("ports list is empty")
 		}
 		if len(r.Ports.List) > maxPortsPerRule {
-			return fmt.Errorf("zu viele Ports: %d (max %d)", len(r.Ports.List), maxPortsPerRule)
+			return fmt.Errorf("too many ports: %d (max %d)", len(r.Ports.List), maxPortsPerRule)
 		}
 		for _, p := range r.Ports.List {
 			if p < 1 || p > 65535 {
-				return fmt.Errorf("ungültiger Port %d", p)
+				return fmt.Errorf("invalid port %d", p)
 			}
 		}
+	case "range":
+		if r.Ports.From < 1 || r.Ports.From > 65535 {
+			return fmt.Errorf("port range: from %d out of 1-65535", r.Ports.From)
+		}
+		if r.Ports.To < 1 || r.Ports.To > 65535 {
+			return fmt.Errorf("port range: to %d out of 1-65535", r.Ports.To)
+		}
+		if r.Ports.From > r.Ports.To {
+			return fmt.Errorf("port range: from (%d) > to (%d)", r.Ports.From, r.Ports.To)
+		}
 	default:
-		return fmt.Errorf("ports.type ungültig")
+		return fmt.Errorf("ports.type is invalid")
 	}
 	if r.Protocol != "tcp" && r.Protocol != "udp" && r.Protocol != "both" {
-		return fmt.Errorf("protocol muss tcp, udp oder both sein")
+		return fmt.Errorf("protocol must be tcp, udp or both")
 	}
 	if r.Zone != "auto" && r.Zone != "host" && r.Zone != "docker" {
-		return fmt.Errorf("zone muss auto, host oder docker sein")
+		return fmt.Errorf("zone must be auto, host or docker")
 	}
 	return nil
 }

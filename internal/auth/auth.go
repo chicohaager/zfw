@@ -62,7 +62,7 @@ func NewVerifier(jwksURL string) *Verifier {
 		http: &http.Client{
 			Timeout: 5 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
-				return errors.New("redirect beim JWKS-Abruf abgelehnt")
+				return errors.New("redirect during JWKS fetch refused")
 			},
 		},
 	}
@@ -121,7 +121,7 @@ func (v *Verifier) refreshKeys(ctx context.Context) error {
 		})
 	}
 	if len(keys) == 0 {
-		return errors.New("JWKS enthält keinen EC/P-256-Schlüssel")
+		return errors.New("JWKS contains no EC/P-256 key")
 	}
 	v.mu.Lock()
 	v.keys, v.fetched = keys, time.Now()
@@ -166,25 +166,25 @@ func (v *Verifier) currentKeys() ([]keyEntry, error) {
 func (v *Verifier) Verify(token string) error {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
-		return errors.New("kein JWT (drei Segmente erwartet)")
+		return errors.New("not a JWT (three segments expected)")
 	}
 	hdrRaw, err := b64.DecodeString(parts[0])
 	if err != nil {
-		return errors.New("Header nicht dekodierbar")
+		return errors.New("header not decodable")
 	}
 	var hdr struct {
 		Alg string `json:"alg"`
 		Kid string `json:"kid"`
 	}
 	if err := json.Unmarshal(hdrRaw, &hdr); err != nil {
-		return errors.New("Header nicht lesbar")
+		return errors.New("header not readable")
 	}
 	if hdr.Alg != "ES256" {
-		return fmt.Errorf("alg %q nicht unterstützt (nur ES256)", hdr.Alg)
+		return fmt.Errorf("alg %q not supported (only ES256)", hdr.Alg)
 	}
 	sig, err := b64.DecodeString(parts[2])
 	if err != nil || len(sig) != 64 {
-		return errors.New("Signatur ungültig")
+		return errors.New("signature invalid")
 	}
 	r := new(big.Int).SetBytes(sig[:32])
 	s := new(big.Int).SetBytes(sig[32:])
@@ -192,7 +192,7 @@ func (v *Verifier) Verify(token string) error {
 
 	keys, err := v.currentKeys()
 	if err != nil {
-		return fmt.Errorf("JWKS nicht verfügbar: %w", err)
+		return fmt.Errorf("JWKS unavailable: %w", err)
 	}
 	verified := false
 	for _, k := range keys {
@@ -208,31 +208,31 @@ func (v *Verifier) Verify(token string) error {
 		}
 	}
 	if !verified {
-		return errors.New("Signatur stimmt mit keinem JWKS-Schlüssel")
+		return errors.New("signature matches no JWKS key")
 	}
 
 	plRaw, err := b64.DecodeString(parts[1])
 	if err != nil {
-		return errors.New("Payload nicht dekodierbar")
+		return errors.New("payload not decodable")
 	}
 	var claims struct {
 		Exp int64 `json:"exp"`
 		Nbf int64 `json:"nbf"`
 	}
 	if err := json.Unmarshal(plRaw, &claims); err != nil {
-		return errors.New("Payload nicht lesbar")
+		return errors.New("payload not readable")
 	}
 	// A ZimaOS session token must carry an expiry — a token without exp is
 	// rejected rather than trusted forever (ZFW-S2).
 	if claims.Exp == 0 {
-		return errors.New("Token ohne Ablaufdatum (exp)")
+		return errors.New("token without expiry (exp)")
 	}
 	now := time.Now()
 	if now.Unix() >= claims.Exp {
-		return errors.New("Token abgelaufen")
+		return errors.New("token expired")
 	}
 	if claims.Nbf != 0 && now.Add(clockSkew).Unix() < claims.Nbf {
-		return errors.New("Token noch nicht gültig (nbf)")
+		return errors.New("token not yet valid (nbf)")
 	}
 	return nil
 }

@@ -172,16 +172,16 @@ func (m *Manager) SaveConfig(c Config) error {
 // validate rejects anything that could corrupt the conf or the iptables rules.
 func validate(c Config) error {
 	if _, _, err := net.ParseCIDR(c.LAN); err != nil {
-		return fmt.Errorf("LAN muss ein CIDR sein (z. B. 192.168.1.0/24)")
+		return fmt.Errorf("LAN must be a CIDR (e.g. 192.168.1.0/24)")
 	}
 	if net.ParseIP(c.HostIP) == nil {
-		return fmt.Errorf("HOST_IP muss eine IP-Adresse sein")
+		return fmt.Errorf("HOST_IP must be an IP address")
 	}
 	for _, set := range [][]string{c.HostTCPLAN, c.HostUDPLAN, c.DockerDropLAN, c.V6Drop} {
 		for _, p := range set {
 			n, err := strconv.Atoi(p)
 			if err != nil || n < 1 || n > 65535 {
-				return fmt.Errorf("ungültiger Port %q (1-65535 erlaubt)", p)
+				return fmt.Errorf("invalid port %q (1-65535 allowed)", p)
 			}
 		}
 	}
@@ -193,7 +193,7 @@ func (m *Manager) Apply(ctx context.Context, safe bool) (string, error) {
 	// The engine script is executed as root — refuse to run it unless it is
 	// owned by root and not group/world-writable (ZFW-S8).
 	if err := secureRootFile(m.Bin); err != nil {
-		return "", fmt.Errorf("engine-Script unsicher: %w", err)
+		return "", fmt.Errorf("engine script unsafe: %w", err)
 	}
 	args := []string{"apply"}
 	if safe {
@@ -210,7 +210,7 @@ func secureRootFile(path string) error {
 		return err
 	}
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid != 0 {
-		return fmt.Errorf("%s nicht root-owned (uid=%d)", path, st.Uid)
+		return fmt.Errorf("%s is not root-owned (uid=%d)", path, st.Uid)
 	}
 	if fi.Mode().Perm()&0o022 != 0 {
 		return fmt.Errorf("%s ist group/world-writable (%#o)", path, fi.Mode().Perm())

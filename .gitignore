@@ -4,6 +4,10 @@
 # Compiled daemon — produced by build.sh into the sysext tree
 /raw/usr/bin/zfwd
 
+# OpenAPI spec is canonical under docs/; build.sh copies it next to the
+# handlers source for //go:embed. The copy must not be hand-edited.
+/internal/handlers/openapi.yaml
+
 # Runtime-generated ruleset — the daemon compiles rules.json into this
 /engine/compiled.sh
 

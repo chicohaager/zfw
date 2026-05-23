@@ -1,0 +1,266 @@
+openapi: 3.0.3
+info:
+  title: ZFW Firewall API
+  description: |
+    HTTP API of the ZFW host firewall for ZimaOS.
+
+    Every endpoint (except `/api/health`) requires an `Authorization: Bearer
+    <jwt>` header carrying the ZimaOS session ES256 JWT (the same token the
+    web UI puts into `localStorage.access_token` after login). State-
+    changing endpoints additionally require a same-origin `Origin` (or
+    `Referer`) header — the CSRF guard runs ahead of the rate-limit.
+
+    Non-GET requests share a token-bucket rate-limit (burst 10, sustained
+    1/s); excessive traffic is answered with `429 Too Many Requests`.
+  version: "0.2.19"
+  license:
+    name: See repository
+servers:
+  - url: http://<host>/v2/zfw
+    description: ZimaOS gateway route (production)
+  - url: http://127.0.0.1:8489
+    description: Daemon loopback (development)
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: ES256 JWT (ZimaOS session token)
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "no rules saved yet — open the Rules tab, add a rule and click Save"
+    Health:
+      type: object
+      properties:
+        status:  { type: string, example: ok }
+        version: { type: string, example: "0.2.18" }
+    Source:
+      type: object
+      properties:
+        type:  { type: string, enum: [any, ip, range, country] }
+        value: { type: string, example: "192.168.1.0/24" }
+    Ports:
+      type: object
+      properties:
+        type: { type: string, enum: [all, list, range] }
+        list: { type: array, items: { type: integer } }
+        from: { type: integer, minimum: 1, maximum: 65535 }
+        to:   { type: integer, minimum: 1, maximum: 65535 }
+    Rule:
+      type: object
+      properties:
+        id:       { type: string }
+        order:    { type: integer }
+        enabled:  { type: boolean }
+        name:     { type: string }
+        action:   { type: string, enum: [allow, deny] }
+        source:   { $ref: '#/components/schemas/Source' }
+        ports:    { $ref: '#/components/schemas/Ports' }
+        protocol: { type: string, enum: [tcp, udp, both] }
+        zone:     { type: string, enum: [auto, host, docker] }
+    RuleSet:
+      type: object
+      properties:
+        lan:            { type: string, example: "192.168.1.0/24" }
+        host_ip:        { type: string, example: "192.168.50.37" }
+        default_policy: { type: string, enum: [deny, allow] }
+        v6_drop:        { type: array, items: { type: integer } }
+        rules:          { type: array, items: { $ref: '#/components/schemas/Rule' } }
+    FirewallStatus:
+      type: object
+      properties:
+        active:          { type: boolean }
+        hooked:          { type: boolean }
+        input_rules:     { type: integer }
+        docker_drops:    { type: integer }
+        ipv6_active:     { type: boolean }
+        deadman:         { type: boolean, description: "Safe-Apply auto-revert timer is armed (true) / cancelled or fired (false)" }
+        service_enabled: { type: boolean, description: "Boot-persistence zfw.service is enabled" }
+    Status:
+      type: object
+      properties:
+        version:  { type: string }
+        firewall: { $ref: '#/components/schemas/FirewallStatus' }
+        config:
+          type: object
+          description: Legacy v0.1 allowlist (kept for migration).
+    Socket:
+      type: object
+      properties:
+        port:  { type: integer }
+        bind:  { type: string }
+        proc:  { type: string }
+        scope: { type: string, enum: [local, all] }
+        reach: { type: string, enum: [lan, blocked, local] }
+    Finding:
+      type: object
+      properties:
+        id:     { type: string, example: "H1" }
+        sev:    { type: string, enum: [HIGH, MED, LOW] }
+        title:  { type: string }
+        detail: { type: string }
+        status: { type: string, enum: [open, mitigated, fixed] }
+    Component:
+      type: object
+      properties:
+        name:    { type: string }
+        version: { type: string }
+        note:    { type: string }
+        level:   { type: string, enum: [ok, warn, crit] }
+    Event:
+      type: object
+      properties:
+        time:     { type: string, format: date-time }
+        source:   { type: string, example: "192.168.50.46" }
+        port:     { type: integer }
+        protocol: { type: string, enum: [tcp, udp, icmp] }
+        zone:     { type: string, enum: [host, host6, docker] }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/health:
+    get:
+      summary: Liveness probe — does not require auth.
+      security: []
+      responses:
+        '200':
+          description: Daemon is up.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+
+  /api/status:
+    get:
+      summary: Live firewall + config snapshot.
+      responses:
+        '200':
+          description: Current state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Status' }
+
+  /api/rules:
+    get:
+      summary: Read the saved rule set. Returns an empty deny-default set when no rules.json exists yet.
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/RuleSet' } } } }
+    post:
+      summary: Save a new rule set (validates + recompiles).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RuleSet' }
+      responses:
+        '200': { description: Saved. }
+        '400': { description: Validation error., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '429': { description: Rate-limited (burst 10, 1/s sustained). }
+
+  /api/rules/defaults:
+    post:
+      summary: Generate and persist the recommended starter rule set (auto-LAN + live Docker inventory).
+      responses:
+        '200': { description: Defaults installed., content: { application/json: { schema: { $ref: '#/components/schemas/RuleSet' } } } }
+        '429': { description: Rate-limited. }
+
+  /api/apply:
+    post:
+      summary: Apply the compiled ruleset. With "safe":true a 120 s dead-man auto-revert is armed.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                safe: { type: boolean, default: false }
+      responses:
+        '200': { description: Applied. }
+        '400':
+          description: "Fresh install — no rules saved yet (UI shows: 'open the Rules tab, add a rule and click Save')."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '429': { description: Rate-limited. }
+
+  /api/commit:
+    post:
+      summary: Confirm a Safe-Apply. Stops the dead-man timer and installs zfw.service so the rules survive reboot.
+      responses:
+        '200': { description: Committed. }
+        '429': { description: Rate-limited. }
+
+  /api/revert:
+    post:
+      summary: Remove all ZFW rules, restore stock state, disable boot-persistence.
+      responses:
+        '200': { description: Reverted. }
+        '429': { description: Rate-limited. }
+
+  /api/exposure:
+    get:
+      summary: Listening TCP/UDP sockets on the host with their LAN-reachability classification.
+      responses:
+        '200':
+          description: Sockets.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Socket' } }
+
+  /api/audit:
+    get:
+      summary: Audit findings, scored live against the current firewall.
+      responses:
+        '200':
+          description: Findings.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Finding' } }
+
+  /api/versions:
+    get:
+      summary: Key host components with version + CVE annotations.
+      responses:
+        '200':
+          description: Components.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Component' } }
+
+  /api/events:
+    get:
+      summary: Drop events from the kernel log, parsed from the ZFW-IN-DROP / ZFW-IN6-DROP / ZFW-DOCK-DROP LOG targets.
+      parameters:
+        - name: since
+          in: query
+          schema: { type: integer }
+          description: Unix-seconds; defaults to now-1h.
+        - name: limit
+          in: query
+          schema: { type: integer, default: 200, maximum: 5000 }
+      responses:
+        '200':
+          description: Newest-first event list.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Event' } }
+
+  /api/config:
+    post:
+      summary: Legacy v0.1 tier-allowlist endpoint. Kept until UI fully moves to /api/rules.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Tier-based allowlist (host_tcp_lan / host_udp_lan / docker_drop_lan / lan / host_ip / v6_drop)
+      responses:
+        '200': { description: Saved. }
+        '400': { description: Validation error., content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '429': { description: Rate-limited. }

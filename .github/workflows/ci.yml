@@ -1,0 +1,96 @@
+# ZFW CI — runs on every push and pull request.
+#
+# Phases:
+#   1. lint     — gofmt + go vet, fast feedback if formatting is wrong
+#   2. test     — go test ./..., the 17 unit tests must stay green
+#   3. build    — build.sh produces dist/zfw-<v>.tar.gz (the release artifact)
+#   4. arm64    — smoke build for arm64 so we catch portability regressions
+#                 before the (future) Mod-Store multi-arch release lands
+#
+# Notes:
+#   - reproducible-build verification: build.sh respects SOURCE_DATE_EPOCH
+#     and uses --mtime/--sort/--all-time flags throughout; CI runs the build
+#     twice and asserts the tarball SHA256 matches.
+#   - signing (cosign) is intentionally not wired up yet — adding it
+#     requires committing the public verification key + a strategy for the
+#     private key (GitHub OIDC or KMS); revisit when v0.5 ships to Mod-Store.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.22' }
+      - run: gofmt -l . | tee /tmp/fmt && [ ! -s /tmp/fmt ]
+      - run: go vet ./...
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.22' }
+      - run: go test ./... -race -count=1
+
+  build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.22' }
+      - name: Install squashfs-tools
+        run: sudo apt-get update && sudo apt-get install -y squashfs-tools
+      - name: Install cyclonedx-gomod (SBOM)
+        run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest
+      - name: First build
+        run: bash build.sh
+      - name: Capture first tarball SHA
+        id: sha1
+        run: echo "sha=$(sha256sum dist/zfw-*.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Clean
+        run: rm -rf dist/ raw/usr/bin/zfwd internal/handlers/openapi.yaml
+      - name: Second build (reproducibility check)
+        run: bash build.sh
+      - name: Compare SHAs
+        run: |
+          NEW=$(sha256sum dist/zfw-*.tar.gz | cut -d' ' -f1)
+          OLD="${{ steps.sha1.outputs.sha }}"
+          if [ "$NEW" != "$OLD" ]; then
+            echo "REPRODUCIBILITY REGRESSION: $OLD -> $NEW"
+            exit 1
+          fi
+          echo "reproducible build OK: $NEW"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zfw-release
+          path: |
+            dist/zfw-*.tar.gz
+            dist/zfw-*.tar.gz.sha256
+            dist/sbom.json
+          if-no-files-found: error
+
+  arm64-smoke:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.22' }
+      - name: Cross-build for arm64 (no sysext pack)
+        run: |
+          cp docs/openapi.yaml internal/handlers/openapi.yaml
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -buildvcs=false \
+            -ldflags="-s -w" -o /tmp/zfwd-arm64 ./cmd/zfwd
+          file /tmp/zfwd-arm64
