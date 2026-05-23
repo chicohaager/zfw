@@ -63,7 +63,12 @@ revert(){
 }
 
 write_persist_unit(){
-  cat > "$PERSIST_UNIT" <<'UNIT'
+  # Atomic write: a concurrent reader (e.g. a stray `systemctl daemon-reload`)
+  # must never see a half-written unit. Stage in .tmp on the same filesystem,
+  # set the mode while still hidden, then rename — rename(2) is atomic within
+  # one fs so the unit either exists in full or not at all.
+  local tmp="${PERSIST_UNIT}.tmp"
+  cat > "$tmp" <<'UNIT'
 [Unit]
 Description=ZFW Host Firewall — restore committed rules at boot
 After=docker.service network-online.target
@@ -79,7 +84,8 @@ ExecStart=/DATA/zfw/zfw apply
 [Install]
 WantedBy=multi-user.target
 UNIT
-  chmod 0644 "$PERSIST_UNIT"
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$PERSIST_UNIT"
 }
 
 arm_deadman(){
@@ -115,13 +121,25 @@ case "${1:-}" in
     exit 0
     ;;
   commit)
+    # Re-verify the compiled ruleset before promoting it to boot-persistence.
+    # The boot-time `apply` will check again, but this catches a tampered
+    # compiled.sh at commit time so the operator sees the failure
+    # immediately instead of on the next reboot (security-review v0.2.20 M1).
+    [ -r "$COMPILED" ] || { echo "[zfw] ERROR: compiled ruleset missing: $COMPILED" >&2; exit 1; }
+    secure_file "$COMPILED" || exit 1
     systemctl stop "${DEADMAN}.timer" 2>/dev/null || true
     systemctl reset-failed "${DEADMAN}.service" 2>/dev/null || true
     # Install + enable the boot-restore unit so the committed rules survive
     # reboot. Idempotent: re-running commit just rewrites the same unit.
     write_persist_unit
     systemctl daemon-reload
-    systemctl enable zfw.service >/dev/null 2>&1 || true
+    # Surface enable failures (read-only /etc, masked unit, sysext quirks)
+    # rather than silently lying "boot-persistence enabled" — security-review
+    # v0.2.20 L1.
+    if ! systemctl enable zfw.service >/dev/null 2>&1; then
+      echo "[zfw] ERROR: systemctl enable zfw.service failed — boot-persistence is NOT active" >&2
+      exit 1
+    fi
     log "committed — deadman cancelled, boot-persistence enabled (zfw.service)"
     ;;
   revert)

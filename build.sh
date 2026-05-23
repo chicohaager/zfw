@@ -120,7 +120,7 @@ fi
 echo "[4/4] Packing release package (reproducible tar)..."
 PKG="$NAME-$VERSION"
 rm -rf "$DIST/$PKG"
-rm -f "$DIST"/*.tar.gz
+rm -f "$DIST"/*.tar.gz "$DIST"/*.tar.gz.sha256
 mkdir -p "$DIST/$PKG"
 cp "$DIST/$NAME.raw" "$DIST/$NAME.raw.sha256" \
    "$ROOT/engine/zfw" "$ROOT/install.sh" \

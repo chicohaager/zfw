@@ -57,9 +57,14 @@ func (b *rateBucket) allow() bool {
 // rateLimited returns an http.HandlerFunc that drops non-GET requests when
 // the shared mutateRL bucket is empty. GETs always pass — read traffic is
 // not load-shedded so the dashboard never reports phantom errors.
+//
+// On 429 we set Retry-After: 1 so a naive client (no exponential back-off)
+// at least waits a full bucket-refill before hammering us again — defeating
+// the limiter's CPU-protection goal otherwise (security-review v0.2.20 L3).
 func (s *Server) rateLimited(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && !s.mutateRL.allow() {
+			w.Header().Set("Retry-After", "1")
 			fail(w, http.StatusTooManyRequests,
 				"rate limit exceeded — slow down (burst 10, 1/s sustained)")
 			return

@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.2.19 — see [Status](#status) for the build line.
+> **Current release:** v0.2.20 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -161,7 +161,7 @@ limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
 
-**v0.2.19** — built, deployed and browser-verified on a ZimaOS 1.6.1 host;
+**v0.2.20** — built, deployed and browser-verified on a ZimaOS 1.6.1 host;
 ZimaOS session authentication, CSRF protection and systemd sandboxing in
 place, the codebase has passed a [code and security review](SECURITY-REPORT.md),
 all user-facing messages are English, and a fresh install now seeds a

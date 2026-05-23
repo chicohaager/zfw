@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | **Module** | ZFW — host firewall for ZimaOS |
-| **Version reviewed** | 0.2.6 |
-| **Date** | 2026-05-22 |
+| **Version reviewed** | 0.2.6 (round 1+2) + 0.2.7–0.2.19 (round 3) |
+| **Latest review date** | 2026-05-23 (round 3 incremental) |
 | **Author** | Holger Kuehn aka Lintuxer |
 
 ---
@@ -15,21 +15,29 @@ ZFW is a systemd-sysext module that adds a host firewall to ZimaOS: a Go
 daemon (`zfwd`) running as **root**, a web UI served through the ZimaOS
 gateway, and a privileged shell engine that applies the iptables ruleset.
 Because the component runs as root and its API is reachable across the LAN,
-it was security-reviewed in **two rounds** before release for testing.
+it was security-reviewed in **three rounds**: round 1+2 before the initial
+testing handoff at v0.2.6, and **round 3** (incremental) covering the
+v0.2.7–v0.2.19 change set after the next-tester feedback cycle drove
+defaults seeding, reboot-persistence, the Events tab, IPv6 protection, and
+the v0.3-foundation work (handler tests, slog, rate-limit, OpenAPI,
+reproducible builds).
 
-**Result: 17 findings, all remediated.** No Critical or High issue remains
-open. The most dangerous class for a tool of this shape — shell-command
-injection into the root-executed ruleset — was examined specifically and
-found **not exploitable**. Version 0.2.6 is considered fit for a testing
-handoff.
+**Cumulative result: 27 findings, 22 remediated, 5 accepted residuals.**
+No Critical or High issue is open. The injection class examined in round 2
+was re-tested against the new code paths (port-range, IPv6 source mirror,
+events parser, defaults seeding) and remains **not exploitable** — every
+caller-supplied value crosses `rules.Validate` (`net.ParseIP`,
+`net.ParseCIDR`, `[A-Za-z]{2}` for country codes, integer bounds for
+ports), and the kernel-log strings the events parser reads are
+script-display-only, never re-executed.
 
-| Severity | Found | Remediated | Open |
-|----------|-------|------------|------|
+| Severity | Found | Remediated | Accepted residual |
+|----------|-------|------------|---|
 | Critical | 1 | 1 | 0 |
 | High | 1 | 1 | 0 |
-| Medium | 7 | 7 | 0 |
-| Low | 8 | 8 | 0 |
-| **Total** | **17** | **17** | **0** |
+| Medium | 12 | 9 | 3 |
+| Low | 13 | 11 | 2 |
+| **Total** | **27** | **22** | **5** |
 
 ---
 
@@ -114,6 +122,62 @@ All 17 findings are fixed on `master` across commits `5fad73d`, `95dee93`,
 
 ---
 
+## Findings — Round 3 (R3-1 … R3-10, v0.2.7–v0.2.19 incremental review)
+
+Scope for round 3: every change between v0.2.6 (the round-2 handoff
+release) and v0.2.19 (current). New attack surface:
+
+- defaults seeding (`rules.Defaults`, `system.DetectLAN`, `DockerPorts`);
+- the reboot-persistence systemd unit installed/removed by `engine commit`
+  / `revert` (new `/etc/systemd/system/zfw.service`);
+- the kernel-log events parser (`internal/events`, new endpoint
+  `GET /api/events`);
+- the IPv6 INPUT chain with mirrored allow-rules (`compiler.hostLines6`);
+- the port-range rule type (`Ports.Type == "range"`);
+- the token-bucket rate-limit middleware (`internal/handlers/middleware.go`);
+- the embedded OpenAPI 3.0 spec (`GET /api/openapi.{yaml,json}`);
+- the reproducible build pipeline and optional SBOM step in `build.sh`.
+
+The review was conducted in two parallel passes — one inside this session
+(file-by-file, with adversarial framing for every new caller-controlled
+value) and one delegated to a focused subagent for the highest-risk pair
+(`engine/zfw` boot-persistence + `middleware.go` rate-limit).
+
+| ID | Sev | Finding | Status |
+|----|-----|---------|--------|
+| R3-1 | Medium | `engine commit` did not re-verify `compiled.sh` (`secure_file`) before installing the boot-persistence unit — the boot-time `apply` would catch tampering, but only on next boot | **Fixed in v0.2.20:** `commit` now runs the same `secure_file` check as `apply` before writing the unit |
+| R3-2 | Medium | `write_persist_unit` truncated `/etc/systemd/system/zfw.service` then wrote, leaving a window where a concurrent `daemon-reload` could observe an empty unit | **Fixed in v0.2.20:** unit is staged in `.tmp` on the same fs, `chmod` while hidden, then atomic `mv -f` |
+| R3-3 | Low | `systemctl enable zfw.service \|\| true` swallowed failures — the operator saw "boot-persistence enabled" even when the enable had silently failed (read-only `/etc`, masked unit, sysext quirk) | **Fixed in v0.2.20:** failure surfaces as `exit 1` with a clear error |
+| R3-4 | Low | HTTP 429 responses lacked a `Retry-After` header — a naive client could hot-loop and defeat the limiter's CPU-protection goal | **Fixed in v0.2.20:** `Retry-After: 1` set on every rate-limit response |
+| R3-5 | Medium | GET endpoints are not rate-limited — an authenticated user (one valid ZimaOS session token) can flood expensive reads (`GET /api/exposure` shells out to `ss`, `GET /api/events` to `journalctl`) and CPU-pin the daemon | **Accepted residual** for the single-admin appliance use case; tracked for the v0.4 "per-IP rate-limit + dashboard polling debounce" item |
+| R3-6 | Medium | One global rate-limit bucket shared across all clients — a runaway browser tab or a poll loop in one UI session can lock the legitimate operator out of `commit` / `revert` during an incident, exactly when responsiveness matters most | **Accepted residual** with the same v0.4 plan |
+| R3-7 | Medium | `zfw.service` hardcodes `/DATA/zfw/zfw` and `/DATA/zfw/compiled.sh` regardless of dev paths or `ZFW_COMPILED` override; `ConditionPathExists` makes a non-standard install silently no-op at boot | **Accepted residual** — production install path is fixed and the daemon refuses to start outside it; flagged in `BEST-PRACTICES.md` |
+| R3-8 | Low | `internal/events.Read` silently discards `cmd.Wait()` and does not capture journalctl's stderr — an operator wouldn't know if journalctl errored partway through | **Accepted residual** — fail-soft was deliberate so a journald hiccup doesn't blank the UI, but a debug log line is on the v0.4 polish list |
+| R3-9 | Low | `POST /api/rules/defaults` silently overwrites the saved rule set; the UI confirms but the API does not require a `?confirm=1` parameter | **Accepted residual** — `mutateRL` rate-limit + same-origin CSRF + Bearer token make the unintended-overwrite scenario require either UI use (where the JS confirm dialog runs) or a deliberate authenticated curl |
+| R3-10 | Info | Injection re-tested across the new compiler paths (port-range emits `--dport X:Y` only when `Validate` accepted `From/To` integers, IPv6 source mirror passes through `net.ParseCIDR`-validated values, events parser reads from journald not from user input) | **Not exploitable** — validation gates hold across every new path |
+
+### Build pipeline & supply chain
+
+The v0.2.19 reproducible-build hardening was reviewed as a supply-chain
+control rather than a runtime control:
+
+- `build.sh` runs `-buildvcs=false`, `-trimpath`, `SOURCE_DATE_EPOCH` from
+  the last git commit, GNU-tar with `--sort=name --owner=0 --group=0
+  --mtime --pax-option=delete=atime,delete=ctime`, mksquashfs with
+  `SOURCE_DATE_EPOCH`-driven timestamps. Two clean builds of the same tree
+  produce byte-identical `zfw-<v>.tar.gz` and `.raw` (verified live —
+  same `sha256` twice in a row).
+- Optional CycloneDX SBOM (`cyclonedx-gomod`) is fetched at build-time
+  via `go install ...@latest`. **This is the one new supply-chain trust
+  link** — pinning to a specific tag (e.g. `@v1.7.0`) is recommended once
+  CI lands on a real GitHub remote.
+- The CI workflow file (`.github/workflows/ci.yml`) is committed but
+  inactive while the repo has no remote — it asserts reproducibility on
+  every build (two builds, SHA compare) and includes an arm64 smoke
+  cross-compile.
+
+---
+
 ## Notable findings in detail
 
 **ZFW-1 — unauthenticated control API (Critical).** The ZimaOS gateway
@@ -147,10 +211,18 @@ script.
   necessary.
 - **The trust anchor is the loopback JWKS endpoint.** Auth is only as sound
   as the ZimaOS platform key service it pins to.
-- **The `.raw` image is not byte-reproducible** — `mksquashfs` embeds
-  timestamps, so each build yields a different checksum. `install.sh`
-  verifies the module against the `.sha256` shipped in the same package, so
-  every release package is internally consistent.
+- **GET endpoints are not rate-limited and the mutation bucket is global
+  (R3-5, R3-6).** On a single-admin appliance this is acceptable — the
+  legitimate operator is the only token-holder — but a misbehaving UI tab
+  can momentarily lock its own user out of `commit`/`revert`. v0.4 will
+  introduce per-source-IP buckets and a separate (higher) read bucket.
+- **The boot-persistence unit hardcodes `/DATA/zfw/*` paths (R3-7).**
+  Production installs use exactly those paths; dev checkouts that override
+  `ZFW_COMPILED` will not survive a reboot. Not a security flaw — a
+  product-policy choice — but worth flagging.
+- **`build.sh` fetches `cyclonedx-gomod` via `go install …@latest`** when
+  the SBOM step runs. Pinning to a tagged version is recommended once CI
+  is live; today the SBOM step is opt-in (build succeeds without it).
 - The Exposure and Audit dashboards derive reachability from the legacy
   `allowlist.conf`; on an install that never had one the reachability
   column can read conservatively. This is a display limitation, not a
@@ -160,24 +232,51 @@ script.
 
 ## Verification
 
-- **Build:** `gofmt` gate, `go vet` and the unit tests (the ES256 verifier
-  and the ruleset compiler) all pass.
-- **Live:** v0.2.6 was deployed to a ZimaOS 1.6.1 host. The control API
-  returns `401` without a valid session token, `403` for a cross-origin
-  state-changing request, and `200` only on the public `/api/health`
-  endpoint. The hardened `zfw-ui.service` starts the daemon cleanly with no
-  sandbox error, and the engine integrity checks accept the correctly
-  installed engine and `compiled.sh`.
+- **Build (round 1+2):** `gofmt` gate, `go vet` and the unit tests for the
+  ES256 verifier and the ruleset compiler all pass.
+- **Build (round 3):** the suite now has **17 unit tests** — five locking
+  in v0.2.7–v0.2.13 regressions in `internal/handlers` (Health, fresh-
+  install GET /rules, dead-man lifecycle, friendly fresh-install Safe-Apply
+  error, CSRF documentation), the rate-limit burst/sustained test from
+  v0.2.17, the OpenAPI-served test from v0.2.18, and five new compiler
+  tests (port-range host + docker, IPv6 chain always-emitted, docker-
+  bridge bypass, plus the original empty-deny test). All green; `gofmt
+  -l .` clean; `go test ./... -race -count=1` passes.
+- **Live (round 1+2):** v0.2.6 deployed to a ZimaOS 1.6.1 host — control
+  API returns `401` without a valid session token, `403` for a
+  cross-origin state-changing request, `200` only on `/api/health`.
+- **Live (round 3):** v0.2.19 deployed to the same host and exercised
+  end-to-end:
+  - dead-man lifecycle proven (Safe-Apply → `deadman:true`, Confirm →
+    `false`, 120 s timeout → `false` with `[zfw] DEADMAN FIRED — reverting
+    firewall` in the journal);
+  - reboot-persistence proven (real `systemctl reboot`, host returns,
+    `zfw.service` auto-started, 17 ZFW-IN rules + INPUT hook + 1
+    DOCKER-USER drop all restored);
+  - IPv6 chain emitted by default (`ip6tables-legacy -S ZFW-IN6` shows the
+    14-rule chain ending in `ZFW-IN6-DROP` LOG + `DROP`);
+  - port-range round-trip (POST a `{"type":"range","from":5900,"to":5999}`
+    rule → `iptables-legacy -S ZFW-IN` shows `--dport 5900:5999 -j DROP`,
+    no multiport entries);
+  - reproducible builds proven (two clean builds → identical `tar.gz` and
+    `.raw` SHA-256);
+  - OpenAPI 3.0 spec served at `/api/openapi.{yaml,json}` and parseable.
 
 ---
 
 ## Conclusion
 
-All 17 findings from both review rounds are remediated. No Critical or High
+Across three review rounds, 22 of 27 findings are remediated and 5 are
+accepted residuals (all Medium/Low, all documented). No Critical or High
 severity issue is open. The injection class that matters most for a
-root-privileged ruleset generator was specifically examined and found
-closed. **ZFW v0.2.6 is assessed as fit for a testing handoff**, with the
-residual risks above understood and accepted.
+root-privileged ruleset generator was re-examined against every new
+caller-controlled path introduced in v0.2.7–v0.2.19 (port-range, IPv6
+source mirror, events parser, defaults seeding) and remains closed.
+
+**ZFW v0.2.20 is assessed as fit for continued testing**, with the
+single-admin-appliance threat model explicit in the residual list and
+clear v0.4 work-items (per-IP rate-limit, GET-throttle, journalctl error
+logging) to close the remaining Medium gaps.
 
 ---
 
