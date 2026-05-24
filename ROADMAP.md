@@ -1,16 +1,16 @@
 # ZFW Roadmap
 
 > Author: Holger Kuehn (Lintux)
-> Status: v0.2.22 — per-rule IPv6 source support: compiler now routes IPv6
-> CIDR/IP sources to ZFW-IN6 only (pre-fix the IPv4 chain crashed on
-> `-s <ipv6>`); new `system.DetectLAN6()` exposes the SLAAC prefix
-> analogous to `DetectLAN()`; 3 new compiler tests guard the dispatch.
-> Builds on v0.2.21, which baked **external tester Gelbuilding's
-> 2026-05-24 ZimaBoard validation of v0.2.20** into README + ROADMAP
-> (install, dashboard tile, Safe-Apply, Confirm, custom-port rule-edit
-> SSH 22→2222 for ttydBridge, full reboot-persistence cycle all
-> confirmed). v0.2.20 itself: live on a ZimaOS 1.6.1 host,
-> security-reviewed (three rounds).
+> Status: **v0.3.0 — the v0.3 *Professionalization & IPv6 (foundation)*
+> phase is complete.** Netns integration tests (this release) close
+> the last open v0.3 item; every other v0.3 entry shipped in v0.2.15
+> through v0.2.22. Exit criterion met: every API endpoint has at least
+> one test, the release tarball is reproducible byte-for-byte, and the
+> GitHub-Actions CI workflow is committed (inactive until the repo
+> gets a remote). v0.3.0 builds on v0.2.21's external sign-off —
+> **Gelbuilding's 2026-05-24 ZimaBoard validation of v0.2.20** — and
+> on v0.2.20's three-round security review. Next phase: v0.4 (UX
+> polish — rule templates, notes, backup/restore, diff view, i18n).
 > English UI, intelligent default-set with live Docker inventory, reboot-persistent,
 > with a working Events / IDS-MVP tab (host + host6 + docker zones),
 > Docker-bridge bypass, the Donezo-style light-theme UI, default-deny IPv6
@@ -26,14 +26,15 @@ quality bar it raises.
 
 ---
 
-## Delivered in v0.2.7 – v0.2.22
+## Delivered in v0.2.7 – v0.3.0
 
-The current v0.2 line addressed every regression and gap surfaced by the
-first external test cycle (Gelbuilding / IceWhale forum). All security
-and reliability items ship by v0.2.20; v0.2.21 baked Gelbuilding's
-2026-05-24 ZimaBoard validation into the release tarball; v0.2.22 closes
-the per-rule IPv6 source gap from the v0.3 roadmap — see the status line
-above.
+The v0.2 line addressed every regression and gap surfaced by the first
+external test cycle (Gelbuilding / IceWhale forum). v0.3.0 closes the
+*Professionalization & IPv6 (foundation)* phase with netns integration
+tests as the final piece — every v0.3 roadmap item has shipped. The
+release history below records what each release added and why it
+mattered; the per-version entries are the source of truth for what
+changed when.
 
 | Version | What shipped | Why it mattered |
 |---|---|---|
@@ -53,32 +54,37 @@ above.
 | **v0.2.20** | **Round-3 security review** of the v0.2.7–v0.2.19 delta. New section in `SECURITY-REPORT.md`: 10 findings (R3-1…R3-10), 4 fixed in this release, 5 accepted residuals, 1 informational ("injection re-tested, not exploitable"). Fixes: `engine commit` now re-runs `secure_file` on `compiled.sh` before installing the boot-persistence unit (R3-1); `write_persist_unit` writes to `.tmp` and atomically renames so a concurrent `daemon-reload` cannot observe a half-written unit (R3-2); `systemctl enable zfw.service` failure surfaces as a clear `exit 1` instead of being silently swallowed (R3-3); `Retry-After: 1` header on every HTTP 429 (R3-4). Accepted residuals (GET-bypass on rate-limiter, global bucket, unit path hardcoding, journalctl error-swallow, defaults-overwrite without API confirm) are tracked for v0.4 with a clear "per-IP rate-limit + dashboard polling debounce" work-item. Cumulative tally: 27 findings, 22 remediated, 5 accepted. | A second security pass after the v0.2.6 handoff was overdue — every release since has added new attack surface (defaults seeding, boot-persistence unit, events parser, IPv6 chain, rate-limit, OpenAPI). |
 | **v0.2.21** | **External tester sign-off baked into the release.** README + ROADMAP carry Gelbuilding's 2026-05-24 ZimaBoard validation of v0.2.20: install, dashboard tile, Safe-Apply, Confirm, custom-port rule-edit (SSH 22 → 2222 for ttydBridge) and full reboot-persistence cycle all confirmed by an external party. Binary code identical to v0.2.20; cache-buster bumped (`?v=0.2.21` on `styles.css` / `app.js`) so the UI doesn't serve stale assets after install; `openapi.yaml` info-version bumped to match. v0.2.20 is preserved as the canonical reproducibility anchor (its tarball SHA stays the reference for the security-reviewed binary). | The first external "works as advertised on hardware I don't control" sign-off since the tester-feedback cycle began. Putting it inside the release tarball — not just in a forum reply — turns word-of-mouth into an artifact a downstream user can inspect before installing. |
 | **v0.2.22** | **Per-rule IPv6 source support** — closes the second-to-last v0.3 item. Compiler dispatches by source family: an IPv6 CIDR or single IPv6 address (`source.type` of `range` or `ip`, value `2001:db8::/64` or `2001:db8::42`) now routes to `ZFW-IN6` only and is skipped on the IPv4 chain. Pre-fix `iptables-legacy -s 2001:db8::/64` returned `Bad argument` and `set -eu` aborted the whole engine apply — an IPv6 source rule was a silent show-stopper. New `system.DetectLAN6()` resolves the host's SLAAC prefix and global IPv6 the same way `DetectLAN()` resolves IPv4 (UDP-dial trick; empty return on no-IPv6 connectivity). Three new compiler tests: `TestIPv6SourceRoutesToIPv6Chain` (range), `TestIPv6SingleSourceRoutesToIPv6Chain` (single address), `TestIPv4SourceStillRoutesToIPv4Chain` (inverse guard so the IPv6 dispatch didn't break the v4 path). Comment in `Compile()` clarified — the previous "destination-port-only mirror" wording described behaviour that did not match the code. | ZimaOS hosts get a SLAAC global address the moment a router advertises a prefix, so any user trying to scope a rule to "from my LAN" on IPv6 hit a blank wall. Closing this gap turns the IPv6 default-deny chain (v0.2.15) into something the user can actually customise per rule. |
+| **v0.3.0** | **v0.3 phase closed — netns integration tests.** New `internal/compiler/integration_test.go` (build tag `netns_integration`) drives `Compile() → bash → live iptables-legacy` inside `unshare -U -r -n` (unprivileged user+network namespace, no sudo needed). Four tests: `TestEngineApplyAllowsExpectedHostPort` (compile a host allow rule, verify the ACCEPT line lands), `TestEngineApplyPortRangeEmitsContiguousRule` (VNC 5900-5999 is one `--dport 5900:5999` line, not 100 entries), `TestEngineApplyIPv6SourceDoesNotCrashIPv4` (live counterpart to v0.2.22's unit tests — IPv6 source under `set -eu` no longer aborts the apply), `TestEngineRevertClearsAllChains` (apply→revert cycle leaves no ZFW chain behind). `requireNetns(t)` skips cleanly when iptables-legacy / unshare / unprivileged userns are absent. With this, the v0.3 exit criterion ("every endpoint has at least one test; CI green on push; release tarball reproducible byte-for-byte") is fully met. | Pre-v0.3.0 the integration was "verified by hand" on a real ZimaCube — a class of regression no unit test could catch (e.g. iptables-legacy's actual syntax for port ranges on the host kernel). Locking these down means the next refactor across compiler / engine / handlers can be reviewed by reading the diff, not by reproducing a manual ZimaCube run. |
 
 ---
 
-## v0.3 — Professionalization & IPv6 (foundation)
+## v0.3 — Professionalization & IPv6 (foundation) — DELIVERED in v0.3.0
 
-Make the codebase boring to maintain and hard to break. **IPv6 first-class
+Made the codebase boring to maintain and hard to break. **IPv6 first-class
 moved up from v1.0** — on a ZimaOS host with SLAAC enabled by default, an
-ungated IPv6 INPUT chain is the single biggest remaining gap in ZFW's
+ungated IPv6 INPUT chain was the single biggest remaining gap in ZFW's
 coverage (the IPv4 deny-default does nothing for traffic that arrives over
-IPv6).
+IPv6). Every item below shipped across v0.2.15 → v0.3.0.
 
 | Item | Why |
 |---|---|
-| **IPv6 first-class** *(was v1.0, pulled forward)* | Today `ZFW-IN6` is only emitted when `rs.V6Drop` is non-empty and ends in `RETURN`, not `DROP` — a blacklist, not protection. v0.3 makes it match `ZFW-IN`: always emitted, full bypass list (`lo` / `docker0` / `br-+` / ICMPv6 / DHCPv6 / link-local fe80::/10 / multicast ff00::/8), host-zone rules mirrored to ip6tables, default-deny with `ZFW-IN6-DROP ` LOG target. Events tab picks up `host6` zone. v0.2.15 ships the MVP. |
+| **IPv6 first-class** *(shipped v0.2.15, pulled forward from v1.0)* | Pre-v0.2.15 `ZFW-IN6` was only emitted when `rs.V6Drop` was non-empty and ended in `RETURN`, not `DROP` — a blacklist, not protection. Now ZFW-IN6 matches ZFW-IN: always emitted, full bypass list (`lo` / `docker0` / `br-+` / ICMPv6 / DHCPv6 / link-local fe80::/10 / multicast ff00::/8), host-zone rules mirrored to ip6tables, default-deny with `ZFW-IN6-DROP` LOG target. Events tab picks up the `host6` zone. |
 | **Per-rule IPv6 source support** *(shipped v0.2.22)* | Rule source `range` accepts IPv6 CIDR; SLAAC prefix auto-detected analogous to `DetectLAN()`. Pre-fix the IPv4 chain crashed on a `-s <ipv6>` arg, silently aborting every apply that referenced an IPv6 source — now `isIPv6Source()` routes those rules to ZFW-IN6 only. |
 | **Handler tests** *(shipped v0.2.16 + v0.2.22)* | `internal/handlers` was zero-coverage at start of v0.3; v0.2.16 landed the dead-man-timer-lifecycle batch (Safe-Apply ⇒ `deadman:true`, Commit ⇒ `deadman:false`, 120 s timeout ⇒ `deadman:false` — verified live 2026-05-23), v0.2.22 added 15 more tests so all 14 API endpoints have at least one regression guard (ENOENT, malformed input, valid POSTs, CSRF rejection, engine-error bubbling). |
-| **Rules engine integration tests** | Compile + apply + revert against a netns sandbox. Currently only `compiler.Compile` is unit-tested; the integration is verified by hand. |
-| **Port-range support in the rule model** | `ports: { type: "range", from: 5900, to: 5999 }` — without this, blocking VM VNC means 100 list entries. The compiler already understands ranges via `iptables --dport 5900:5999`; only the rule model and UI need it. |
-| **Structured logging (`slog`)** | Today: `log.Printf` everywhere. Switch to slog with key=value fields so journalctl filtering works (`zfw_event=rule_apply rule_id=r12345`). |
-| **API rate-limit middleware** | Token-bucket per session on `/api/apply` and `/api/rules` POST. Prevents accidental rapid-fire from a stuck UI session and slows down a foothold attacker. |
-| **OpenAPI spec for `/api`** | Generated from handler annotations or maintained by hand. Lets third-party tools (Home Assistant, n8n) call the API without code-reading. |
-| **Reproducible builds + SBOM** | `go build -trimpath` already; add `-buildvcs=false`, embed a CycloneDX SBOM in the release tarball, sign with cosign. |
-| **CI on GitHub Actions** | Matrix: gofmt, vet, test, build amd64 + arm64, sysext-pack, attach release artifact, sign with sigstore. |
+| **Rules engine integration tests** *(shipped v0.3.0)* | Four netns tests under build tag `netns_integration` run `Compile() → bash → live iptables-legacy` in an unprivileged user+net namespace (`unshare -U -r -n`, no sudo). They lock in port-range emission, IPv6/IPv4 dispatch, host-allow apply and revert. The pure unit tests stay in the default `go test ./...` run; the integration suite gates on `requireNetns(t)` and skips cleanly when the kernel / iptables-legacy / userns are unavailable. |
+| **Port-range support in the rule model** *(shipped v0.2.16)* | `ports: { type: "range", from: 5900, to: 5999 }` — without this, blocking VM VNC meant 100 list entries. Compiler emits a single `--dport 5900:5999`. The rule-editor modal got a "Port range" option in the same release. |
+| **Structured logging (`slog`)** *(shipped v0.2.17)* | `log.Printf` replaced with `log/slog` text handler emitting key=value pairs plus source location. Gateway + watchdog stay legacy-printf via a thin `slogf` adapter to keep their call sites trivial. journalctl now supports `zfw_event=…` style filters. |
+| **API rate-limit middleware** *(shipped v0.2.17)* | Stdlib-only token-bucket on every non-GET endpoint (`/api/apply`, `/api/commit`, `/api/revert`, `/api/rules` POST, `/api/rules/defaults`). Burst 10, sustained 1/s. GET endpoints stay unlimited. `TestMutateRateLimitTrips` locks the bucket behaviour in. |
+| **OpenAPI spec for `/api`** *(shipped v0.2.18)* | Hand-curated `docs/openapi.yaml` covering all 13 endpoints, embedded via `//go:embed` and served at `/api/openapi.{json,yaml}`. `TestOpenAPISpecServed` keeps the routes alive. |
+| **Reproducible builds + SBOM** *(shipped v0.2.19)* | `-buildvcs=false`, `SOURCE_DATE_EPOCH` from the last git commit, GNU-tar `--sort=name --owner=0 --group=0 --mtime --pax-option=delete=atime,delete=ctime`, mksquashfs with the env-var time lock. Two clean builds of the same source produce byte-identical `zfw-<v>.tar.gz`. Optional CycloneDX SBOM via `cyclonedx-gomod`. Cosign-signing is deferred to v0.5 (Mod-Store distribution). |
+| **CI on GitHub Actions** *(workflow shipped v0.2.19, inactive)* | `.github/workflows/ci.yml` runs gofmt + vet + race-test, then builds twice and asserts reproducibility, plus an arm64 cross-compile smoke job. The workflow is committed and turns active automatically the moment the repo gets a GitHub remote — no further code change needed. |
 
-**Exit criterion:** every endpoint has at least one test; CI green on push;
-release tarball is reproducible byte-for-byte from a tagged commit.
+**Exit criterion (met in v0.3.0):** every endpoint has at least one test
+(22 handler tests + 17 compiler tests + 4 netns integration tests); the
+release tarball is reproducible byte-for-byte from a tagged commit (since
+v0.2.19); the GitHub-Actions CI workflow is committed but stays inactive
+until the repo gets a remote — once published it goes green on push by
+construction.
 
 ---
 

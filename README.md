@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.2.22 — see [Status](#status) for the build line.
+> **Current release:** v0.3.0 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -161,29 +161,41 @@ limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
 
-**v0.2.22** — per-rule IPv6 source support lands cleanly. A rule with
-`source: { type: "range", value: "2001:db8::/64" }` (or a single IPv6
-address via `type: "ip"`) now routes to `ZFW-IN6` only and is skipped on
-the IPv4 chain — pre-fix, iptables-legacy rejected `-s <ipv6>` and with
-`set -eu` the whole engine script aborted, silently breaking every apply
-that referenced an IPv6 source. New `system.DetectLAN6()` returns the
-host's SLAAC prefix and global IPv6 address (analogous to `DetectLAN()`),
-ready for UI auto-fill in a follow-up. Three new compiler tests guard
-the IPv4↔IPv6 dispatch.
+**v0.3.0** — the v0.3 *Professionalization & IPv6 (foundation)* phase
+is complete. Every roadmap item under v0.3 has shipped:
 
-Earlier in the v0.2 line, v0.2.20 was **independently validated by
-external tester Gelbuilding on a ZimaBoard (2026-05-24)**: install,
-dashboard tile, Safe-Apply, Confirm, custom-port rule-edit (SSH 22 →
-2222 for ttydBridge) and full reboot-persistence cycle all confirmed.
-v0.2.21 baked that sign-off into the release tarball; v0.2.22 carries
-it forward.
+- IPv6 first-class (default-deny ZFW-IN6 with full bypass list, v0.2.15)
+  and per-rule IPv6 source support (v0.2.22)
+- Handler tests: all 14 API endpoints carry at least one regression
+  guard (22 tests total — v0.2.16 deadman-lifecycle batch + v0.2.22
+  endpoint coverage expansion)
+- **Rules engine integration tests** (this release): four netns tests
+  run the compiled bash through a real iptables-legacy under
+  `unshare -U -r -n` (no sudo) and assert the live chain state —
+  port-range emits one `--dport 5900:5999` line, IPv6 sources never
+  reach the IPv4 chain, revert clears every ZFW chain
+- Port-range support in the rule model (v0.2.16), structured logging
+  via `slog` (v0.2.17), API rate-limit middleware (v0.2.17), OpenAPI
+  3.0 spec served from `/api/openapi.{json,yaml}` (v0.2.18),
+  reproducible builds + optional CycloneDX SBOM (v0.2.19), and a
+  GitHub-Actions CI workflow committed-but-inactive until the repo
+  gets a remote
 
-The underlying v0.2 platform: built, deployed and browser-verified on a
-ZimaOS 1.6.1 host, with ZimaOS session authentication, CSRF protection
-and systemd sandboxing in place; the codebase has passed a [code and
-security review](SECURITY-REPORT.md), all user-facing messages are
-English, and a fresh install seeds a recommended starter rule set:
-deny-default plus baseline allow-rules for the ZimaOS web UI, SSH,
-Samba shares and mDNS discovery (LAN auto-detected from the default
-route), and one additional allow-rule per Docker-published port
+v0.3.0 builds on v0.2.21's external sign-off: **Gelbuilding's 2026-05-24
+ZimaBoard validation of v0.2.20** — install, dashboard tile, Safe-Apply,
+Confirm, custom-port rule-edit (SSH 22 → 2222 for ttydBridge) and full
+reboot-persistence cycle all independently confirmed.
+
+Underlying platform: built, deployed and browser-verified on a ZimaOS
+1.6.1 host, with ZimaOS session authentication, CSRF protection and
+systemd sandboxing in place; the codebase has passed a [code and
+security review](SECURITY-REPORT.md) across three rounds (27 findings,
+22 remediated, 5 accepted residuals tracked for v0.4); all user-facing
+messages are English, and a fresh install seeds a recommended starter
+rule set: deny-default plus baseline allow-rules for the ZimaOS web UI,
+SSH, Samba shares and mDNS discovery (LAN auto-detected from the
+default route), and one additional allow-rule per Docker-published port
 discovered live on the host so running containers stay reachable.
+
+Next phase: **v0.4 — UX polish** (rule templates, per-rule notes,
+backup/restore, diff view, frontend i18n).
