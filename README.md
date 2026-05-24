@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.3.10 — see [Status](#status) for the build line.
+> **Current release:** v0.4.0 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,29 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.4.0** — the **v0.5 (*Distribution & multi-host*) phase is
+complete**. Final piece: **Mod-Store submission prep**. New
+`mod-store/zfw.yaml` is the submission-manifest source-of-truth (id,
+title, tagline, description, category=Network, per-arch artifact
+URLs + sha256 stubs, screenshot list, hardware compatibility,
+required permissions). New `MOD-STORE.md` is the operator runbook:
+one-time setup (create the GitHub remote, cut the first
+`gh release`, fill in SHAs, capture screenshots), per-release PR
+flow against `IceWhaleTech/Mod-Store` (`gh repo fork && gh pr
+create` with a ready-made PR body), the post-submission
+`ZFW_UPDATE_URL` wiring step that turns v0.3.9's update banner on
+across every host, and the per-release sanity checklist that
+mirrors the project's `pre-tarball-checklist` memory. No daemon
+code change in this release — the submission is gated on a manual
+operator step (the repo needs a GitHub remote and a maintainer
+willing to file the PR) so the daemon could not legitimately
+automate it. With v0.4.0 in the can, the full v0.5 phase has
+shipped: arm64 build (v0.3.7), rules.json migration helper
+(v0.3.8), `zpkg` self-update check (v0.3.9), multi-host rule sync
+(v0.3.10), Mod-Store prep (v0.4.0). The exit criterion ("a
+Gelbuilding-class user can `zpkg install zfw` and never see Github
+at all") is met as soon as Maintainer runs the steps in `MOD-STORE.md`.
 
 **v0.3.10** — fourth v0.5 item: **multi-host rule sync (opt-in)**.
 New `internal/peers` package: each follower host is configured in a
@@ -354,6 +377,8 @@ SSH, Samba shares and mDNS discovery (LAN auto-detected from the
 default route), and one additional allow-rule per Docker-published port
 discovered live on the host so running containers stay reachable.
 
-Next phase work (v0.5 — *Distribution & multi-host*): arm64 build
-(shipped v0.3.7), rules.json migration helper, `zpkg` self-update
-check, multi-host rule sync (opt-in), Mod-Store submission prep.
+Next phase: **v0.6 — Intrusion detection & state** (top sources / top
+ports widgets, GeoIP flags on the Events tab, port-scan + brute-force
+detection, time-window rules, conntrack visibility, per-rule logging
+toggle, rate-limit per source). The v0.5 — *Distribution &
+multi-host* — phase shipped in full across v0.3.7 → v0.4.0.

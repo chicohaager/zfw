@@ -1,0 +1,126 @@
+# ZFW — Mod-Store submission manifest.
+#
+# This file is the source-of-truth for the IceWhaleTech/Mod-Store entry.
+# It is NOT consumed by the daemon at runtime — the daemon's own metadata
+# lives in raw/usr/share/casaos/modules/zfw.json. Keep the two in sync
+# when bumping versions, screenshots, descriptions, or repository URLs.
+#
+# Submission flow: see MOD-STORE.md in the repo root.
+
+id: zfw
+name: ZFW Firewall
+title:
+  en_us: ZFW Firewall
+tagline:
+  en_us: "Host firewall & security dashboard for ZimaOS — the firewall ZimaOS does not ship."
+description:
+  en_us: |
+    ZFW adds the one thing ZimaOS does not ship out of the box: a host
+    firewall. It filters at two hook points so it covers both host-native
+    daemons (INPUT / ZFW-IN, default-drop allowlist) and Docker-published
+    container ports (DOCKER-USER hook, blocklist) — a single iptables
+    INPUT chain would miss every container port, since they bypass INPUT
+    via DNAT.
+
+    Five UI tabs:
+      • Firewall  — live status, Safe-Apply with 120 s dead-man timer,
+                    Confirm, Revert.
+      • Rules     — drag-and-edit rule editor with templates (block VNC
+                    consoles, block NFS / rpcbind, allow Plex), per-rule
+                    notes, backup/restore, diff view, push-to-peers for
+                    multi-host fleets.
+      • Exposure  — every listening TCP port, live, classified as LAN-
+                    reachable / blocked / loopback-only with a one-click
+                    "→ Deny" quick-action.
+      • Events    — recent firewall DROP events parsed live from the
+                    kernel log (host, host6, docker zones).
+      • Audit     — security-finding catalogue scored live against the
+                    current firewall configuration, with persistent
+                    per-finding status history.
+      • Versions  — host's key components with CVE annotations and a
+                    non-blocking "Update available" banner.
+
+    Safety: Safe-Apply arms a 120 s dead-man timer that auto-reverts the
+    rules if Confirm is not clicked, so a bad rule can never lock you out.
+    Default policy is deny; the first-install seed produces an
+    auto-detected LAN baseline + one allow-rule per running Docker port,
+    so containers stay reachable. ZimaOS session token (ES256 JWT) is
+    verified on every API request; CSRF same-origin check and token-bucket
+    rate-limit guard state-changing endpoints. Reproducible builds,
+    optional CycloneDX SBOM, three-round internal security review on
+    record (SECURITY-REPORT.md).
+
+category: Network
+tags:
+  - firewall
+  - security
+  - iptables
+  - networking
+  - host-protection
+icon: /modules/zfw/appicon.svg
+author: "Holger Kuehn (Lintux)"
+maintainer: "Holger Kuehn <18085347+chicohaager@users.noreply.github.com>"
+license: ISC
+repository: "https://github.com/chicohaager/zfw"
+homepage: "https://github.com/chicohaager/zfw"
+issues: "https://github.com/chicohaager/zfw/issues"
+
+# Version + per-arch artifact pointers. The release process (build.sh)
+# produces two reproducible tarballs per release; SHAs are appended here
+# during the cut so Mod-Store can verify before installing.
+version: 0.4.0
+artifacts:
+  amd64:
+    url: "https://github.com/chicohaager/zfw/releases/download/v{{version}}/zfw-{{version}}-amd64.tar.gz"
+    # sha256 is filled in at release-cut time; see MOD-STORE.md for the cut checklist.
+    sha256: TBD
+  arm64:
+    url: "https://github.com/chicohaager/zfw/releases/download/v{{version}}/zfw-{{version}}-arm64.tar.gz"
+    sha256: TBD
+
+# UI-side metadata mirrors raw/usr/share/casaos/modules/zfw.json so the
+# Mod-Store listing renders identically to the installed module's
+# dashboard tile.
+ui:
+  entry: /modules/zfw/index.html
+  formality:
+    type: newtab
+    props:
+      width: 100vh
+      height: 100vh
+      hasModalCard: true
+      animation: zoom-in
+  prefetch: true
+
+# Screenshot list. Each entry is a relative path inside mod-store/. The
+# files themselves are captured fresh per major release — see
+# MOD-STORE.md for the capture checklist (size 1600x1000, light theme,
+# v0.4.0+).
+screenshots:
+  - path: screenshots/firewall-tab.png
+    caption: "Firewall tab — status, Safe-Apply, dead-man timer"
+  - path: screenshots/rules-tab.png
+    caption: "Rules tab — editor, templates, diff, backup/restore, push-to-peers"
+  - path: screenshots/exposure-tab.png
+    caption: "Exposure tab — live listening ports with quick-deny"
+  - path: screenshots/events-tab.png
+    caption: "Events tab — recent firewall drops parsed from the kernel log"
+  - path: screenshots/audit-tab.png
+    caption: "Audit tab — live security findings with per-finding history"
+
+# Hardware compatibility. ZimaOS targets ZimaBoard (amd64, N3350/N3450/N100)
+# and ZimaCube; arm64 covers Lattepanda/Pi-class hosts that run a
+# ZimaOS-style stack. The sysext is _any so no kernel version pin.
+compatibility:
+  os: ZimaOS
+  os_min: "1.6.0"
+  architectures: [amd64, arm64]
+  kernel_min: "6.12"
+
+# Permissions the module expects (informational — installer enforces
+# them via systemd unit + install.sh).
+requires:
+  - "/var/lib/extensions writable (systemd-sysext)"
+  - "iptables-legacy"
+  - "/DATA writable (engine + state)"
+  - "ZimaOS gateway proxy (registers /v2/zfw route)"
