@@ -135,9 +135,12 @@ function renderRules() {
     const schedBadge = r.schedule
       ? ` <span class="sched-pill" title="Active ${esc(r.schedule.from)}–${esc(r.schedule.to)}${r.schedule.days && r.schedule.days.length ? ' on ' + r.schedule.days.join(',') : ' every day'}">${esc(r.schedule.from)}–${esc(r.schedule.to)}</span>`
       : '';
+    const dirBadge = r.direction === 'outbound'
+      ? ' <span class="dir-pill dir-out" title="Outbound — applies to traffic FROM this host / its containers">&rarr;</span>'
+      : '';
     return `<tr class="${r.enabled ? '' : 'rule-off'}" data-id="${esc(r.id)}">
       <td class="mono">${i + 1}</td>
-      <td>${esc(r.name)}${noteBadge}${schedBadge}</td>
+      <td>${dirBadge}${esc(r.name)}${noteBadge}${schedBadge}</td>
       <td><span class="actbadge ${actCls}">${actLbl}</span></td>
       <td class="mono">${src}</td>
       <td class="mono">${ports} <span class="proto">${esc(r.protocol)}</span></td>
@@ -365,6 +368,7 @@ function ruleSignature(r) {
     schedule: r.schedule || null,
     log: !!r.log,
     rate_limit: r.rate_limit || null,
+    direction: r.direction || 'inbound',
   });
 }
 
@@ -565,6 +569,10 @@ function openRuleEditor(rule) {
   $('#rm-zone').value = r.zone || 'auto';
   $('#rm-enabled').checked = r.enabled !== false;
   $('#rm-notes').value = r.notes || '';
+  // Direction (v0.5.6). Empty / "inbound" both render as inbound;
+  // updateModalFields flips the Source label to "Destination / peer"
+  // when outbound is selected.
+  $('#rm-direction').value = r.direction === 'outbound' ? 'outbound' : 'inbound';
   // v0.4.4 advanced fields. Per-rule log: simple checkbox. Per-rule
   // rate-limit: collapsible fieldset with conn/seconds inputs that
   // round-trip the RateLimit pointer.
@@ -618,11 +626,21 @@ function updateModalFields() {
   const st = $('#rm-srctype').value;
   const isGeo = st === 'country';
   const pt = $('#rm-porttype').value;
+  const isOut = $('#rm-direction').value === 'outbound';
   $('#rm-srcval-fld').hidden = st === 'any';
   $('#rm-portval-fld').hidden = pt !== 'list';
   $('#rm-portrange-fld').hidden = pt !== 'range';
   $('#rm-geo-hint').hidden = !isGeo;
-  $('#rm-srcval-label').textContent = isGeo ? 'Country codes (ISO, comma-separated)' : 'Source address';
+  // Source label semantics flip with direction: outbound rules apply
+  // against the destination peer, not the source.
+  $('#rm-source-label').textContent = isOut ? 'Destination / peer' : 'Source';
+  if (isGeo) {
+    $('#rm-srcval-label').textContent = isOut
+      ? 'Destination country codes (ISO, comma-separated)'
+      : 'Country codes (ISO, comma-separated)';
+  } else {
+    $('#rm-srcval-label').textContent = isOut ? 'Destination address' : 'Source address';
+  }
   $('#rm-srcval').placeholder = isGeo ? 'DE, RU, CN' : '192.168.1.0/24';
 }
 
@@ -727,6 +745,7 @@ function saveRuleFromEditor() {
   if (logOn) rule.log = true;
   if (rateLimit) rule.rate_limit = rateLimit;
   if (schedule) rule.schedule = schedule;
+  if ($('#rm-direction').value === 'outbound') rule.direction = 'outbound';
   if (editingRuleId) {
     const i = ruleIndex(editingRuleId);
     if (i >= 0) {
@@ -745,6 +764,7 @@ function saveRuleFromEditor() {
 $('#rm-cancel').addEventListener('click', closeRuleEditor);
 $('#rm-save').addEventListener('click', saveRuleFromEditor);
 $('#rm-srctype').addEventListener('change', updateModalFields);
+$('#rm-direction').addEventListener('change', updateModalFields);
 $('#rm-schedule-on').addEventListener('change', e => {
   $('#rm-schedule-fld').hidden = !e.target.checked;
 });

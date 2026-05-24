@@ -72,6 +72,16 @@ type Rule struct {
 	// front of the action line. Off when nil. Field-additive; no
 	// schema bump.
 	RateLimit *RateLimit `json:"rate_limit,omitempty"`
+	// Direction routes the rule to the OUTPUT/FORWARD side (outbound)
+	// instead of INPUT/DOCKER-USER (inbound, the historical default).
+	// Empty / "inbound" → emit on ZFW-IN, ZFW-IN6, DOCKER-USER.
+	// "outbound" → emit on ZFW-OUT (zone host|auto) and/or
+	// ZFW-FWD-OUT (zone docker|auto), plus ZFW-OUT6 for IPv6
+	// sources. The Source field's semantic flips: in outbound rules
+	// it is the *peer* (remote host the container/process tries to
+	// reach) and the compiler emits `-d` instead of `-s`. Introduced
+	// in schema v3.
+	Direction string `json:"direction,omitempty"`
 }
 
 // RateLimit is the per-rule connection-rate cap. At most Conn new
@@ -119,7 +129,11 @@ type RuleSet struct {
 //	     rename from the unversioned format).
 //	v2 — adds optional Rule.Schedule for time-window rules (v0.4.3 —
 //	     first real use of the migrate() plumbing).
-const CurrentSchema = 2
+//	v3 — adds optional Rule.Direction for outbound rules on OUTPUT /
+//	     FORWARD chains (v0.5.6 — second use of the migrate plumbing,
+//	     still field-additive so v2 files round-trip with only the
+//	     version stamp updated).
+const CurrentSchema = 3
 
 // migrate brings an on-disk RuleSet up to CurrentSchema, one step at a time.
 // Returns (migrated, changed, err). A nil error with changed=false means the
@@ -149,6 +163,12 @@ func migrate(rs RuleSet) (RuleSet, bool, error) {
 			// preserves still loads cleanly in this build via the same
 			// migration path.
 			rs.Version = 2
+		case 2:
+			// v2 → v3 (v0.5.6): adds optional Rule.Direction for
+			// outbound rules on OUTPUT / FORWARD. Field-additive
+			// (omitempty string defaulting to "inbound"), so v2 files
+			// round-trip with only the version stamp updated.
+			rs.Version = 3
 		default:
 			return rs, false, fmt.Errorf("no migration from rules.json schema v%d", rs.Version)
 		}
@@ -419,8 +439,18 @@ func validateRule(r Rule) error {
 			return fmt.Errorf("rate_limit: %w", err)
 		}
 	}
+	if r.Direction != "" && r.Direction != "inbound" && r.Direction != "outbound" {
+		return fmt.Errorf("direction must be inbound, outbound or empty (got %q)", r.Direction)
+	}
 	return nil
 }
+
+// IsOutbound reports whether this rule targets the OUTPUT/FORWARD
+// chains instead of the historical INPUT/DOCKER-USER ones. Empty
+// Direction is treated as inbound, matching the v0.5.6 migration
+// invariant that v2 rules.json files round-trip semantically
+// unchanged.
+func (r Rule) IsOutbound() bool { return r.Direction == "outbound" }
 
 // validateRateLimit caps Conn/Seconds inside ranges that produce a
 // useful iptables clause without letting a crafted rules.json emit a

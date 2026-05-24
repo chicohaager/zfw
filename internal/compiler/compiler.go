@@ -226,7 +226,185 @@ func Compile(rs rules.RuleSet, dockerPorts map[int]bool, geoFiles map[string]str
 	}
 	b.WriteString("  $IPT6 -C INPUT -j ZFW-IN6 2>/dev/null || $IPT6 -I INPUT 1 -j ZFW-IN6\n")
 	b.WriteString("fi\n")
+
+	// ---- outbound chains (v0.5.6) ----
+	// Outbound rules use ZFW-OUT (host) / ZFW-FWD-OUT (docker) / ZFW-OUT6
+	// (host IPv6). Unlike inbound, the outbound chains do NOT default-deny —
+	// a blanket OUTPUT/FORWARD denial would break the host's own DNS/NTP/
+	// container-registry pulls and the Docker gateway. Each outbound rule
+	// is targeted; the chain terminates in RETURN. The entire block is
+	// skipped when no outbound rules exist, so pre-v0.5.6 inbound-only
+	// deployments compile to byte-identical scripts.
+	hasHostOut := false
+	hasDockerOut := false
+	for _, r := range rl {
+		if !r.Enabled || !r.IsOutbound() {
+			continue
+		}
+		if r.Zone == "host" || r.Zone == "auto" {
+			hasHostOut = true
+		}
+		if r.Zone == "docker" || r.Zone == "auto" {
+			hasDockerOut = true
+		}
+	}
+
+	if hasHostOut {
+		b.WriteString("\n# ===== ZFW-OUT (host-initiated outbound, OUTPUT chain) =====\n")
+		b.WriteString("$IPT -N ZFW-OUT 2>/dev/null || true\n")
+		b.WriteString("$IPT -F ZFW-OUT\n")
+		b.WriteString("$IPT -A ZFW-OUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n")
+		b.WriteString("$IPT -A ZFW-OUT -o lo -j ACCEPT\n")
+		for _, r := range rl {
+			if !r.Enabled || !r.IsOutbound() {
+				continue
+			}
+			if r.Zone != "host" && r.Zone != "auto" {
+				continue
+			}
+			if isIPv6Source(r.Source) {
+				continue
+			}
+			for _, line := range outboundLines(r) {
+				fmt.Fprintf(&b, "$IPT -A ZFW-OUT %s\n", line)
+			}
+		}
+		b.WriteString("$IPT -A ZFW-OUT -j RETURN\n")
+		b.WriteString("$IPT -C OUTPUT -j ZFW-OUT 2>/dev/null || $IPT -I OUTPUT 1 -j ZFW-OUT\n")
+
+		// IPv6 mirror — only emitted for host outbound (FORWARD chain in
+		// Docker covers v4 + v6 transparently via conntrack).
+		b.WriteString(`if [ -n "$IPT6" ]; then` + "\n")
+		b.WriteString("  $IPT6 -N ZFW-OUT6 2>/dev/null || true\n")
+		b.WriteString("  $IPT6 -F ZFW-OUT6\n")
+		b.WriteString("  $IPT6 -A ZFW-OUT6 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN\n")
+		b.WriteString("  $IPT6 -A ZFW-OUT6 -o lo -j RETURN\n")
+		for _, r := range rl {
+			if !r.Enabled || !r.IsOutbound() {
+				continue
+			}
+			if r.Zone != "host" && r.Zone != "auto" {
+				continue
+			}
+			for _, line := range outboundLines6(r) {
+				fmt.Fprintf(&b, "  $IPT6 -A ZFW-OUT6 %s\n", line)
+			}
+		}
+		b.WriteString("  $IPT6 -A ZFW-OUT6 -j RETURN\n")
+		b.WriteString("  $IPT6 -C OUTPUT -j ZFW-OUT6 2>/dev/null || $IPT6 -I OUTPUT 1 -j ZFW-OUT6\n")
+		b.WriteString("fi\n")
+	}
+
+	if hasDockerOut {
+		b.WriteString("\n# ===== ZFW-FWD-OUT (container-initiated outbound, FORWARD chain) =====\n")
+		b.WriteString("$IPT -N ZFW-FWD-OUT 2>/dev/null || true\n")
+		b.WriteString("$IPT -F ZFW-FWD-OUT\n")
+		b.WriteString("$IPT -A ZFW-FWD-OUT -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN\n")
+		for _, r := range rl {
+			if !r.Enabled || !r.IsOutbound() {
+				continue
+			}
+			if r.Zone != "docker" && r.Zone != "auto" {
+				continue
+			}
+			if isIPv6Source(r.Source) {
+				continue
+			}
+			for _, line := range outboundLines(r) {
+				fmt.Fprintf(&b, "$IPT -A ZFW-FWD-OUT %s\n", line)
+			}
+		}
+		b.WriteString("$IPT -A ZFW-FWD-OUT -j RETURN\n")
+		b.WriteString("$IPT -C FORWARD -j ZFW-FWD-OUT 2>/dev/null || $IPT -I FORWARD 1 -j ZFW-FWD-OUT\n")
+	}
+
 	return b.String()
+}
+
+// outboundLines returns the iptables args (after "-A ZFW-OUT" or
+// "-A ZFW-FWD-OUT") for an outbound rule. The Source field is treated
+// as the peer (destination from OS perspective) so it's emitted with
+// -d rather than -s; the port match still uses --dport because dport
+// is always the destination port regardless of direction. Rules with
+// no peer source ("any") emit only the port match. Empty result if
+// the rule is misshaped for outbound.
+func outboundLines(r rules.Rule) []string {
+	target := "ACCEPT"
+	if r.Action == "deny" {
+		target = "DROP"
+	}
+	sch := scheduleArg(r.Schedule)
+
+	var dst string
+	switch r.Source.Type {
+	case "any":
+		dst = ""
+	case "ip", "range":
+		dst = "-d " + r.Source.Value
+	case "country":
+		// Country sources for outbound = "block egress to <country>".
+		// Each ipset emits its own line.
+		var lines []string
+		for _, cc := range rules.SplitCountries(r.Source.Value) {
+			match := joinArgs("-m", "set", "--match-set", geo.SetName(cc), "dst", sch)
+			lines = append(lines, emitOutboundPortLines(r, match, target)...)
+		}
+		return lines
+	default:
+		return nil
+	}
+	return emitOutboundPortLines(r, joinArgs(dst, sch), target)
+}
+
+// outboundLines6 is the IPv6 variant. Only IPv6-source rules emit;
+// IPv4 destinations cannot legally match an IPv6 packet. country-
+// sources are skipped (no IPv6 geo-ipset support yet).
+func outboundLines6(r rules.Rule) []string {
+	target := "ACCEPT"
+	if r.Action == "deny" {
+		target = "DROP"
+	}
+	sch := scheduleArg(r.Schedule)
+
+	var dst string
+	switch r.Source.Type {
+	case "any":
+		dst = ""
+	case "ip", "range":
+		if !strings.Contains(r.Source.Value, ":") {
+			return nil // IPv4 destination — IPv6 chain skips
+		}
+		dst = "-d " + r.Source.Value
+	default:
+		return nil
+	}
+	return emitOutboundPortLines(r, joinArgs(dst, sch), target)
+}
+
+// emitOutboundPortLines walks the rule's protocol + port selectors and
+// returns one wrapEmit'd line per combo. Shared between the v4 and v6
+// outbound emitters.
+func emitOutboundPortLines(r rules.Rule, baseMatch, target string) []string {
+	var lines []string
+	switch r.Ports.Type {
+	case "all":
+		if r.Protocol == "both" {
+			lines = append(lines, wrapEmit(baseMatch, r, target)...)
+		} else {
+			lines = append(lines, wrapEmit(joinArgs(baseMatch, "-p", r.Protocol), r, target)...)
+		}
+	case "range":
+		for _, proto := range protoList(r.Protocol) {
+			lines = append(lines, wrapEmit(joinArgs(baseMatch, "-p", proto,
+				fmt.Sprintf("--dport %d:%d", r.Ports.From, r.Ports.To)), r, target)...)
+		}
+	default: // "list"
+		for _, proto := range protoList(r.Protocol) {
+			lines = append(lines, wrapEmit(joinArgs(baseMatch, "-p", proto,
+				multiport(r.Ports.List)), r, target)...)
+		}
+	}
+	return lines
 }
 
 // wrapEmit returns the iptables lines for one rule emission point:
@@ -296,7 +474,11 @@ var scheduleDayMap = map[string]string{
 // are applied only when the rule's source is an IPv6 CIDR/IP — IPv4
 // sources don't translate. A "country" source is skipped (ipset support
 // for IPv6 needs a separate sets, deferred to a later release).
+// Outbound rules (v0.5.6) skip this emit entirely.
 func hostLines6(r rules.Rule, dockerPorts map[int]bool) []string {
+	if r.IsOutbound() {
+		return nil
+	}
 	ps, ok := portsForZone(r, dockerPorts, "host")
 	if !ok {
 		return nil
@@ -370,7 +552,12 @@ func isIPv6Source(s rules.Source) bool {
 // IPv6 sources route to ZFW-IN6 via hostLines6 and must not be emitted here:
 // iptables-legacy rejects "-s 2001:db8::/64" and with `set -eu` the whole
 // engine script aborts. Pre-v0.2.22 such a rule silently broke every apply.
+// Outbound rules (v0.5.6) skip this emit entirely — they belong on
+// ZFW-OUT / ZFW-OUT6 / ZFW-FWD-OUT.
 func hostLines(r rules.Rule, dockerPorts map[int]bool) []string {
+	if r.IsOutbound() {
+		return nil
+	}
 	if isIPv6Source(r.Source) {
 		return nil
 	}
@@ -404,8 +591,11 @@ func hostLines(r rules.Rule, dockerPorts map[int]bool) []string {
 // docker-targeted portion. Published ports are matched on the original
 // (pre-DNAT) destination port via conntrack. DOCKER-USER lives on the IPv4
 // table only; IPv6 sources are skipped here for the same reason as in
-// hostLines.
+// hostLines. Outbound rules (v0.5.6) skip this emit entirely.
 func dockerLines(r rules.Rule, dockerPorts map[int]bool) []string {
+	if r.IsOutbound() {
+		return nil
+	}
 	if isIPv6Source(r.Source) {
 		return nil
 	}

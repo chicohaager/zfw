@@ -351,6 +351,90 @@ func TestRateLimitEmitsRecentClause(t *testing.T) {
 	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -j ACCEPT")
 }
 
+// TestOutboundHostRuleEmitsZFWOut guards the v0.5.6 outbound path:
+// a Direction=outbound + zone=host + deny rule must emit on ZFW-OUT
+// (hooked into OUTPUT) with -d (not -s) for the peer address, and
+// must NOT emit on any inbound chain.
+func TestOutboundHostRuleEmitsZFWOut(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			ID: "rout1", Order: 10, Enabled: true,
+			Name: "Block egress to known bad C2", Action: "deny",
+			Source:    rules.Source{Type: "ip", Value: "203.0.113.42"},
+			Ports:     rules.Ports{Type: "all"},
+			Protocol:  "both",
+			Zone:      "host",
+			Direction: "outbound",
+		}},
+	}, nil, nil)
+	mustContain(t, out, "$IPT -N ZFW-OUT")
+	mustContain(t, out, "$IPT -A ZFW-OUT -d 203.0.113.42 -j DROP")
+	mustContain(t, out, "$IPT -C OUTPUT -j ZFW-OUT 2>/dev/null || $IPT -I OUTPUT 1 -j ZFW-OUT")
+	// Inbound chains must not carry the outbound rule.
+	mustNotContain(t, out, "$IPT -A ZFW-IN -d 203.0.113.42")
+	mustNotContain(t, out, "$IPT -A ZFW-IN -s 203.0.113.42")
+}
+
+// TestOutboundDockerRuleEmitsZFWFwdOut guards container-outbound
+// emission: zone=docker → ZFW-FWD-OUT (FORWARD chain).
+func TestOutboundDockerRuleEmitsZFWFwdOut(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			ID: "rfwd1", Order: 10, Enabled: true,
+			Name: "Container cannot reach metadata service", Action: "deny",
+			Source:    rules.Source{Type: "ip", Value: "169.254.169.254"},
+			Ports:     rules.Ports{Type: "all"},
+			Protocol:  "both",
+			Zone:      "docker",
+			Direction: "outbound",
+		}},
+	}, nil, nil)
+	mustContain(t, out, "$IPT -N ZFW-FWD-OUT")
+	mustContain(t, out, "$IPT -A ZFW-FWD-OUT -d 169.254.169.254 -j DROP")
+	mustContain(t, out, "$IPT -C FORWARD -j ZFW-FWD-OUT 2>/dev/null || $IPT -I FORWARD 1 -j ZFW-FWD-OUT")
+}
+
+// TestNoOutboundRulesEmitsNoOutboundChains guards back-compat: a
+// rule set with zero outbound rules must compile to a script that
+// does NOT reference ZFW-OUT, ZFW-OUT6 or ZFW-FWD-OUT at all — old
+// inbound-only deployments stay byte-identical to pre-v0.5.6.
+func TestNoOutboundRulesEmitsNoOutboundChains(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			Order: 10, Enabled: true, Name: "SSH", Action: "allow",
+			Source:   rules.Source{Type: "range", Value: "192.168.1.0/24"},
+			Ports:    rules.Ports{Type: "list", List: []int{22}},
+			Protocol: "tcp", Zone: "host",
+		}},
+	}, nil, nil)
+	mustNotContain(t, out, "ZFW-OUT")
+	mustNotContain(t, out, "ZFW-FWD-OUT")
+}
+
+// TestOutboundChainTerminatesInReturn guards the safety contract for
+// outbound: the chain MUST end in RETURN — never a catch-all DROP —
+// because OUTPUT default-deny would brick the host's own DNS / NTP /
+// container registry pulls. v0.5.6.
+func TestOutboundChainTerminatesInReturn(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			ID: "rout2", Order: 10, Enabled: true,
+			Name: "Block bad peer", Action: "deny",
+			Source:   rules.Source{Type: "ip", Value: "203.0.113.89"},
+			Ports:    rules.Ports{Type: "all"},
+			Protocol: "both", Zone: "host",
+			Direction: "outbound",
+		}},
+	}, nil, nil)
+	mustContain(t, out, "$IPT -A ZFW-OUT -j RETURN")
+	// No DROP on the chain as catch-all (only the per-rule DROP above).
+	mustNotContain(t, out, "$IPT -A ZFW-OUT -j DROP\n")
+}
+
 // TestWireGuardWildcardBypassed guards the v0.5.4 VPN-interface
 // awareness: WireGuard (wg+) joins tailscale0/zt+ in the default
 // bypass list for every chain. A peer reaching the host on wg0 /

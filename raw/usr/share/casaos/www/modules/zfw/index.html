@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex">
   <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
   <title>ZFW Firewall</title>
-  <link rel="stylesheet" href="./styles.css?v=0.5.5">
+  <link rel="stylesheet" href="./styles.css?v=0.5.6">
 </head>
 <body>
   <header>
@@ -135,7 +135,13 @@
             <option value="deny">Deny</option>
           </select>
         </label>
-        <label class="fld">Source
+        <label class="fld">Direction
+          <select id="rm-direction">
+            <option value="inbound">Inbound — traffic TO this host (default)</option>
+            <option value="outbound">Outbound — traffic FROM this host / its containers</option>
+          </select>
+        </label>
+        <label class="fld" id="rm-source-label-fld"><span id="rm-source-label">Source</span>
           <select id="rm-srctype">
             <option value="any">Any</option>
             <option value="ip">Single IP</option>
@@ -242,6 +248,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=0.5.5"></script>
+  <script src="./app.js?v=0.5.6"></script>
 </body>
 </html>
