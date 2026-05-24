@@ -1,8 +1,10 @@
 # ZFW Roadmap
 
 > Author: Holger Kuehn (Lintux)
-> Status: **v1.0.4 — GA + post-launch hardening & polish.** Shipped
-> across four point releases after v1.0.0:
+> Status: **v1.0.9 — GA + post-launch hardening, polish, brand,
+> logo-iteration. Tested + approved live on lan-host (HolgisNAS);
+> next step is the external-tester handoff to Gelbuilding.**
+> Shipped across nine point releases after v1.0.0:
 >
 >   v1.0.1  Round-4 security review hotfix — Critical RCE closed
 >           (R4-1: `Rule.ID` shell-injection), plus R4-2..R4-5
@@ -17,6 +19,17 @@
 >           the .tar.gz so external testers get the full reading
 >           list without a GitHub round-trip); mod-store/zfw.yaml
 >           refreshed to v1.0.x with live sha256 anchors.
+>   v1.0.5..v1.0.9  Logo polish iteration — five point-releases of
+>           visual fine-tuning. v1.0.5 alpha-cleaned the source
+>           PNG (cream backdrop → transparent, 1448×1086 → 1114×267,
+>           852KB → 99KB) and doubled the CSS .logo height
+>           (48px → 96px). v1.0.6 tripled to 144px ("doppelt reicht
+>           nicht, min 3fach"). v1.0.7 returned to 96px ("doch zu
+>           groß"). v1.0.8 dropped the version pill from
+>           align-items: center to flex-end. v1.0.9 lifted the pill
+>           24px so it sits on the "Firewall" baseline, not the
+>           container floor. Final state: 96px logo with
+>           transparent backdrop; v-pill flex-end + 24px margin.
 >
 > All six roadmap
 > phases shipped: v0.2 (tester foundation, v0.2.7–v0.2.21), v0.3

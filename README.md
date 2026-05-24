@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v1.0.5 — logo polish (transparent background + doubled in size). See [Status](#status) for the build line.
+> **Current release:** v1.0.9 — logo polish iteration complete (transparent backdrop, 2x size, version pill aligned to wordmark baseline). See [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -163,16 +163,35 @@ limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
 
-**v1.0.5 — logo polish.** Live-test feedback on v1.0.3/v1.0.4: the
-wordmark in the dashboard header looked like a thumbnail favicon
-sitting on a visible cream rectangle. Two fixes: (a) the PNG was
-processed at build-time prep so the cream backdrop is now
-transparent (alpha-cleaned threshold `r>230 && g>220 && b>200`) and
-the surrounding whitespace cropped tight (1448x1086 → 1114x267,
-852KB → 99KB); (b) CSS `.logo` height doubled from 48px → 96px and
-the surrounding `<h1>` margin zeroed so the wordmark drives the
-header height. The brand now reads at first glance instead of
-needing a squint.
+**v1.0.5..v1.0.9 — logo polish iteration.** Five point-releases of
+visual fine-tuning on top of the v1.0.3 brand introduction, driven
+by live-test feedback. Final result:
+
+  * **Transparent backdrop** — source `logo.png` had a cream
+    background that read as a tile/thumbnail in the header. A
+    short inline Go preprocessor at v1.0.5 cleaned the PNG: pixels
+    above `r>230 && g>220 && b>200` set to alpha=0, then tight-
+    cropped to the opaque bounding box with 8px padding. Asset
+    shrank 1448x1086 / 852KB → 1114x267 / 99KB.
+  * **Sizing converged at 2x baseline (96px height)** — the v1.0.3
+    default of 48px read like a favicon; v1.0.5 doubled to 96px;
+    v1.0.6 tripled to 144px ("doppelt reicht nicht, min 3fach");
+    v1.0.7 pulled it back to 96px ("doch zu groß"). At the
+    wordmark's 4.17:1 aspect ratio that renders ~400px wide — the
+    brand is the visual centre of the header without overwhelming
+    the rest.
+  * **Version pill aligned to wordmark baseline** — v1.0.8 dropped
+    `.title-row` from `align-items: center` to `flex-end` so the
+    `v1.0.x` pill bottom-aligns with the logo image. The cropped
+    PNG still has ~25% whitespace below the actual wordmark text
+    (the shield extends lower than the "Firewall" letters), so
+    v1.0.9 added `margin-bottom: 24px` to lift the pill up onto
+    the underline of "Firewall" instead of the absolute container
+    floor. Per live-test verification, the pill now sits exactly
+    on the wordmark baseline.
+
+No daemon code change across the five releases — pure asset + CSS
+fine-tuning.
 
 **v1.0.4 — release-engineering polish for external-tester handoff.**
 The tarball now bundles **THREAT-MODEL.md**, **BUG-BOUNTY.md** and
