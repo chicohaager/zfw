@@ -774,14 +774,104 @@ function renderHistory(history) {
 }
 
 /* ---------- events ---------- */
+
+// topN counts occurrences of pick(ev) across events and returns the
+// n entries with the highest counts as [{key, count}], descending.
+// Ties are broken lexicographically on key so renders stay stable
+// between refreshes — a flickering top-10 looks like a bug.
+function topN(events, pick, n) {
+  const m = new Map();
+  for (const e of events) {
+    const k = pick(e);
+    if (k === null || k === undefined || k === '') continue;
+    m.set(k, (m.get(k) || 0) + 1);
+  }
+  return [...m.entries()]
+    .map(([key, count]) => ({ key, count }))
+    .sort((a, b) => (b.count - a.count) || (String(a.key) > String(b.key) ? 1 : -1))
+    .slice(0, n);
+}
+
+// bucketByTime returns an Array of count-per-bucket spanning [start, end),
+// each bucket bucketMs wide. Events outside the range are dropped. Used
+// by the 24h × 10-minute sparkline above the status bar.
+function bucketByTime(events, startMs, endMs, bucketMs) {
+  const buckets = new Array(Math.max(0, Math.ceil((endMs - startMs) / bucketMs))).fill(0);
+  for (const e of events) {
+    const t = new Date(e.time).getTime();
+    if (!Number.isFinite(t) || t < startMs || t >= endMs) continue;
+    const i = Math.floor((t - startMs) / bucketMs);
+    if (i >= 0 && i < buckets.length) buckets[i]++;
+  }
+  return buckets;
+}
+
+// renderSparkline builds an inline SVG of len(buckets) vertical bars
+// scaled to the tallest bar. Empty timeline renders as an empty box
+// (no SVG noise). Width is fixed-ish via CSS — bar widths derive from
+// 100% so the host element controls layout.
+function renderSparkline(buckets) {
+  if (!buckets.length) return '';
+  const max = Math.max(1, ...buckets);
+  const w = 100 / buckets.length;
+  const bars = buckets.map((c, i) => {
+    const h = (c / max) * 100;
+    return `<rect x="${(i * w).toFixed(3)}%" y="${(100 - h).toFixed(3)}%" width="${w.toFixed(3)}%" height="${h.toFixed(3)}%"/>`;
+  }).join('');
+  return `<svg viewBox="0 0 100 100" preserveAspectRatio="none" class="sparkline" aria-hidden="true">${bars}</svg>`;
+}
+
+function renderTopList(elId, items, label) {
+  const el = $(elId);
+  if (!items.length) {
+    el.innerHTML = '<div class="ev-top-empty">No data.</div>';
+    return;
+  }
+  const max = items[0].count;
+  el.innerHTML = items.map(it => {
+    const pct = max > 0 ? (it.count / max) * 100 : 0;
+    return `<div class="ev-top-row">
+      <span class="ev-top-key mono">${esc(it.key)}</span>
+      <span class="ev-top-bar"><span class="ev-top-fill" style="width:${pct.toFixed(1)}%"></span></span>
+      <span class="ev-top-count mono">${it.count}</span>
+    </div>`;
+  }).join('');
+}
+
 async function loadEvents() {
-  // Query the last hour, newest-first. The server parses journald with the
-  // ZFW-IN-DROP / ZFW-DOCK-DROP log prefixes; nothing is persisted by us.
-  const sinceTs = Math.floor(Date.now() / 1000) - 3600;
-  const d = await api('/events?since=' + sinceTs + '&limit=300');
-  $('#stat-events').textContent = d.length;
-  $('#stat-events').className = 'stat-num ' + (d.length > 0 ? 'warn' : 'ok');
-  if (!d.length) {
+  // Fetch the full 24h window once — the sparkline needs the long view
+  // and the 1h table is just a slice of the same data. limit=5000 caps
+  // the worst-case payload from a noisy host; older events get truncated
+  // (the sparkline then under-reports the oldest buckets, which is
+  // honest enough for an at-a-glance signal).
+  const nowMs = Date.now();
+  const since24 = Math.floor(nowMs / 1000) - 86400;
+  const all = await api('/events?since=' + since24 + '&limit=5000');
+
+  // Sparkline: 144 buckets × 10 minutes covering the last 24h.
+  const bucketMs = 10 * 60 * 1000;
+  const startMs = nowMs - 24 * 3600 * 1000;
+  const buckets = bucketByTime(all, startMs, nowMs, bucketMs);
+  $('#stat-sparkline').innerHTML = renderSparkline(buckets);
+
+  // 1h slice — drives stat counter, top-N cards, and the events table.
+  const oneHourAgo = nowMs - 3600 * 1000;
+  const recent = all.filter(e => new Date(e.time).getTime() >= oneHourAgo);
+
+  $('#stat-events').textContent = recent.length;
+  $('#stat-events').className = 'stat-num ' + (recent.length > 0 ? 'warn' : 'ok');
+
+  // Top-N analytics: hidden when there's nothing to summarise, so an
+  // empty Events tab stays as clean as before v0.4.1.
+  if (recent.length > 0) {
+    $('#events-analytics').hidden = false;
+    renderTopList('#ev-top-sources', topN(recent, e => e.source, 10));
+    renderTopList('#ev-top-ports', topN(recent, e => e.port || null, 10));
+  } else {
+    $('#events-analytics').hidden = true;
+  }
+
+  if (!recent.length) {
     $('#events-list').innerHTML = '<div class="loading">No drops in the last hour. Either nothing is probing your host or the firewall has not been applied yet — Safe-Apply on the Firewall tab installs the log targets.</div>';
     return;
   }
@@ -790,7 +880,7 @@ async function loadEvents() {
     host6:  ['badge-blocked', 'host (v6)'],
     docker: ['badge-lan',     'docker'],
   };
-  const rows = d.map(e => {
+  const rows = recent.map(e => {
     const t = new Date(e.time);
     const ts = t.toLocaleTimeString() + ' ' + t.toLocaleDateString();
     const [cls, lbl] = zoneMap[e.zone] || ['badge-local', e.zone];

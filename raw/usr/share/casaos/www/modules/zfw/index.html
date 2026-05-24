@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex">
   <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
   <title>ZFW Firewall</title>
-  <link rel="stylesheet" href="./styles.css?v=0.4.0">
+  <link rel="stylesheet" href="./styles.css?v=0.4.1">
 </head>
 <body>
   <header>
@@ -22,6 +22,10 @@
       <span class="stat"><span class="stat-num" id="stat-blocked">&ndash;</span><span class="stat-lbl">Blocked</span></span>
       <span class="stat"><span class="stat-num" id="stat-events">&ndash;</span><span class="stat-lbl">Drops (1h)</span></span>
       <span class="stat"><span class="stat-num" id="stat-findings">&ndash;</span><span class="stat-lbl">Open findings</span></span>
+      <span class="stat stat-spark" title="Drops per 10-minute bucket, last 24 hours">
+        <span id="stat-sparkline" class="sparkline-host"></span>
+        <span class="stat-lbl">Drops (24h)</span>
+      </span>
       <button id="refresh-btn" class="btn-secondary">Refresh</button>
     </div>
     <div id="status" role="status" aria-live="polite"></div>
@@ -80,6 +84,16 @@
         your journal. Older events are kept by journald with the system's
         usual retention.
       </p>
+      <div id="events-analytics" class="events-analytics" hidden>
+        <div class="ev-card">
+          <h3 class="ev-card-title">Top sources (last hour)</h3>
+          <div id="ev-top-sources" class="ev-top-list"></div>
+        </div>
+        <div class="ev-card">
+          <h3 class="ev-card-title">Top targeted ports (last hour)</h3>
+          <div id="ev-top-ports" class="ev-top-list"></div>
+        </div>
+      </div>
       <div id="events-list"><div class="loading">Loading&hellip;</div></div>
     </section>
 
@@ -189,6 +203,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=0.4.0"></script>
+  <script src="./app.js?v=0.4.1"></script>
 </body>
 </html>

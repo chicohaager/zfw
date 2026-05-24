@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.4.0 — see [Status](#status) for the build line.
+> **Current release:** v0.4.1 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,25 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.4.1** — first **v0.6 (*Intrusion detection & state*)** item:
+**Events tab analytics**. Three v0.6 roadmap items merged into one
+frontend-only release on top of the existing `/api/events` stream
+— no new endpoint, no backend change. (1) **Top 10 source IPs** and
+(2) **Top 10 targeted ports** rendered as side-by-side cards above
+the Events table, each row a key + horizontal bar + count, scaled
+to the top entry. (3) **24h sparkline** above the status bar: 144
+buckets × 10 minutes, inline SVG drawn from one `/api/events?since=
+24h&limit=5000` fetch — the same payload drives the 1h slice used
+by the cards and table, so it is a single round-trip per refresh.
+New `topN(events, pick, n)` aggregator with deterministic
+tie-breaking (lex on key, so the cards don't flicker between
+refreshes). New `bucketByTime(events, start, end, bucketMs)` helper
+returns count-per-bucket; events outside the range are silently
+dropped. `renderSparkline(buckets)` emits viewBox-scaled SVG so the
+host element controls layout. **GeoIP source flags** (4th v0.6
+analytics item) was split off into v0.4.5 — it needs an
+IP→country reverse-lookup index that does not exist today.
 
 **v0.4.0** — the **v0.5 (*Distribution & multi-host*) phase is
 complete**. Final piece: **Mod-Store submission prep**. New
@@ -377,8 +396,11 @@ SSH, Samba shares and mDNS discovery (LAN auto-detected from the
 default route), and one additional allow-rule per Docker-published port
 discovered live on the host so running containers stay reachable.
 
-Next phase: **v0.6 — Intrusion detection & state** (top sources / top
-ports widgets, GeoIP flags on the Events tab, port-scan + brute-force
-detection, time-window rules, conntrack visibility, per-rule logging
-toggle, rate-limit per source). The v0.5 — *Distribution &
+Phase in progress: **v0.6 — Intrusion detection & state**. v0.4.1
+shipped the Events tab analytics (top sources / top ports cards +
+24h sparkline). Remaining items: threat detection (port-scan +
+brute-force flagging), time-window rules (schema bump v1→v2 — first
+real use of v0.3.8's migration plumbing), per-rule logging toggle +
+rate-limit per source, GeoIP source flags, connection-state
+visibility (live conntrack). The v0.5 — *Distribution &
 multi-host* — phase shipped in full across v0.3.7 → v0.4.0.
