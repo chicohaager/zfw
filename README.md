@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v1.0.2 — Round-4 review residual closeout (security R4-6/R4-7/R4-8 closed, plus 10 code-quality fixes). See [Status](#status) for the build line.
+> **Current release:** v1.0.3 — brand-refresh ship (real ZFW wordmark in the header, forest-green shield favicon + dashboard tile). See [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,18 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v1.0.3 — brand refresh.** The real ZFW wordmark (shield + circuit
+motif + "ZFW Firewall" wordmark, forest-green on cream) replaces the
+shield-emoji placeholder in the dashboard header. `logo.png` ships
+inside the sysext at `/modules/zfw/logo.png` and is referenced by
+`index.html` via a cache-busted `<img>` tag. The square `appicon.svg`
+(favicon + ZimaOS dashboard tile) was redesigned to match: forest-
+green shield with subtle brick courses and the orange circuit-node
+motif that anchors the brand — replacing the previous generic
+blue-shield-checkmark icon. `build.sh` required-files list extended
+to fail-fast if the logo asset goes missing. No daemon code change —
+pure asset + UI swap.
 
 **v1.0.2 — Round-4 residual closeout + code-quality batch.** Closes
 the three Info-grade Round-4 residuals (R4-6 / R4-7 / R4-8) plus the

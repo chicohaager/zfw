@@ -68,7 +68,17 @@ body {
 header { margin-bottom: 22px; }
 .title-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 header h1 { font-size: 26px; font-weight: 600; letter-spacing: -.01em; }
-.logo { font-size: 22px; }
+.logo {
+  display: inline-block; vertical-align: middle;
+  height: 48px; width: auto;
+  /* The wordmark already contains the "ZFW Firewall" text — h1 stays
+     visually clean with the image alone. Hover lifts the shadow a hair
+     so the tile reacts to mouse-over. */
+  filter: drop-shadow(0 1px 1px rgba(0,0,0,0.08));
+  transition: filter .15s ease;
+}
+.logo:hover { filter: drop-shadow(0 2px 3px rgba(0,0,0,0.16)); }
+h1 { line-height: 0; }  /* prevent extra vertical space around the img */
 .version {
   font-size: 11px; color: var(--accent); font-weight: 600;
   background: var(--accent-tint); border-radius: 999px; padding: 3px 10px;

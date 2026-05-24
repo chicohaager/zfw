@@ -99,6 +99,7 @@ $RAW/usr/share/casaos/www/modules/$NAME/index.html
 $RAW/usr/share/casaos/www/modules/$NAME/app.js
 $RAW/usr/share/casaos/www/modules/$NAME/styles.css
 $RAW/usr/share/casaos/www/modules/$NAME/appicon.svg
+$RAW/usr/share/casaos/www/modules/$NAME/logo.png
 $RAW/usr/bin/zfwd
 "
   missing=0
