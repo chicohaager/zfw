@@ -15,6 +15,53 @@ import (
 	"time"
 )
 
+// DetectLAN6 guesses the primary SLAAC prefix and host IPv6 address by asking
+// the kernel which source IPv6 it would pick to reach an arbitrary public
+// IPv6 address. Like DetectLAN this does not send any packets — the UDP dial
+// only resolves the default-route source. Both return values are empty when
+// the host has no IPv6 connectivity (no global default route, ULA-only, or
+// IPv6 disabled), so callers must treat the empty case as "no IPv6 known"
+// and not as a validation error.
+//
+// The returned prefix is whatever CIDR the interface advertises for the
+// chosen source address — typically /64 from SLAAC, occasionally /128 for
+// a privacy address whose lease registers only the host. Either is correct
+// input for a per-rule IPv6 source picker; the caller decides how much of
+// it to surface.
+func DetectLAN6() (lan6CIDR, hostIP6 string) {
+	conn, err := net.Dial("udp", "[2001:4860:4860::8888]:80")
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	local, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok || local.IP.To4() != nil {
+		return
+	}
+	hostIP6 = local.IP.String()
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return
+	}
+	for _, iface := range ifs {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			ipnet, ok := addr.(*net.IPNet)
+			if !ok || !ipnet.IP.Equal(local.IP) {
+				continue
+			}
+			if _, network, err := net.ParseCIDR(ipnet.String()); err == nil {
+				lan6CIDR = network.String()
+			}
+			return
+		}
+	}
+	return
+}
+
 // DetectLAN guesses the primary LAN CIDR and host IP by asking the kernel
 // which source IP it would pick to reach an arbitrary public address — no
 // packets are sent, the UDP dial only resolves the default-route source.

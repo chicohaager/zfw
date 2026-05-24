@@ -162,11 +162,13 @@ func Compile(rs rules.RuleSet, dockerPorts map[int]bool, geoFiles map[string]str
 	// Link-local and multicast addresses: needed for ND, MLD, mDNSv6.
 	b.WriteString("  $IPT6 -A ZFW-IN6 -s fe80::/10 -j RETURN\n")
 	b.WriteString("  $IPT6 -A ZFW-IN6 -s ff00::/8 -j RETURN\n")
-	// Mirror host-zone allow-rules over IPv6. Source restrictions only
-	// translate when the rule's source is an IPv6 CIDR — otherwise the
-	// IPv6 mirror is destination-port-only (effectively "allow this port
-	// from anywhere on IPv6"). Per-rule SLAAC-prefix scoping is a v0.3
-	// item on the roadmap.
+	// Mirror host-zone rules over IPv6. Dispatch by source family:
+	//   - "any":      destination-port-only mirror (allow port from any IPv6).
+	//   - IPv6 ip/range: -s <addr/cidr> mirrored to ip6tables.
+	//   - IPv4 ip/range or country: not mirrored (IPv4 sources can't
+	//     express an IPv6 rule; geo-ipsets are IPv4-only). Pre-v0.2.22
+	//     an IPv6 ip/range source also crashed the IPv4 chain via a bad
+	//     "-s 2001:db8::/64" line — now isIPv6Source() short-circuits.
 	for _, r := range rl {
 		if !r.Enabled {
 			continue
@@ -256,9 +258,27 @@ type portSpec struct {
 
 func (ps portSpec) isRange() bool { return ps.From != 0 }
 
+// isIPv6Source reports whether a rule's source is an IPv6 address or CIDR.
+// IPv6 is detected by the presence of a colon — net.ParseIP/ParseCIDR already
+// gated the value through rules.Validate, so a colon is a reliable marker that
+// distinguishes IPv6 from IPv4 (which uses dots) or country codes (alpha).
+func isIPv6Source(s rules.Source) bool {
+	switch s.Type {
+	case "ip", "range":
+		return strings.Contains(s.Value, ":")
+	}
+	return false
+}
+
 // hostLines returns the iptables args (after "-A ZFW-IN") for a rule's
 // host-targeted portion, or nil if the rule does not target the host chain.
+// IPv6 sources route to ZFW-IN6 via hostLines6 and must not be emitted here:
+// iptables-legacy rejects "-s 2001:db8::/64" and with `set -eu` the whole
+// engine script aborts. Pre-v0.2.22 such a rule silently broke every apply.
 func hostLines(r rules.Rule, dockerPorts map[int]bool) []string {
+	if isIPv6Source(r.Source) {
+		return nil
+	}
 	ps, ok := portsForZone(r, dockerPorts, "host")
 	if !ok {
 		return nil
@@ -286,8 +306,13 @@ func hostLines(r rules.Rule, dockerPorts map[int]bool) []string {
 
 // dockerLines returns the iptables args (after "-A DOCKER-USER") for a rule's
 // docker-targeted portion. Published ports are matched on the original
-// (pre-DNAT) destination port via conntrack.
+// (pre-DNAT) destination port via conntrack. DOCKER-USER lives on the IPv4
+// table only; IPv6 sources are skipped here for the same reason as in
+// hostLines.
 func dockerLines(r rules.Rule, dockerPorts map[int]bool) []string {
+	if isIPv6Source(r.Source) {
+		return nil
+	}
 	ps, ok := portsForZone(r, dockerPorts, "docker")
 	if !ok {
 		return nil

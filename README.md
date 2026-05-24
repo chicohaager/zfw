@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.2.21 — see [Status](#status) for the build line.
+> **Current release:** v0.2.22 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -161,15 +161,24 @@ limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
 
-**v0.2.21** — documentation release: the binary code is identical to
-v0.2.20, which was **independently validated by external tester
-Gelbuilding on a ZimaBoard (2026-05-24)** — install, dashboard tile,
-Safe-Apply, Confirm, custom-port rule-edit (SSH 22 → 2222 for
-ttydBridge) and full reboot-persistence cycle all confirmed. v0.2.21
-bakes that sign-off into README + ROADMAP so the release tarball
-carries the validation as part of the artifact.
+**v0.2.22** — per-rule IPv6 source support lands cleanly. A rule with
+`source: { type: "range", value: "2001:db8::/64" }` (or a single IPv6
+address via `type: "ip"`) now routes to `ZFW-IN6` only and is skipped on
+the IPv4 chain — pre-fix, iptables-legacy rejected `-s <ipv6>` and with
+`set -eu` the whole engine script aborted, silently breaking every apply
+that referenced an IPv6 source. New `system.DetectLAN6()` returns the
+host's SLAAC prefix and global IPv6 address (analogous to `DetectLAN()`),
+ready for UI auto-fill in a follow-up. Three new compiler tests guard
+the IPv4↔IPv6 dispatch.
 
-The underlying v0.2.20 line: built, deployed and browser-verified on a
+Earlier in the v0.2 line, v0.2.20 was **independently validated by
+external tester Gelbuilding on a ZimaBoard (2026-05-24)**: install,
+dashboard tile, Safe-Apply, Confirm, custom-port rule-edit (SSH 22 →
+2222 for ttydBridge) and full reboot-persistence cycle all confirmed.
+v0.2.21 baked that sign-off into the release tarball; v0.2.22 carries
+it forward.
+
+The underlying v0.2 platform: built, deployed and browser-verified on a
 ZimaOS 1.6.1 host, with ZimaOS session authentication, CSRF protection
 and systemd sandboxing in place; the codebase has passed a [code and
 security review](SECURITY-REPORT.md), all user-facing messages are

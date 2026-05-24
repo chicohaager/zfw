@@ -190,3 +190,62 @@ func TestDockerBridgeBypass(t *testing.T) {
 	mustContain(t, out, "$IPT -A ZFW-IN -i docker0 -j ACCEPT")
 	mustContain(t, out, "$IPT -A ZFW-IN -i br-+ -j ACCEPT")
 }
+
+// TestIPv6SourceRoutesToIPv6Chain locks in v0.2.22: an IPv6 source (CIDR or
+// single address) must emit ONLY on ip6tables, never on iptables. Pre-fix
+// the IPv4 chain happily appended "-s 2001:db8::/64" which iptables-legacy
+// rejects — with `set -eu` in the engine script this aborted every apply,
+// turning an IPv6 rule into a silent show-stopper.
+func TestIPv6SourceRoutesToIPv6Chain(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", HostIP: "192.168.50.23", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			Order: 10, Enabled: true, Name: "Allow SSH from SLAAC prefix",
+			Action:   "allow",
+			Source:   rules.Source{Type: "range", Value: "2001:db8::/64"},
+			Ports:    rules.Ports{Type: "list", List: []int{22}},
+			Protocol: "tcp", Zone: "host",
+		}},
+	}, nil, nil)
+	mustContain(t, out, "$IPT6 -A ZFW-IN6 -s 2001:db8::/64 -p tcp --dport 22 -j RETURN")
+	mustNotContain(t, out, "$IPT -A ZFW-IN -s 2001:db8::/64")
+	// DOCKER-USER must not see the IPv6 source either — DOCKER-USER is IPv4
+	// only on ZimaOS and `iptables -s <ipv6>` would abort the engine.
+	mustNotContain(t, out, "$IPT -A DOCKER-USER -s 2001:db8::/64")
+}
+
+// TestIPv6SingleSourceRoutesToIPv6Chain covers the `source.type=ip` variant
+// (single address rather than CIDR). Same dispatch as the range case.
+func TestIPv6SingleSourceRoutesToIPv6Chain(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			Order: 10, Enabled: true, Name: "Allow web from one host",
+			Action:   "allow",
+			Source:   rules.Source{Type: "ip", Value: "2001:db8::42"},
+			Ports:    rules.Ports{Type: "list", List: []int{443}},
+			Protocol: "tcp", Zone: "host",
+		}},
+	}, nil, nil)
+	mustContain(t, out, "$IPT6 -A ZFW-IN6 -s 2001:db8::42 -p tcp --dport 443 -j RETURN")
+	mustNotContain(t, out, "$IPT -A ZFW-IN -s 2001:db8::42")
+}
+
+// TestIPv4SourceStillRoutesToIPv4Chain guards the inverse: the dispatch
+// change for IPv6 must NOT have broken IPv4 routing. An IPv4-source rule
+// still emits on iptables (with -s) and is NOT mirrored on ip6tables
+// (source6Arg returns "skip" for IPv4 values, so the IPv6 mirror is dropped
+// — an IPv4 source cannot legally match an IPv6 packet).
+func TestIPv4SourceStillRoutesToIPv4Chain(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			Order: 10, Enabled: true, Name: "SSH from LAN", Action: "allow",
+			Source:   rules.Source{Type: "range", Value: "192.168.1.0/24"},
+			Ports:    rules.Ports{Type: "list", List: []int{22}},
+			Protocol: "tcp", Zone: "host",
+		}},
+	}, nil, nil)
+	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -j ACCEPT")
+	mustNotContain(t, out, "$IPT6 -A ZFW-IN6 -s 192.168.1.0/24")
+}
