@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v1.0.4 — release-engineering polish (full doc bundle now ships inside the tarball; mod-store manifest refreshed). See [Status](#status) for the build line.
+> **Current release:** v1.0.5 — logo polish (transparent background + doubled in size). See [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,17 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v1.0.5 — logo polish.** Live-test feedback on v1.0.3/v1.0.4: the
+wordmark in the dashboard header looked like a thumbnail favicon
+sitting on a visible cream rectangle. Two fixes: (a) the PNG was
+processed at build-time prep so the cream backdrop is now
+transparent (alpha-cleaned threshold `r>230 && g>220 && b>200`) and
+the surrounding whitespace cropped tight (1448x1086 → 1114x267,
+852KB → 99KB); (b) CSS `.logo` height doubled from 48px → 96px and
+the surrounding `<h1>` margin zeroed so the wordmark drives the
+header height. The brand now reads at first glance instead of
+needing a squint.
 
 **v1.0.4 — release-engineering polish for external-tester handoff.**
 The tarball now bundles **THREAT-MODEL.md**, **BUG-BOUNTY.md** and
