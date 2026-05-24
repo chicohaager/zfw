@@ -67,11 +67,14 @@ body {
 /* ---------- header ---------- */
 header { margin-bottom: 22px; }
 .title-row { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
-/* v1.0.8: version pill drops to the baseline of the wordmark
-   instead of floating mid-height next to the (much taller) logo
-   image. Small bottom-margin tucks it visually onto the "Firewall"
-   text's lower edge instead of the absolute container floor. */
-.version { margin-bottom: 6px; }
+/* v1.0.9: pill aligned to the wordmark BASELINE, not the PNG floor.
+   The cropped logo has ~25% whitespace below the wordmark text
+   (the shield extends lower than the "Firewall" letters). With
+   align-items: flex-end the pill bottom-edges with the image
+   bottom; margin-bottom lifts it up onto the text baseline
+   instead. At 96px logo height, ~24px of lift puts the pill
+   visually on the underline of "Firewall". */
+.version { margin-bottom: 24px; }
 header h1 { font-size: 26px; font-weight: 600; letter-spacing: -.01em; }
 .logo {
   display: block; vertical-align: middle;
