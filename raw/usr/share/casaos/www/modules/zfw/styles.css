@@ -477,6 +477,12 @@ input:focus, select:focus {
   font-size: 12px; color: var(--text-muted); font-family: var(--font-mono, monospace);
 }
 .fhistory-since { color: var(--text-muted); font-family: var(--font-sans, sans-serif); font-style: italic; }
+
+/* exposure-tab quick-action buttons share a row; keep them on the same line */
+.exp-actions { white-space: nowrap; }
+.exp-actions button + button { margin-left: 6px; }
+.exp-actions .exp-deny { color: #B33A3A; border-color: #E7C5C5; }
+.exp-actions .exp-deny:hover { background: #FDECEC; border-color: #D89999; }
 .port-range-row input { width: 110px; }
 .port-range-sep { color: var(--text-muted); font-size: 13px; }
 

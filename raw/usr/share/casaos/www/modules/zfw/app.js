@@ -525,6 +525,20 @@ function openRuleEditorForPort(port) {
   });
 }
 
+// openDenyEditorForPort is the Exposure-tab "→ Deny" one-click quick
+// action: open the rule editor pre-filled for a flat deny on the given
+// port. The user still has to Save rules + Safe-Apply — the prefill
+// just removes the field-by-field setup so blocking an exposed port
+// from the LAN takes two clicks instead of seven.
+function openDenyEditorForPort(port) {
+  openRuleEditor({
+    id: '', name: 'Block port ' + port, action: 'deny',
+    source: { type: 'any', value: '' },
+    ports: { type: 'list', list: [port] },
+    protocol: 'tcp', zone: 'auto', enabled: true,
+  });
+}
+
 function updateModalFields() {
   const st = $('#rm-srctype').value;
   const isGeo = st === 'country';
@@ -649,7 +663,10 @@ async function loadExposure() {
       <td>${esc(s.proc || '—')}</td>
       <td class="mono">${esc(s.bind)}</td>
       <td><span class="badge ${cls}">${lbl}</span></td>
-      <td><button class="btn-secondary exp-rule" data-port="${esc(s.port)}">+ Rule</button></td>
+      <td class="exp-actions">
+        <button class="btn-secondary exp-rule" data-port="${esc(s.port)}" title="Open rule editor pre-filled for this port">+ Rule</button>
+        <button class="btn-secondary exp-deny" data-port="${esc(s.port)}" title="Open rule editor pre-filled to block this port from the LAN">&rarr; Deny</button>
+      </td>
     </tr>`;
   }).join('');
   const se = $('#stat-exposed');
@@ -663,6 +680,8 @@ async function loadExposure() {
     : '<div class="loading">No listening ports found.</div>';
   $$('#exposure-list .exp-rule').forEach(b => b.addEventListener('click',
     () => openRuleEditorForPort(parseInt(b.dataset.port, 10))));
+  $$('#exposure-list .exp-deny').forEach(b => b.addEventListener('click',
+    () => openDenyEditorForPort(parseInt(b.dataset.port, 10))));
 }
 
 /* ---------- audit ---------- */

@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.3.5 — see [Status](#status) for the build line.
+> **Current release:** v0.3.6 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -160,6 +160,16 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.3.6** — sixth (and final) v0.4 item: **Exposure-tab → Deny
+quick-action**. Each listening-port row now carries a second button
+next to *+ Rule*: *→ Deny* opens the rule editor pre-filled with
+`action: deny`, `source: any`, `ports: [<that port>]`, `zone: auto`
+and a default name (`Block port <port>`). The user still has to Save
+rules + Safe-Apply — the prefill just turns "block this exposed port
+from the LAN" from a seven-field setup into two clicks. The v0.4 *UX
+polish* phase is now complete; every roadmap item shipped except
+frontend i18n (deliberately dropped — ZFW stays English-only).
 
 **v0.3.5** — fifth v0.4 item: **audit-findings status history**. Each
 finding's posture now carries a persistent timeline — every time the

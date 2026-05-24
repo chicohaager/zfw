@@ -1,20 +1,18 @@
 # ZFW Roadmap
 
 > Author: Holger Kuehn (Lintux)
-> Status: **v0.3.5 — fifth v0.4 (*UX polish*) item shipped.** Audit
-> findings now carry a persistent status timeline (one row per posture
-> flip, capped at 20 per finding, stored in
-> `/DATA/zfw/audit-history.json`). UI renders an inline "History:
-> open → fixed → open *(since YYYY-MM-DD)*" caption below each
-> finding when the posture has ever changed. v0.3.4 shipped the diff
-> view; v0.3.3 backup/restore; v0.3.2 per-rule notes; v0.3.1 the
-> rule-templates library. The v0.3 phase itself closed with v0.3.0
-> (netns integration tests + every v0.3 roadmap item shipped across
-> v0.2.15–v0.3.0). v0.3.0 builds on v0.2.21's external sign-off —
-> **Gelbuilding's 2026-05-24 ZimaBoard validation of v0.2.20** — and
-> on v0.2.20's three-round security review. Last v0.4 item:
-> Exposure-tab quick-action. (Frontend i18n was dropped — ZFW stays
-> English-only.)
+> Status: **v0.3.6 — the v0.4 *UX polish* phase is complete.** Every
+> v0.4 roadmap item has shipped except frontend i18n (dropped — ZFW
+> stays English-only). v0.3.6 adds the *→ Deny* quick-action to the
+> Exposure tab; the v0.4 line runs v0.3.1 (rule-templates) → v0.3.2
+> (per-rule notes) → v0.3.3 (backup/restore) → v0.3.4 (diff view) →
+> v0.3.5 (audit-findings history) → v0.3.6 (Exposure quick-deny).
+> The v0.3 phase itself closed with v0.3.0 (netns integration tests
+> + every v0.3 roadmap item shipped across v0.2.15–v0.3.0). v0.3.0
+> builds on v0.2.21's external sign-off — **Gelbuilding's 2026-05-24
+> ZimaBoard validation of v0.2.20** — and on v0.2.20's three-round
+> security review. Next phase: v0.5 (Distribution & multi-host) —
+> arm64 build, Mod-Store submission, `zpkg` self-update.
 > English UI, intelligent default-set with live Docker inventory, reboot-persistent,
 > with a working Events / IDS-MVP tab (host + host6 + docker zones),
 > Docker-bridge bypass, the Donezo-style light-theme UI, default-deny IPv6
@@ -30,7 +28,7 @@ quality bar it raises.
 
 ---
 
-## Delivered in v0.2.7 – v0.3.5
+## Delivered in v0.2.7 – v0.3.6
 
 The v0.2 line addressed every regression and gap surfaced by the first
 external test cycle (Gelbuilding / IceWhale forum). v0.3.0 closed the
@@ -61,6 +59,7 @@ changed when.
 | **v0.2.21** | **External tester sign-off baked into the release.** README + ROADMAP carry Gelbuilding's 2026-05-24 ZimaBoard validation of v0.2.20: install, dashboard tile, Safe-Apply, Confirm, custom-port rule-edit (SSH 22 → 2222 for ttydBridge) and full reboot-persistence cycle all confirmed by an external party. Binary code identical to v0.2.20; cache-buster bumped (`?v=0.2.21` on `styles.css` / `app.js`) so the UI doesn't serve stale assets after install; `openapi.yaml` info-version bumped to match. v0.2.20 is preserved as the canonical reproducibility anchor (its tarball SHA stays the reference for the security-reviewed binary). | The first external "works as advertised on hardware I don't control" sign-off since the tester-feedback cycle began. Putting it inside the release tarball — not just in a forum reply — turns word-of-mouth into an artifact a downstream user can inspect before installing. |
 | **v0.2.22** | **Per-rule IPv6 source support** — closes the second-to-last v0.3 item. Compiler dispatches by source family: an IPv6 CIDR or single IPv6 address (`source.type` of `range` or `ip`, value `2001:db8::/64` or `2001:db8::42`) now routes to `ZFW-IN6` only and is skipped on the IPv4 chain. Pre-fix `iptables-legacy -s 2001:db8::/64` returned `Bad argument` and `set -eu` aborted the whole engine apply — an IPv6 source rule was a silent show-stopper. New `system.DetectLAN6()` resolves the host's SLAAC prefix and global IPv6 the same way `DetectLAN()` resolves IPv4 (UDP-dial trick; empty return on no-IPv6 connectivity). Three new compiler tests: `TestIPv6SourceRoutesToIPv6Chain` (range), `TestIPv6SingleSourceRoutesToIPv6Chain` (single address), `TestIPv4SourceStillRoutesToIPv4Chain` (inverse guard so the IPv6 dispatch didn't break the v4 path). Comment in `Compile()` clarified — the previous "destination-port-only mirror" wording described behaviour that did not match the code. | ZimaOS hosts get a SLAAC global address the moment a router advertises a prefix, so any user trying to scope a rule to "from my LAN" on IPv6 hit a blank wall. Closing this gap turns the IPv6 default-deny chain (v0.2.15) into something the user can actually customise per rule. |
 | **v0.3.0** | **v0.3 phase closed — netns integration tests.** New `internal/compiler/integration_test.go` (build tag `netns_integration`) drives `Compile() → bash → live iptables-legacy` inside `unshare -U -r -n` (unprivileged user+network namespace, no sudo needed). Four tests: `TestEngineApplyAllowsExpectedHostPort` (compile a host allow rule, verify the ACCEPT line lands), `TestEngineApplyPortRangeEmitsContiguousRule` (VNC 5900-5999 is one `--dport 5900:5999` line, not 100 entries), `TestEngineApplyIPv6SourceDoesNotCrashIPv4` (live counterpart to v0.2.22's unit tests — IPv6 source under `set -eu` no longer aborts the apply), `TestEngineRevertClearsAllChains` (apply→revert cycle leaves no ZFW chain behind). `requireNetns(t)` skips cleanly when iptables-legacy / unshare / unprivileged userns are absent. With this, the v0.3 exit criterion ("every endpoint has at least one test; CI green on push; release tarball reproducible byte-for-byte") is fully met. | Pre-v0.3.0 the integration was "verified by hand" on a real ZimaCube — a class of regression no unit test could catch (e.g. iptables-legacy's actual syntax for port ranges on the host kernel). Locking these down means the next refactor across compiler / engine / handlers can be reviewed by reading the diff, not by reproducing a manual ZimaCube run. |
+| **v0.3.6** | **Exposure → Deny quick-action — sixth v0.4 item; closes v0.4.** Each listening-port row in the Exposure tab grows a second button (`→ Deny`) next to the existing `+ Rule`. Click opens the rule editor pre-filled for a flat block of that port (`action: deny`, `source.type: any`, `ports.list: [<port>]`, `zone: auto`, name `Block port <port>`). The user still has to Save rules + Safe-Apply — the prefill just collapses a seven-field setup into two clicks. New helper `openDenyEditorForPort(port)` mirrors the existing `openRuleEditorForPort`; `renderExposure` renders both buttons with `.exp-actions` keeping them inline. New CSS for `.exp-deny` (red border on hover) signals the destructive direction. No backend change. | The Exposure tab is where a user actually *sees* an open port they did not expect — making "click → block" the same two-click loop as "click → permit" turns the tab from a read-only scoreboard into the natural place to harden posture. With this, every v0.4 roadmap item has shipped (modulo the deliberately-dropped i18n). |
 | **v0.3.5** | **Audit-findings status history — fifth v0.4 item.** New `internal/audit/history.go` adds a `History` map keyed by finding ID, with `Load` / `Save` / `Update(findings, now)` / `Attach(findings)` helpers. The handler at `/api/audit` now loads the on-disk timeline, recomputes findings against the live firewall state, appends a new `{ts, status}` row to any finding whose status differs from the previous entry, persists the file if anything changed and returns each finding wrapped in a `FindingWithHistory` with `history` always normalised to `[]` (never null — the UI iterates the slice). Per-finding cap of 20 entries prevents a flapping posture from ballooning the file. New config field `HistoryFile` (`/DATA/zfw/audit-history.json` by default), new env var `ZFW_HISTORY`. `auditMu` serialises concurrent /api/audit reads so the file write is race-free. UI renders an inline `History: open → fixed → open (since YYYY-MM-DD)` below each finding card, hidden when the posture has never flipped. Four new unit tests cover round-trip, append-on-change-only, the length cap and the attach shape; the existing `TestAuditReturnsArray` is upgraded to assert `history` is always present and non-null. | Without a timeline, the audit tab is a snapshot — the user can't tell whether "M2 dozzle: fixed" has been stable for a week or just flipped this morning. The history field is the cheapest possible posture-drift signal that does not require an external metrics store. |
 | **v0.3.4** | **Diff view, unsaved vs applied — fourth v0.4 item.** Adds a *Diff* button to the Rules-tab action row, enabled only when `rulesDirty` is true. Click opens a modal that fetches `/api/rules` (the saved snapshot) and compares it against the in-memory `ruleSet`. Each change is one row: added (green `+`, left-border green), removed (red `−`), changed (amber `~`, with before-and-after one-line summaries), plus a leading row when the default policy flipped. The summaries use the same shape across all three cases (`Allow tcp 22 from 192.168.1.0/24 [Host]`) so the user can spot a typo or zone mistake in seconds. Matching is by rule id; rules with empty `id` (added via the editor or templates, not yet saved) are always treated as additions. No new endpoint, no engine change. New helpers `ruleSignature()` (semantic equality test that excludes id/order — both legitimately differ across save cycles) and `ruleSummary()` (the one-line human form). | A "rulesDirty" badge is honest but unhelpful: a user comes back from a five-minute interruption and has no idea what they changed. Diff turns Save rules from "trust me" into "here's exactly what hits the daemon", which matters most for users who only Safe-Apply once a week and need to remember the in-flight edits. |
 | **v0.3.3** | **Backup / restore rules.json — third v0.4 item.** Two new buttons in the Rules-tab action row. *Backup* fetches `/api/rules` and offers it as a timestamped download (`zfw-rules-YYYY-MM-DD_HH-MM-SS.json`); the file is the raw `RuleSet` exactly as the daemon serves it, so a backup file is also a restore file with no transformation. *Restore* opens a file picker, parses the JSON, sanity-checks the shape (`default_policy` in {deny, allow}, `rules` is an array), asks the user to confirm the rule-count swap, then POSTs to `/api/rules` — the server-side Validate gate runs again, so a tampered file still gets rejected with a clear error. The firewall is **not** re-applied automatically: the user has to click Safe-Apply on the Firewall tab afterwards, keeping the 120-second dead-man as the last line of defence. No new endpoint, no engine change. | A user who breaks their rule set has no path back today other than "Recommended defaults" — which destroys hand-tuned configuration. Backup turns "I'll just try this rule" from a foot-gun into a reversible action. Restore also survives reinstalls without manual `/DATA/zfw/rules.json` archaeology. |
@@ -99,9 +98,11 @@ construction.
 
 ---
 
-## v0.4 — UX polish (rule authoring)
+## v0.4 — UX polish (rule authoring) — DELIVERED in v0.3.6
 
-Make the Rules tab feel like a tool that respects the user's time.
+Made the Rules tab feel like a tool that respects the user's time.
+Every item below shipped across v0.3.1 → v0.3.6, except the
+deliberately-dropped i18n entry.
 
 | Item | Why |
 |---|---|
@@ -110,10 +111,15 @@ Make the Rules tab feel like a tool that respects the user's time.
 | **Backup / restore rules.json** *(shipped v0.3.3)* | Backup button downloads `zfw-rules-<ts>.json` (raw RuleSet, no custom wrapper); Restore reads a JSON file, sanity-checks the shape, confirms the overwrite count, then POSTs to `/api/rules` so server-side Validate runs again. Firewall not auto-re-applied — user still has to Safe-Apply. |
 | **Diff view: unsaved vs applied** *(shipped v0.3.4)* | Diff button on the Rules tab (enabled only when `rulesDirty`) opens a modal listing every change Save would push — added / removed / changed rules plus default-policy flips, each with a one-line semantic summary. Pure client-side; fetches `/api/rules` for the saved snapshot. |
 | **Audit findings: history** *(shipped v0.3.5)* | Persistent per-finding status timeline in `/DATA/zfw/audit-history.json`. One entry per posture flip, capped at 20 per finding. Audit-tab renders an inline chain ("History: open → fixed → open *(since 2026-05-22)*") below each finding once it has flipped at least once. |
-| **Quick-action from Exposure tab** | Each listening port already has `+ Rule`. Add `→ Deny` next to it for one-click block. |
+| **Quick-action from Exposure tab** *(shipped v0.3.6)* | `→ Deny` button alongside the existing `+ Rule` on every listening-port row. Opens the rule editor pre-filled for a flat block; user still has to Save + Safe-Apply. No backend change. |
 
-**Exit criterion:** a new ZFW user can produce a clean rule set without
-reading docs.
+**Exit criterion (met in v0.3.6):** a new ZFW user can produce a
+clean rule set without reading docs. Templates (v0.3.1) provide
+one-click presets, defaults (v0.2.9) auto-detect LAN+Docker, the
+Exposure→Deny quick-action (v0.3.6) blocks an unexpected open port in
+two clicks, backup/restore (v0.3.3) and the diff view (v0.3.4) make
+edits reversible, notes (v0.3.2) and audit history (v0.3.5) keep the
+posture self-documenting.
 
 ---
 
