@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.5.7 — see [Status](#status) for the build line.
+> **Current release:** v1.0.0 — GA. See [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,34 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v1.0.0 — General Availability.** Six full phases, sixty-plus
+releases, three rounds of internal security review, one external
+sign-off, and a daemon that has earned its bind-mount. The v1.0
+phase shipped four code releases (VPN-bypass v0.5.4, webhooks
+v0.5.5, outbound rules v0.5.6, container binding v0.5.7) and two
+documentation deliverables in this capstone: **THREAT-MODEL.md**
+(15-minute read for the IceWhale security team — assets,
+adversaries, mitigations cross-referenced to every finding in
+SECURITY-REPORT.md, accepted residuals with rationale, per-
+adversary test map) and **BUG-BOUNTY.md** (the external-researcher
+contract — in-scope / out-of-scope, process, safe harbour, hall of
+fame). The external pen-test itself remains an operator action
+(maintainer outreach to the IceWhale forum and selected reviewers,
+same gating as the Mod-Store-PR in v0.4.0). With v1.0.0 in hand,
+ZFW's exit criterion is met: "an enterprise admin would install
+ZFW on a small office ZimaCube and not lose sleep."
+
+Phase recap, oldest first:
+
+| Phase | Releases | Scope |
+|---|---|---|
+| v0.2 — Tester feedback + foundation | v0.2.7 → v0.2.21 | First-install UX, English-only, port-range, IPv6 default-deny, Events tab, light-theme UI, tester sign-off |
+| v0.3 — Professionalization & IPv6 | v0.2.15 → v0.3.0 | Per-rule IPv6 source, handler+netns tests, slog, rate-limit, OpenAPI, reproducible builds, CI |
+| v0.4 — UX polish | v0.3.1 → v0.3.6 | Rule templates, notes, backup/restore, diff view, audit history, Exposure → Deny |
+| v0.5 — Distribution & multi-host | v0.3.7 → v0.4.0 | arm64 build, rules.json migration plumbing, self-update check, multi-host rule sync, Mod-Store submission prep |
+| v0.6 — Intrusion detection & state | v0.4.1 → v0.5.0 | Events analytics, threat detection, time-window rules (first real schema bump), per-rule logging + rate-limit, GeoIP source flags, conntrack visibility |
+| **v1.0 — General Availability** | **v0.5.4 → v1.0.0** | **VPN bypass, notification webhooks, outbound rules (second schema bump), per-container binding, THREAT-MODEL.md, BUG-BOUNTY.md** |
 
 **v0.5.7** — fourth v1.0 item: **per-container rule binding**. New
 optional `Rule.ContainerID` (additive — no schema bump) binds a

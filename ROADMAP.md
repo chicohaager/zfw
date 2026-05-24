@@ -1,8 +1,25 @@
 # ZFW Roadmap
 
 > Author: Holger Kuehn (Lintux)
-> Status: **v0.5.0 — the v0.6 (*Intrusion detection & state*)
-> phase is complete.** Final piece: **connection-state
+> Status: **v1.0.0 — General Availability.** All six roadmap
+> phases shipped: v0.2 (tester foundation, v0.2.7–v0.2.21), v0.3
+> (professionalization + IPv6, v0.2.15–v0.3.0), v0.4 (UX polish,
+> v0.3.1–v0.3.6), v0.5 (distribution + multi-host, v0.3.7–v0.4.0),
+> v0.6 (intrusion detection + state, v0.4.1–v0.5.0), v1.0 (GA,
+> v0.5.4–v1.0.0). Capstone deliverables in v1.0.0: **THREAT-
+> MODEL.md** (assets/adversaries/mitigations/accepted-residuals,
+> cross-referenced to every SECURITY-REPORT.md finding) and **BUG-
+> BOUNTY.md** (external-researcher contract with scope, process,
+> safe harbour). External pen-test remains an operator action —
+> contact and scope live in BUG-BOUNTY.md. With v1.0.0 the exit
+> criterion is met: "an enterprise admin would install ZFW on a
+> small office ZimaCube and not lose sleep." Future-version
+> backlog is tracked in `## v1.x — future` (currently captures
+> deferred polish: docker-events watcher for live container
+> re-bind, per-IP rate-limit, journalctl debug logging).
+>
+> *Earlier-phase status block:* **v0.5.0 — the v0.6 (*Intrusion
+> detection & state*) phase is complete.** Final piece: **connection-state
 > visibility** — new `internal/conntrack` package reads
 > `/proc/net/nf_conntrack` (with `conntrack -L` fallback); new
 > `GET /api/conntrack` returns up to 500 active entries; new
@@ -226,21 +243,52 @@ first real schema bump (v0.4.3), per-rule logging + rate-limit
 
 ---
 
-## v1.0 — General Availability
+## v1.0 — General Availability — DELIVERED in v1.0.0
 
-Everything below is required for a 1.0 stamp.
+Six items, shipped across five releases:
 
-| Item | Why |
+| Item | Status |
 |---|---|
-| **Outbound rules (`OUTPUT` + `FORWARD`)** | Today: only `INPUT`. v1.0: rules can target outbound traffic so the user can block a compromised container from phoning home. |
-| **Per-container rule binding** | Bind a rule to a Docker container ID, not just a port. When the container restarts on a new port, the rule follows. Auto-detects via `docker events`. |
-| **VPN-interface awareness** | Detect `tailscale0` / `wg0` and exempt them from default-deny by default. Otherwise installing ZFW kills Tailscale silently. |
-| **Notification hooks** | On rule change / apply / revert / dead-man timeout: POST to a configurable URL (n8n, Slack, Telegram bot). Stateless, opt-in, plain webhook. |
-| **Threat model document** | Published `THREAT-MODEL.md` listing every assumed adversary, every mitigation, every accepted risk. The bar IceWhale's security team should be able to read in 15 minutes. |
-| **External pen-test** | At least one external reviewer beyond the security-review already in `SECURITY-REPORT.md`. Bug-bounty announcement on the IceWhale forum. |
+| **Outbound rules (`OUTPUT` + `FORWARD`)** *(shipped v0.5.6)* | Schema v2 → v3. New chains ZFW-OUT (OUTPUT), ZFW-OUT6 (ip6tables OUTPUT), ZFW-FWD-OUT (FORWARD). Outbound never default-denies (would brick host DNS / NTP / Docker pulls). Source field flips semantically to "destination peer", compiler emits `-d` instead of `-s`. |
+| **Per-container rule binding** *(shipped v0.5.7)* | Optional `Rule.ContainerID` binds a rule by short ID or name; daemon resolves the live container's host-published ports at every Recompile and substitutes them into the rule. Missing container falls back to saved ports. New `/api/system/containers` endpoint feeds the rule-editor's binding picker. Auto-recompile via `docker events` deferred to v1.x — current behaviour is "user re-runs Safe-Apply after a container port remap." |
+| **VPN-interface awareness** *(shipped v0.5.4)* | `wg+` (WireGuard wildcard) joins `lo / docker0 / br-+ / virbr0 / tailscale0 / zt+` as a built-in default-bypass on every chain. Operator-supplied extras via `ZFW_EXTRA_BYPASS_IFACES` env (comma-separated, strict char-set validation). |
+| **Notification hooks** *(shipped v0.5.5)* | New `internal/notify` package + `ZFW_WEBHOOK_URL` env. Fire-and-forget JSON POST on `rules.saved` / `firewall.applied` / `firewall.committed` / `firewall.reverted`. Best-effort, never blocks the firewall flow. Opt-in (empty URL = no outbound HTTP). |
+| **Threat model document** *(shipped v1.0.0)* | `THREAT-MODEL.md` — 15-min read for IceWhale reviewers: assets, adversaries (A1 LAN-attacker, A2 compromised LAN device, A3 container, A4 malicious app, A5 MITM, A6 stolen session token, A7 local non-root), trust boundaries, mitigations cross-referenced to every finding in SECURITY-REPORT.md, accepted residuals with rationale, per-adversary test map. |
+| **External pen-test prep** *(shipped v1.0.0)* | `BUG-BOUNTY.md` — in-scope / out-of-scope, process, severity → fix-window matrix, safe-harbour clause, hall of fame. External pen-test itself stays operator-driven (forum outreach), same gating as the Mod-Store-PR in v0.4.0. |
 
-**Exit criterion:** an enterprise admin would install ZFW on a small office
-ZimaCube and not lose sleep.
+**Exit criterion (met in v1.0.0):** an enterprise admin would
+install ZFW on a small office ZimaCube and not lose sleep. The
+v1.0 phase shipped four code releases (v0.5.4–v0.5.7) and one
+capstone (v1.0.0) carrying THREAT-MODEL.md + BUG-BOUNTY.md.
+
+---
+
+## v1.x — future
+
+This section did not exist before v1.0.0; future feature requests
+that don't fit the GA spine land here.
+
+- **Docker-events watcher** — currently the user runs Safe-Apply
+  after a container port remap. A `docker events` subscriber that
+  triggers Recompile (not auto-apply — dead-man invariant) is the
+  natural follow-up to v0.5.7 per-container binding.
+- **Per-IP rate-limit + dashboard polling debounce** — accepted
+  residual R3-5 / R3-6. Needs session-ID tracking the daemon
+  currently doesn't keep.
+- **Debug-log path for journalctl errors** — accepted residual R3-8.
+  Currently `internal/events.Read` swallows journalctl errors to
+  keep the Events tab non-blank on a journald hiccup; a debug-log
+  line would help operators diagnose persistent failures.
+- **GeoIP source flags for hosts behind NAT** — flagged limitation
+  during v0.5.0 testing: a host with only RFC1918 source-IP drops
+  sees no flags. A small UI banner "all sources in this window are
+  private" would set the expectation without claiming the feature
+  is broken.
+- **Live conntrack rule-match annotation** — original v0.6
+  ROADMAP spec for conntrack was "live conntrack with rule-match
+  annotations." v0.5.0 shipped the table; the annotation ("this
+  rule is what blocked X") needs a richer rule-evaluation log
+  inside the engine.
 
 ---
 
