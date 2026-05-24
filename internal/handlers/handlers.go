@@ -22,6 +22,7 @@ import (
 	"github.com/chicohaager/zfw/internal/geo"
 	"github.com/chicohaager/zfw/internal/rules"
 	"github.com/chicohaager/zfw/internal/system"
+	"github.com/chicohaager/zfw/internal/update"
 )
 
 // maxGeoCountries caps how many distinct country geo-sets one rule set may
@@ -50,20 +51,23 @@ type Server struct {
 	compiledPath string
 	historyPath  string
 	geo          *geo.Manager
-	mutateRL     *rateBucket // shared by all non-GET endpoints
+	upd          *update.Checker // nil = self-update polling disabled
+	mutateRL     *rateBucket     // shared by all non-GET endpoints
 }
 
 // NewServer returns a Server. fw may be *firewall.Manager in production or
 // any Firewall implementation in tests. historyPath may be "" to disable
-// audit-finding history persistence (tests pass an empty path; the
-// handler still works, it just doesn't record timelines).
-func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string) *Server {
+// audit-finding history persistence. upd may be nil to disable
+// self-update polling — /api/update still responds, just with the
+// daemon's current version and no Latest field.
+func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string, upd *update.Checker) *Server {
 	return &Server{
 		fw:           fw,
 		rulesPath:    rulesPath,
 		compiledPath: compiledPath,
 		historyPath:  historyPath,
 		geo:          geo.New(geoDir),
+		upd:          upd,
 		// Burst 10, sustained 1/s — a user clicking Safe-Apply repeatedly
 		// passes the burst; a runaway script is throttled to one call/sec.
 		mutateRL: newRateBucket(1, 10),
@@ -126,6 +130,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/exposure", s.exposure)
 	mux.HandleFunc("/api/audit", s.auditHandler)
 	mux.HandleFunc("/api/versions", s.versions)
+	mux.HandleFunc("/api/update", s.updateStatus)
 	mux.HandleFunc("/api/events", s.events)
 	mux.HandleFunc("/api/openapi.json", s.openapi)
 	mux.HandleFunc("/api/openapi.yaml", s.openapi)
@@ -483,6 +488,22 @@ func (s *Server) versions(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx()
 	defer cancel()
 	writeJSON(w, http.StatusOK, system.Versions(ctx))
+}
+
+// updateStatus returns the cached self-update check result so the UI can
+// render a "vX available" badge without doing its own HTTP. A nil
+// checker (disabled) still returns 200 — the response just carries
+// only the current version so the UI code path is the same.
+func (s *Server) updateStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	if s.upd == nil {
+		writeJSON(w, http.StatusOK, update.Status{Current: buildinfo.Version})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.upd.Snapshot())
 }
 
 func toSet(xs []string) map[string]bool {

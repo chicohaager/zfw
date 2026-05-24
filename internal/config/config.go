@@ -19,6 +19,7 @@ type Config struct {
 	HistoryFile    string // audit-finding status timeline (/DATA/zfw/audit-history.json)
 	DataDir        string // module state directory
 	JWKSURL        string // ZimaOS JWKS endpoint for session-token validation
+	UpdateURL      string // optional manifest URL polled for new releases; empty disables the check
 }
 
 func env(k, def string) string {
@@ -44,5 +45,6 @@ func Load() Config {
 		HistoryFile:    env("ZFW_HISTORY", "/DATA/zfw/audit-history.json"),
 		DataDir:        env("DATA_DIR", "/DATA/AppData/zfw"),
 		JWKSURL:        env("ZFW_JWKS_URL", "http://127.0.0.1:37815/.well-known/jwks.json"),
+		UpdateURL:      env("ZFW_UPDATE_URL", ""),
 	}
 }

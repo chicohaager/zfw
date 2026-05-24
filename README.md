@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.3.8 — see [Status](#status) for the build line.
+> **Current release:** v0.3.9 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,25 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.3.9** — third v0.5 item: **`zpkg` self-update check**. New
+`internal/update` package polls a configurable manifest URL
+(`ZFW_UPDATE_URL`, opt-in — empty by default so a fresh install makes
+no outbound HTTP) once per week and caches the result. New endpoint
+`GET /api/update` returns the cached `{current, latest, available,
+notes, checked_at, error}` snapshot; a disabled checker still
+responds 200 with only `current` set so the UI never sees a phantom
+404. The Versions tab now renders a non-blocking green
+"Update available: vX.Y.Z" banner above the component list when
+`available=true` — silently hidden on network/parse errors. Semver
+comparison handles `0.3.10 > 0.3.9` correctly (lexicographic ordering
+would get this wrong) and tolerates a leading `v` plus trailing
+`-dev` / `+build` suffixes. Seven unit tests in `internal/update`
+cover ordering, happy-path parse, same-version no-badge, HTTP error,
+non-JSON body, disabled no-op, and context cancellation. Two new
+handler tests cover the disabled-200 branch and the wired-checker
+snapshot pass-through. OpenAPI documents the new endpoint and the
+`UpdateStatus` schema.
 
 **v0.3.8** — second v0.5 item: **rules.json migration helper**. The
 `RuleSet` JSON now carries an explicit `version` field (current schema

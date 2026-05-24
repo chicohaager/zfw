@@ -19,6 +19,7 @@ import (
 
 	"github.com/chicohaager/zfw/internal/firewall"
 	"github.com/chicohaager/zfw/internal/rules"
+	"github.com/chicohaager/zfw/internal/update"
 )
 
 // fakeFirewall is a hand-written stub that records calls and returns the
@@ -88,7 +89,7 @@ func newTestServer(t *testing.T, fw *fakeFirewall) (*Server, string) {
 	compiledPath := filepath.Join(dir, "compiled.sh")
 	geoDir := filepath.Join(dir, "geo")
 	historyPath := filepath.Join(dir, "audit-history.json")
-	return NewServer(fw, rulesPath, compiledPath, geoDir, historyPath), rulesPath
+	return NewServer(fw, rulesPath, compiledPath, geoDir, historyPath, nil), rulesPath
 }
 
 // do drives a single request through the Server's mux and returns the
@@ -617,6 +618,67 @@ func TestRulesTemplatesSubstitutesPersistedLAN(t *testing.T) {
 	if !bytes.Contains(w.Body.Bytes(), []byte("10.20.30.0/24")) {
 		t.Errorf("templates did not pick up persisted LAN — body did not include 10.20.30.0/24:\n%s",
 			w.Body.String())
+	}
+}
+
+// TestUpdateEndpointDisabledStillReturns200 guards the nil-checker
+// branch: a daemon started without ZFW_UPDATE_URL must still serve
+// /api/update so the UI never sees a phantom 404. The body carries
+// only Current (the daemon's own version); Latest stays empty and
+// Available stays false so the badge silently hides.
+func TestUpdateEndpointDisabledStillReturns200(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodGet, "/api/update", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+	var got update.Status
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("response is not an update.Status: %v (body=%s)", err, w.Body.String())
+	}
+	if got.Latest != "" || got.Available {
+		t.Errorf("disabled checker returned Latest=%q Available=%v, want empty/false", got.Latest, got.Available)
+	}
+}
+
+// TestUpdateEndpointReturnsCheckerSnapshot guards the wired-checker
+// branch: when an update.Checker is attached and has a non-empty
+// snapshot, /api/update must echo the snapshot's fields verbatim so
+// the UI can render an "update available" badge.
+func TestUpdateEndpointReturnsCheckerSnapshot(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	rulesPath := filepath.Join(dir, "rules.json")
+	compiledPath := filepath.Join(dir, "compiled.sh")
+	geoDir := filepath.Join(dir, "geo")
+	historyPath := filepath.Join(dir, "audit-history.json")
+
+	// Spin up a manifest server so the checker has something real to fetch.
+	manifest := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"version":"0.9.0","notes":"future v0.5 capstone"}`))
+	}))
+	defer manifest.Close()
+
+	chk := update.New("0.3.9", manifest.URL)
+	chk.CheckOnce(context.Background())
+	s := NewServer(&fakeFirewall{}, rulesPath, compiledPath, geoDir, historyPath, chk)
+
+	w := do(s, http.MethodGet, "/api/update", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+	var got update.Status
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("response is not an update.Status: %v (body=%s)", err, w.Body.String())
+	}
+	if got.Latest != "0.9.0" {
+		t.Errorf("Latest = %q, want 0.9.0", got.Latest)
+	}
+	if !got.Available {
+		t.Errorf("Available = false, want true (0.3.9 < 0.9.0)")
+	}
+	if got.Notes != "future v0.5 capstone" {
+		t.Errorf("Notes = %q, want %q", got.Notes, "future v0.5 capstone")
 	}
 }
 

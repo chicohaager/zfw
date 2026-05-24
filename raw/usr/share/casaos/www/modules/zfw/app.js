@@ -765,7 +765,23 @@ async function loadEvents() {
 /* ---------- versions ---------- */
 async function loadVersions() {
   const d = await api('/versions');
-  $('#versions-list').innerHTML = d.map(c => {
+  // Self-update check: pull the cached status (the daemon polls weekly,
+  // this just reads its in-memory snapshot). Render a non-blocking
+  // "vX available" banner at the top of the tab when an upgrade exists.
+  // A disabled checker or any network error returns a Status with no
+  // Latest set — the banner is then silently hidden.
+  let updateBanner = '';
+  try {
+    const u = await api('/update');
+    if (u && u.available && u.latest) {
+      const notes = u.notes ? ` &mdash; ${esc(u.notes)}` : '';
+      updateBanner = `<div class="upd-banner">
+        <span class="upd-pill">Update available: v${esc(u.latest)}</span>
+        <span class="upd-cur">current: v${esc(u.current)}${notes}</span>
+      </div>`;
+    }
+  } catch (_) { /* silent — badge is best-effort */ }
+  $('#versions-list').innerHTML = updateBanner + d.map(c => {
     const lvl = { ok: 'lvl-ok', warn: 'lvl-warn', crit: 'lvl-crit' }[c.level] || 'lvl-ok';
     return `<div class="vrow ${lvl}">
       <div class="vmain"><span class="vname">${esc(c.name)}</span><span class="vver mono">${esc(c.version)}</span></div>

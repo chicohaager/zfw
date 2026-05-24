@@ -23,12 +23,14 @@ import (
 	"time"
 
 	"github.com/chicohaager/zfw/internal/auth"
+	"github.com/chicohaager/zfw/internal/buildinfo"
 	"github.com/chicohaager/zfw/internal/config"
 	"github.com/chicohaager/zfw/internal/firewall"
 	"github.com/chicohaager/zfw/internal/gateway"
 	"github.com/chicohaager/zfw/internal/handlers"
 	"github.com/chicohaager/zfw/internal/rules"
 	"github.com/chicohaager/zfw/internal/system"
+	"github.com/chicohaager/zfw/internal/update"
 	"github.com/chicohaager/zfw/internal/watchdog"
 )
 
@@ -68,7 +70,11 @@ func main() {
 	}
 
 	fw := firewall.New(cfg.ZfwBin, cfg.ZfwConf)
-	srv := handlers.NewServer(fw, cfg.RulesFile, cfg.CompiledFile, cfg.GeoDir, cfg.HistoryFile)
+	// Optional self-update poller — empty ZFW_UPDATE_URL leaves it disabled
+	// (no outbound HTTP from a fresh install). Run loop starts after main's
+	// signal-aware context is constructed below.
+	upd := update.New(buildinfo.Version, cfg.UpdateURL)
+	srv := handlers.NewServer(fw, cfg.RulesFile, cfg.CompiledFile, cfg.GeoDir, cfg.HistoryFile, upd)
 
 	// v0.2 rule model: migrate the legacy allowlist.conf on first run; on a
 	// truly fresh host (no allowlist either) seed a recommended starter
@@ -202,6 +208,11 @@ func main() {
 
 	// Keep the reverse-proxy route registered so the UI reaches this daemon.
 	go gw.RegisterWithRetry(ctx, slogf)
+
+	// Poll for upstream releases once per week. A disabled checker
+	// (empty ZFW_UPDATE_URL) returns immediately without starting the
+	// goroutine, so no outbound calls happen on a fresh install.
+	upd.Run(ctx, 7*24*time.Hour)
 
 	// Install the boot watchdog on the persistent root (ZimaOS sysext units
 	// can lose the multi-user.target race — see KB §18.9).

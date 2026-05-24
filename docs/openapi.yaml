@@ -12,7 +12,7 @@ info:
 
     Non-GET requests share a token-bucket rate-limit (burst 10, sustained
     1/s); excessive traffic is answered with `429 Too Many Requests`.
-  version: "0.3.8"
+  version: "0.3.9"
   license:
     name: See repository
 servers:
@@ -130,6 +130,16 @@ components:
         port:     { type: integer }
         protocol: { type: string, enum: [tcp, udp, icmp] }
         zone:     { type: string, enum: [host, host6, docker] }
+    UpdateStatus:
+      type: object
+      description: "Cached self-update check. The daemon polls a configurable manifest URL (ZFW_UPDATE_URL, opt-in) once per week; the UI reads this endpoint and shows a non-blocking 'vX available' badge when Available is true. A nil-URL daemon still serves this endpoint — only Current is set."
+      properties:
+        current:    { type: string, example: "0.3.9", description: "Daemon's own version (from buildinfo)." }
+        latest:     { type: string, example: "0.4.0", description: "Latest version from the manifest. Empty when the checker is disabled or has not run yet." }
+        available:  { type: boolean, description: "True when latest is strictly greater than current." }
+        notes:      { type: string, description: "Free-text release notes shipped with the manifest." }
+        checked_at: { type: string, format: date-time, description: "Timestamp of the last successful or attempted check." }
+        error:      { type: string, description: "Network/parse failure from the last attempt. The UI hides the badge silently on error." }
 
 security:
   - bearerAuth: []
@@ -260,6 +270,16 @@ paths:
           content:
             application/json:
               schema: { type: array, items: { $ref: '#/components/schemas/Component' } }
+
+  /api/update:
+    get:
+      summary: Cached result of the self-update check. Returns 200 even when the checker is disabled (empty ZFW_UPDATE_URL) so the UI never sees a 404 — only Current is populated in that case.
+      responses:
+        '200':
+          description: Update status snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UpdateStatus' }
 
   /api/events:
     get:
