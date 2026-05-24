@@ -68,7 +68,7 @@ func main() {
 	}
 
 	fw := firewall.New(cfg.ZfwBin, cfg.ZfwConf)
-	srv := handlers.NewServer(fw, cfg.RulesFile, cfg.CompiledFile, cfg.GeoDir)
+	srv := handlers.NewServer(fw, cfg.RulesFile, cfg.CompiledFile, cfg.GeoDir, cfg.HistoryFile)
 
 	// v0.2 rule model: migrate the legacy allowlist.conf on first run; on a
 	// truly fresh host (no allowlist either) seed a recommended starter

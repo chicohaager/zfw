@@ -12,7 +12,7 @@ info:
 
     Non-GET requests share a token-bucket rate-limit (burst 10, sustained
     1/s); excessive traffic is answered with `429 Too Many Requests`.
-  version: "0.3.4"
+  version: "0.3.5"
   license:
     name: See repository
 servers:
@@ -106,6 +106,14 @@ components:
         title:  { type: string }
         detail: { type: string }
         status: { type: string, enum: [open, mitigated, fixed] }
+        history:
+          type: array
+          description: "Status timeline persisted across daemon restarts. Each entry records one transition; capped at 20 per finding."
+          items:
+            type: object
+            properties:
+              ts:     { type: string, format: date-time }
+              status: { type: string, enum: [open, mitigated, fixed] }
     Component:
       type: object
       properties:

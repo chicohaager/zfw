@@ -78,14 +78,17 @@ func (f *fakeFirewall) Revert(ctx context.Context) (string, error) {
 
 // newTestServer constructs a Server backed by the given fakeFirewall and a
 // throwaway rules file location. Tests can pre-populate rulesPath if they
-// want to exercise the rules.Load path.
+// want to exercise the rules.Load path. historyPath uses a per-test temp
+// file so each audit handler test gets its own clean timeline; tests that
+// don't touch /api/audit simply never read or write it.
 func newTestServer(t *testing.T, fw *fakeFirewall) (*Server, string) {
 	t.Helper()
 	dir := t.TempDir()
 	rulesPath := filepath.Join(dir, "rules.json")
 	compiledPath := filepath.Join(dir, "compiled.sh")
 	geoDir := filepath.Join(dir, "geo")
-	return NewServer(fw, rulesPath, compiledPath, geoDir), rulesPath
+	historyPath := filepath.Join(dir, "audit-history.json")
+	return NewServer(fw, rulesPath, compiledPath, geoDir, historyPath), rulesPath
 }
 
 // do drives a single request through the Server's mux and returns the
@@ -526,19 +529,31 @@ func TestVersionsReturnsArray(t *testing.T) {
 
 // TestAuditReturnsArray covers the Audit-tab endpoint: an empty config
 // plus an inactive firewall must still produce a JSON array (the audit
-// catalogue is static, only the per-finding status varies).
+// catalogue is static, only the per-finding status varies). Each entry
+// must carry a non-null history field (v0.3.5 contract — the UI
+// iterates the slice and crashes on null).
 func TestAuditReturnsArray(t *testing.T) {
 	s, _ := newTestServer(t, &fakeFirewall{})
 	w := do(s, http.MethodGet, "/api/audit", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
 	}
-	var got []any
+	var got []map[string]any
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("response is not a JSON array: %v (body=%s)", err, w.Body.String())
 	}
 	if len(got) == 0 {
-		t.Errorf("audit findings array is empty — catalogue should have entries")
+		t.Fatal("audit findings array is empty — catalogue should have entries")
+	}
+	for i, f := range got {
+		hist, ok := f["history"]
+		if !ok {
+			t.Errorf("finding[%d] missing history field: %+v", i, f)
+			continue
+		}
+		if hist == nil {
+			t.Errorf("finding[%d] history is null — UI will crash on iteration", i)
+		}
 	}
 }
 

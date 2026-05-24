@@ -16,6 +16,7 @@ type Config struct {
 	RulesFile      string // v0.2 rule model — source of truth (/DATA/zfw/rules.json)
 	CompiledFile   string // daemon-compiled ruleset the engine applies
 	GeoDir         string // per-country IP data + ipset files (/DATA/zfw/geo)
+	HistoryFile    string // audit-finding status timeline (/DATA/zfw/audit-history.json)
 	DataDir        string // module state directory
 	JWKSURL        string // ZimaOS JWKS endpoint for session-token validation
 }
@@ -40,6 +41,7 @@ func Load() Config {
 		RulesFile:      env("ZFW_RULES", "/DATA/zfw/rules.json"),
 		CompiledFile:   env("ZFW_COMPILED", "/DATA/zfw/compiled.sh"),
 		GeoDir:         env("ZFW_GEO", "/DATA/zfw/geo"),
+		HistoryFile:    env("ZFW_HISTORY", "/DATA/zfw/audit-history.json"),
 		DataDir:        env("DATA_DIR", "/DATA/AppData/zfw"),
 		JWKSURL:        env("ZFW_JWKS_URL", "http://127.0.0.1:37815/.well-known/jwks.json"),
 	}

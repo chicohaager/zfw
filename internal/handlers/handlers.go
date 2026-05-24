@@ -44,20 +44,25 @@ type Firewall interface {
 // Server holds the dependencies for the HTTP API.
 type Server struct {
 	mu           sync.Mutex // serialises apply/commit/revert/recompile
+	auditMu      sync.Mutex // serialises audit-history reads/writes
 	fw           Firewall
 	rulesPath    string
 	compiledPath string
+	historyPath  string
 	geo          *geo.Manager
 	mutateRL     *rateBucket // shared by all non-GET endpoints
 }
 
 // NewServer returns a Server. fw may be *firewall.Manager in production or
-// any Firewall implementation in tests.
-func NewServer(fw Firewall, rulesPath, compiledPath, geoDir string) *Server {
+// any Firewall implementation in tests. historyPath may be "" to disable
+// audit-finding history persistence (tests pass an empty path; the
+// handler still works, it just doesn't record timelines).
+func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string) *Server {
 	return &Server{
 		fw:           fw,
 		rulesPath:    rulesPath,
 		compiledPath: compiledPath,
+		historyPath:  historyPath,
 		geo:          geo.New(geoDir),
 		// Burst 10, sustained 1/s — a user clicking Safe-Apply repeatedly
 		// passes the burst; a runaway script is throttled to one call/sec.
@@ -436,7 +441,42 @@ func (s *Server) auditHandler(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	st := s.fw.Status(ctx)
 	cfg, _ := s.fw.LoadConfig()
-	writeJSON(w, http.StatusOK, audit.Findings(st, cfg))
+	findings := audit.Findings(st, cfg)
+
+	// Load + update the audit-finding history under a dedicated mutex
+	// so concurrent /api/audit requests don't race the file. When
+	// historyPath is empty (tests pass ""), skip persistence — the
+	// response still carries an empty history slice per finding so
+	// the UI's iteration code never crashes on a missing field.
+	var hist audit.History
+	if s.historyPath != "" {
+		s.auditMu.Lock()
+		defer s.auditMu.Unlock()
+		loaded, err := audit.LoadHistory(s.historyPath)
+		if err != nil {
+			fail(w, http.StatusInternalServerError, "load history: "+err.Error())
+			return
+		}
+		hist = loaded
+		if hist.Update(findings, time.Now()) {
+			if err := audit.SaveHistory(s.historyPath, hist); err != nil {
+				fail(w, http.StatusInternalServerError, "save history: "+err.Error())
+				return
+			}
+		}
+	} else {
+		hist = audit.History{}
+	}
+
+	// Normalise nil history slices to empty arrays so the UI's
+	// `for (const e of f.history)` never iterates `null`.
+	out := hist.Attach(findings)
+	for i := range out {
+		if out[i].History == nil {
+			out[i].History = []audit.HistoryEntry{}
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (s *Server) versions(w http.ResponseWriter, r *http.Request) {

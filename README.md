@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.3.4 — see [Status](#status) for the build line.
+> **Current release:** v0.3.5 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -160,6 +160,19 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.3.5** — fifth v0.4 item: **audit-findings status history**. Each
+finding's posture now carries a persistent timeline — every time the
+live status flips (open → mitigated → fixed and back), a new
+timestamped entry is appended to `/DATA/zfw/audit-history.json`. Up
+to 20 entries per finding are kept; identical-status checks are
+suppressed, so a finding that stays *fixed* for weeks keeps a short
+history. The Audit tab renders the chain inline below each finding
+("History: open → fixed → open *(since 2026-05-22)*"), hidden when
+the posture has never changed. New `internal/audit/history.go`
+(Load/Save + Update + Attach), four new unit tests covering
+round-trip / append-on-change / length cap / attach contract, and a
+handler test that asserts `history` is never null in the response.
 
 **v0.3.4** — fourth v0.4 item: **diff view, unsaved vs applied**. A
 new *Diff* button on the Rules tab (only enabled when there are

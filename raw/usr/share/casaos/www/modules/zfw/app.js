@@ -684,12 +684,29 @@ async function loadAudit() {
         <span class="fstatus ${st}">${esc(stl)}</span>
       </div>
       <p class="fdetail">${esc(f.detail)}</p>
+      ${renderHistory(f.history)}
     </div>`;
   }).join('');
   const sf = $('#stat-findings');
   sf.textContent = open;
   sf.className = 'stat-num ' + (open > 0 ? 'warn' : 'ok');
   $('#audit-list').innerHTML = rows || '<div class="loading">No findings.</div>';
+}
+
+// renderHistory turns a finding's status timeline into a compact
+// inline summary. Hidden entirely on first sight (≤1 entry — the
+// posture has never flipped, no story to tell); otherwise shows the
+// chain of transitions as "open → fixed → open (since 2026-05-22)".
+// The "since" is the timestamp of the LATEST entry — the moment the
+// current status began. Date-only formatting keeps it scannable.
+function renderHistory(history) {
+  if (!Array.isArray(history) || history.length < 2) return '';
+  const arrow = ' → ';
+  const chain = history.map(e => esc(e.status)).join(arrow);
+  const since = (history[history.length - 1].ts || '').slice(0, 10);
+  return `<p class="fhistory" title="Status timeline (max 20 entries kept on disk).">
+    History: ${chain}${since ? ` <span class="fhistory-since">(since ${esc(since)})</span>` : ''}
+  </p>`;
 }
 
 /* ---------- events ---------- */
