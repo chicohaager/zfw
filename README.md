@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.4.1 — see [Status](#status) for the build line.
+> **Current release:** v0.4.2 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,28 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.4.2** — second v0.6 item: **threat detection (port-scan +
+brute-force)**. New `events.Classify()` runs on every `/api/events`
+response: a sliding 60s window per source IP flags `port_scan` when a
+source has hit ≥ 10 distinct dest ports, and `brute_force` when a
+source has hit the same auth-relevant dest port (22 / 445 / 3389 /
+8888) ≥ 20 times. Thresholds are package-level consts so the test
+suite asserts the same numbers documented in the README/ROADMAP —
+drift between code and docs would be a silent regression. The
+`Event` JSON gains a `threats []string` field (`omitempty`, so
+unflagged events stay compact). UI: Events tab carries a single
+amber banner above the table when at least one source was flagged
+(`N sources flagged for port-scan · M sources flagged for
+brute-force`); per-row, an inline `scan` / `brute` pill next to the
+source IP marks the threshold-crossing events, with the entire row
+tinted warm-white for at-a-glance visibility. Seven new tests cover
+both classifiers: threshold-cross detection, slow-scan
+non-detection, sub-threshold off-by-one, non-target-port
+non-detection (54321 hammered at brute-force volume stays quiet),
+cross-source separation (two sources × 5 ports each does not
+collapse into one synthetic scan), empty-input safety. OpenAPI
+`Event` schema documents the new field.
 
 **v0.4.1** — first **v0.6 (*Intrusion detection & state*)** item:
 **Events tab analytics**. Three v0.6 roadmap items merged into one

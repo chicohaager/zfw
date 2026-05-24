@@ -141,6 +141,22 @@ header h1 { font-size: 26px; font-weight: 600; letter-spacing: -.01em; }
 .ev-top-bar  { background: var(--card-border); border-radius: 3px; height: 8px; overflow: hidden; }
 .ev-top-fill { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
 .ev-top-empty { color: var(--text-muted); font-size: 13px; }
+.threat-banner {
+  background: rgb(255 243 224); border: 1px solid var(--warn);
+  border-left: 4px solid var(--warn);
+  border-radius: var(--card-radius-sm);
+  padding: 10px 14px; margin-bottom: 12px;
+  font-size: 13px; color: var(--text);
+}
+.threat-icon { color: var(--warn); margin-right: 6px; font-size: 16px; }
+.threat-pill {
+  display: inline-block; margin-left: 6px;
+  padding: 1px 7px; border-radius: 999px;
+  font-size: 11px; font-weight: 600;
+  background: var(--warn); color: #fff;
+}
+.threat-pill.threat-brute_force { background: var(--danger); }
+.ev-threat-row > td { background: rgb(255 248 230); }
 
 #status {
   margin-top: 14px; font-size: 13px; min-height: 18px;

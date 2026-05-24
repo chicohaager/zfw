@@ -17,12 +17,46 @@ import (
 
 // Event is one logged firewall drop, suitable for direct JSON encoding to
 // the UI. Port is 0 when the protocol carries no port number (e.g. ICMP).
+// Threats is set by classify() (v0.4.2 — port-scan / brute-force flags);
+// omitempty so an event the classifier did not flag stays compact on the
+// wire and the UI's `if (ev.threats)` branch sees undefined, not [].
 type Event struct {
 	Time     time.Time `json:"time"`
 	Source   string    `json:"source"`
 	Port     int       `json:"port"`
 	Protocol string    `json:"protocol"`
 	Zone     string    `json:"zone"` // "host" | "docker"
+	Threats  []string  `json:"threats,omitempty"`
+}
+
+// Threat classifier thresholds. Externalised as consts so the tests use
+// the exact same numbers documented in the README/ROADMAP — a drift
+// between code and docs would mean "we said 10 ports, we flag at 8" is
+// silently true.
+const (
+	// portScanPortThreshold: a source must hit at least this many distinct
+	// dest ports within portScanWindow to be flagged.
+	portScanPortThreshold = 10
+	portScanWindow        = time.Minute
+
+	// bruteForceHitThreshold: a source must hit the same dest port at
+	// least this many times within bruteForceWindow to be flagged.
+	// Limited to the high-risk ports the auth attack catalogue cares
+	// about (SSH, SMB, RDP, web admin panels) so we do not light up on
+	// every UDP scan that fits the count.
+	bruteForceHitThreshold = 20
+	bruteForceWindow       = time.Minute
+)
+
+// bruteForceTargets lists the dest ports the brute-force classifier
+// considers. Misses on these are far more interesting (credential
+// guessing) than misses on a random ephemeral port; flagging every
+// 20-hit burst regardless of port would drown the signal.
+var bruteForceTargets = map[int]bool{
+	22:   true, // SSH
+	445:  true, // SMB
+	3389: true, // RDP
+	8888: true, // common web admin
 }
 
 // Read returns the most recent drop events since `since`, newest-first, up
@@ -64,7 +98,11 @@ func Read(ctx context.Context, since time.Time, limit int) ([]Event, error) {
 	}
 	_ = cmd.Wait() // ignore: journalctl exit code is not load-bearing here
 
-	// Newest-first so the UI table sorts naturally without client-side work.
+	// Classify on the time-ascending series so the sliding window walks
+	// forward naturally. Then reverse for the UI's newest-first
+	// convention. Threats are stamped on the events themselves; the UI
+	// reads ev.threats per row + renders a banner when any are present.
+	out = Classify(out)
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 		out[i], out[j] = out[j], out[i]
 	}
@@ -72,6 +110,86 @@ func Read(ctx context.Context, since time.Time, limit int) ([]Event, error) {
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+// Classify scans the (time-ascending) event series and stamps Threats on
+// each event whose source crossed a port-scan or brute-force threshold.
+// Modifies the slice in place and returns it for chaining. Safe to call
+// on an empty slice. Exported for testability — Read() always calls it
+// before reversing for output.
+func Classify(events []Event) []Event {
+	if len(events) == 0 {
+		return events
+	}
+	// Group event indices by source IP. The empty source is treated as a
+	// distinct bucket so a parsing failure does not collapse the rest of
+	// the keyspace into one false-positive scan.
+	bySource := map[string][]int{}
+	for i, e := range events {
+		bySource[e.Source] = append(bySource[e.Source], i)
+	}
+	for _, idxs := range bySource {
+		classifySource(events, idxs)
+	}
+	return events
+}
+
+func classifySource(events []Event, idxs []int) {
+	// Sliding window over the indices, exploiting that events were
+	// inserted in time-ascending order (journalctl --since … emits
+	// oldest-first; Read() does not reverse until after Classify).
+	left := 0
+	portsInWindow := map[int]int{} // dest port -> count within current window
+	portPortHits := map[int]int{}  // dest port -> count for brute-force
+	for right, ri := range idxs {
+		// Shrink the window from the left until [left..right] fits the
+		// largest classifier window. Both classifiers happen to use
+		// the same 60s window, so one shrink loop covers both.
+		for left < right {
+			li := idxs[left]
+			if events[ri].Time.Sub(events[li].Time) <= portScanWindow {
+				break
+			}
+			// Evict the left event from the window's port histograms.
+			p := events[li].Port
+			if p > 0 {
+				portsInWindow[p]--
+				if portsInWindow[p] == 0 {
+					delete(portsInWindow, p)
+				}
+				portPortHits[p]--
+				if portPortHits[p] == 0 {
+					delete(portPortHits, p)
+				}
+			}
+			left++
+		}
+		// Add the right event to the window's histograms.
+		p := events[ri].Port
+		if p > 0 {
+			portsInWindow[p]++
+			portPortHits[p]++
+		}
+
+		// Port-scan: ≥ portScanPortThreshold distinct dest ports in window.
+		if len(portsInWindow) >= portScanPortThreshold {
+			addThreat(&events[ri], "port_scan")
+		}
+		// Brute-force: same source × same dest port × bruteForceTargets,
+		// hitting bruteForceHitThreshold within the window.
+		if p > 0 && bruteForceTargets[p] && portPortHits[p] >= bruteForceHitThreshold {
+			addThreat(&events[ri], "brute_force")
+		}
+	}
+}
+
+func addThreat(e *Event, t string) {
+	for _, existing := range e.Threats {
+		if existing == t {
+			return
+		}
+	}
+	e.Threats = append(e.Threats, t)
 }
 
 // parseDropLine extracts the fields ZFW writes via the iptables LOG target.

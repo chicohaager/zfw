@@ -880,19 +880,46 @@ async function loadEvents() {
     host6:  ['badge-blocked', 'host (v6)'],
     docker: ['badge-lan',     'docker'],
   };
+  // Threat banner: counts events that the server-side classifier
+  // flagged with port_scan / brute_force tags in the visible window.
+  // Hidden when neither pattern fired so the tab stays quiet on a
+  // healthy host.
+  const threatCounts = { port_scan: new Set(), brute_force: new Set() };
+  for (const e of recent) {
+    if (!e.threats) continue;
+    for (const t of e.threats) {
+      if (threatCounts[t]) threatCounts[t].add(e.source || '?');
+    }
+  }
+  const threatBanner = (() => {
+    const parts = [];
+    if (threatCounts.port_scan.size > 0) {
+      parts.push(`<b>${threatCounts.port_scan.size}</b> source${threatCounts.port_scan.size === 1 ? '' : 's'} flagged for port-scan`);
+    }
+    if (threatCounts.brute_force.size > 0) {
+      parts.push(`<b>${threatCounts.brute_force.size}</b> source${threatCounts.brute_force.size === 1 ? '' : 's'} flagged for brute-force`);
+    }
+    return parts.length
+      ? `<div class="threat-banner"><span class="threat-icon" aria-hidden="true">&#9888;</span> ${parts.join(' · ')} <small>(last hour)</small></div>`
+      : '';
+  })();
+  const threatLabel = { port_scan: 'scan', brute_force: 'brute' };
   const rows = recent.map(e => {
     const t = new Date(e.time);
     const ts = t.toLocaleTimeString() + ' ' + t.toLocaleDateString();
     const [cls, lbl] = zoneMap[e.zone] || ['badge-local', e.zone];
-    return `<tr>
+    const pills = (e.threats || []).map(tag =>
+      `<span class="threat-pill threat-${esc(tag)}" title="Classifier flagged this event with ${esc(tag)}">${esc(threatLabel[tag] || tag)}</span>`
+    ).join('');
+    return `<tr${e.threats && e.threats.length ? ' class="ev-threat-row"' : ''}>
       <td class="mono">${esc(ts)}</td>
-      <td class="mono">${esc(e.source || '?')}</td>
+      <td class="mono">${esc(e.source || '?')}${pills}</td>
       <td class="mono">${e.port || '—'}</td>
       <td>${esc((e.protocol || '').toUpperCase())}</td>
       <td><span class="badge ${cls}">${lbl}</span></td>
     </tr>`;
   }).join('');
-  $('#events-list').innerHTML = `<table class="tbl">
+  $('#events-list').innerHTML = threatBanner + `<table class="tbl">
     <thead><tr><th>Time</th><th>Source IP</th><th>Dest port</th><th>Proto</th><th>Zone</th></tr></thead>
     <tbody>${rows}</tbody></table>`;
 }

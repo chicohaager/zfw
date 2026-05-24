@@ -12,7 +12,7 @@ info:
 
     Non-GET requests share a token-bucket rate-limit (burst 10, sustained
     1/s); excessive traffic is answered with `429 Too Many Requests`.
-  version: "0.4.1"
+  version: "0.4.2"
   license:
     name: See repository
 servers:
@@ -130,6 +130,10 @@ components:
         port:     { type: integer }
         protocol: { type: string, enum: [tcp, udp, icmp] }
         zone:     { type: string, enum: [host, host6, docker] }
+        threats:
+          type: array
+          description: "Server-side classifier tags. Stamped on events whose source crossed a port-scan (≥10 distinct ports in 60s) or brute-force (≥20 hits against an auth-relevant port in 60s) threshold. Empty/absent for normal drops."
+          items: { type: string, enum: [port_scan, brute_force] }
     Peer:
       type: object
       description: "A configured follower host (token-stripped view served to the UI)."
