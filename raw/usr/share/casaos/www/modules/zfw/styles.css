@@ -66,7 +66,12 @@ body {
 
 /* ---------- header ---------- */
 header { margin-bottom: 22px; }
-.title-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.title-row { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+/* v1.0.8: version pill drops to the baseline of the wordmark
+   instead of floating mid-height next to the (much taller) logo
+   image. Small bottom-margin tucks it visually onto the "Firewall"
+   text's lower edge instead of the absolute container floor. */
+.version { margin-bottom: 6px; }
 header h1 { font-size: 26px; font-weight: 600; letter-spacing: -.01em; }
 .logo {
   display: block; vertical-align: middle;
