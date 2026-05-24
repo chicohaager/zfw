@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.3.0 — see [Status](#status) for the build line.
+> **Current release:** v0.3.1 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -160,6 +160,21 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.3.1** — first v0.4 (*UX polish*) item shipped: **rule-templates
+library**. The Rules tab now carries a `Templates` button that opens a
+picker over the curated catalog (`GET /api/rules/templates`). Three
+templates in this release: Block VNC consoles (5900-5999, security),
+Block NFS / rpcbind (111/2049/20048, security), Allow Plex Media
+Server (32400 from LAN, service). Adding a template appends its rules
+to the current set with fresh IDs and stable order spacing; the user
+still has to click Save rules + Safe-Apply. The LAN value substituted
+into "from the LAN" rules comes from the saved rules.json, falling
+back to live `system.DetectLAN()` detection on a fresh install. New
+backend tests: `TestTemplatesAllValid`, `TestTemplatesFreshIDs`,
+`TestTemplatesSubstituteLAN` (rules package) plus
+`TestRulesTemplatesReturnsCatalog` and
+`TestRulesTemplatesSubstitutesPersistedLAN` (handlers package).
 
 **v0.3.0** — the v0.3 *Professionalization & IPv6 (foundation)* phase
 is complete. Every roadmap item under v0.3 has shipped:

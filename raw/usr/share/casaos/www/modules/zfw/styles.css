@@ -415,6 +415,26 @@ input:focus, select:focus {
 .port-range-row {
   display: flex; align-items: center; gap: 10px;
 }
+
+/* wider modal for the rule-templates picker — descriptions need room */
+.modal-wide { width: min(640px, 94vw); }
+.tmpl-card {
+  border: 1px solid var(--card-border); border-radius: 10px;
+  padding: 12px 14px;
+  display: grid; grid-template-columns: 1fr auto; gap: 8px 14px;
+  align-items: start; background: #FAF9F4;
+}
+.tmpl-card .tmpl-head { font-weight: 600; color: var(--text); font-size: 14px; }
+.tmpl-card .tmpl-desc { color: var(--text-muted); font-size: 13px; line-height: 1.45; grid-column: 1 / 2; }
+.tmpl-card .tmpl-meta { color: var(--text-muted); font-size: 12px; grid-column: 1 / 2; }
+.tmpl-card .tmpl-add { align-self: center; }
+.tmpl-cat {
+  display: inline-block; padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em;
+  margin-left: 8px; vertical-align: 2px;
+}
+.tmpl-cat.security { background: #FDECEC; color: #B33A3A; }
+.tmpl-cat.service  { background: #E6F1EA; color: #1F7A41; }
 .port-range-row input { width: 110px; }
 .port-range-sep { color: var(--text-muted); font-size: 13px; }
 

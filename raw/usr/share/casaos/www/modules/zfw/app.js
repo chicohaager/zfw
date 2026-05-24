@@ -153,6 +153,7 @@ function renderRules() {
     </div>
     <div class="action-row">
       <button id="btn-new-rule" class="btn-primary">+ New rule</button>
+      <button id="btn-templates" class="btn-secondary" title="Pick from a catalog of pre-built rules (block VNC, block NFS, allow common services)">Templates</button>
       <button id="btn-recommended-defaults" class="btn-secondary" title="Replace all rules with the recommended starter set (auto-detected LAN, deny default, 5 baseline allow rules)">Recommended defaults</button>
       <button id="btn-save-rules" class="btn-secondary${rulesDirty ? ' dirty' : ''}">Save rules</button>
       <span class="save-hint"${rulesDirty ? '' : ' hidden'}>unsaved changes — save, then Safe-Apply on the Firewall tab</span>
@@ -170,6 +171,7 @@ function wireRules() {
     markDirty();
   }));
   $('#btn-new-rule').addEventListener('click', () => openRuleEditor(null));
+  $('#btn-templates').addEventListener('click', openTemplatesPicker);
   $('#btn-recommended-defaults').addEventListener('click', applyRecommendedDefaults);
   $('#btn-save-rules').addEventListener('click', saveRules);
   $$('#rules-panel tbody tr[data-id]').forEach(tr => {
@@ -201,6 +203,57 @@ function ruleAction(id, act) {
   } else if (act === 'edit') {
     openRuleEditor(rs[i]);
   }
+}
+
+// openTemplatesPicker fetches the curated template catalog and renders
+// it in a modal. Each card shows the template's name, category,
+// description and rule count plus an "Add" button. Clicking "Add"
+// appends the template's rules to the local rule set (with fresh
+// order numbers); the user still has to click Save rules + Safe-Apply.
+async function openTemplatesPicker() {
+  const m = $('#templates-modal');
+  const list = $('#tmpl-list');
+  list.innerHTML = '<div class="loading">Loading templates&hellip;</div>';
+  m.hidden = false;
+  let templates;
+  try {
+    templates = await api('/rules/templates');
+  } catch (e) {
+    list.innerHTML = `<p class="rm-error">Failed to load templates: ${e.message}</p>`;
+    return;
+  }
+  list.innerHTML = templates.map((t, i) => `
+    <div class="tmpl-card" data-idx="${i}">
+      <div class="tmpl-head">${t.name}<span class="tmpl-cat ${t.category}">${t.category}</span></div>
+      <button class="btn-primary tmpl-add" data-idx="${i}">Add</button>
+      <div class="tmpl-desc">${t.description}</div>
+      <div class="tmpl-meta">${t.rules.length} rule${t.rules.length === 1 ? '' : 's'}</div>
+    </div>`).join('');
+  $$('#tmpl-list .tmpl-add').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const t = templates[parseInt(btn.dataset.idx, 10)];
+      addTemplate(t);
+      m.hidden = true;
+    });
+  });
+  $('#tmpl-close').onclick = () => { m.hidden = true; };
+  // Backdrop click closes the modal — same pattern as the rule editor.
+  m.onclick = (ev) => { if (ev.target === m) m.hidden = true; };
+}
+
+// addTemplate appends a template's rules to the local rule set with
+// fresh order numbers spaced 10 apart above the current max. IDs come
+// pre-set from the server so two clicks on the same template produce
+// independent rules in the table.
+function addTemplate(t) {
+  if (!ruleSet || !Array.isArray(ruleSet.rules)) ruleSet.rules = [];
+  let maxOrder = 0;
+  for (const r of ruleSet.rules) if ((r.order || 0) > maxOrder) maxOrder = r.order;
+  t.rules.forEach((r, i) => {
+    ruleSet.rules.push({ ...r, order: maxOrder + 10 * (i + 1) });
+  });
+  setStatus(`Added template "${t.name}" (${t.rules.length} rule${t.rules.length === 1 ? '' : 's'}). Review, then click Save rules.`, 'ok');
+  markDirty();
 }
 
 // applyRecommendedDefaults replaces the current rules with the server's

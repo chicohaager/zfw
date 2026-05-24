@@ -114,6 +114,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/config", s.config)
 	mux.HandleFunc("/api/rules", s.rateLimited(s.rules))
 	mux.HandleFunc("/api/rules/defaults", s.rateLimited(s.rulesDefaults))
+	mux.HandleFunc("/api/rules/templates", s.rulesTemplates)
 	mux.HandleFunc("/api/apply", s.rateLimited(s.apply))
 	mux.HandleFunc("/api/commit", s.rateLimited(s.commit))
 	mux.HandleFunc("/api/revert", s.rateLimited(s.revert))
@@ -266,6 +267,26 @@ func (s *Server) rulesDefaults(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rs)
+}
+
+// rulesTemplates serves the curated rule-template catalog. Read-only
+// and idempotent, so it sits outside the mutate rate-limit. The LAN
+// substituted into each template comes from rules.json's current `lan`
+// field, falling back to system.DetectLAN() so a fresh install still
+// produces useful template rules instead of empty placeholders.
+func (s *Server) rulesTemplates(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	lan := ""
+	if rs, err := rules.Load(s.rulesPath); err == nil {
+		lan = rs.LAN
+	}
+	if lan == "" {
+		lan, _ = system.DetectLAN()
+	}
+	writeJSON(w, http.StatusOK, rules.Templates(lan))
 }
 
 func (s *Server) apply(w http.ResponseWriter, r *http.Request) {

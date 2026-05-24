@@ -557,6 +557,54 @@ func TestExposureReturnsArray(t *testing.T) {
 	}
 }
 
+// TestRulesTemplatesReturnsCatalog locks in the v0.3.1 catalog
+// endpoint: /api/rules/templates answers 200 with a non-empty array.
+// Each entry must carry the metadata the frontend modal expects (id,
+// name, description, rules).
+func TestRulesTemplatesReturnsCatalog(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodGet, "/api/rules/templates", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+	var got []rules.Template
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v (body=%s)", err, w.Body.String())
+	}
+	if len(got) == 0 {
+		t.Fatal("template catalog is empty")
+	}
+	for _, tmpl := range got {
+		if tmpl.ID == "" || tmpl.Name == "" || tmpl.Description == "" {
+			t.Errorf("template %q has empty metadata", tmpl.ID)
+		}
+		if len(tmpl.Rules) == 0 {
+			t.Errorf("template %q ships zero rules", tmpl.ID)
+		}
+	}
+}
+
+// TestRulesTemplatesSubstitutesPersistedLAN guards the LAN-pickup
+// branch: when rules.json already exists with a `lan` field, the
+// served catalog must use that value (not the DetectLAN fallback) so
+// a user on a non-default subnet gets templates pre-scoped to their
+// network.
+func TestRulesTemplatesSubstitutesPersistedLAN(t *testing.T) {
+	s, rulesPath := newTestServer(t, &fakeFirewall{})
+	rs := rules.RuleSet{LAN: "10.20.30.0/24", DefaultPolicy: "deny"}
+	if err := rules.Save(rulesPath, rs); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	w := do(s, http.MethodGet, "/api/rules/templates", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("10.20.30.0/24")) {
+		t.Errorf("templates did not pick up persisted LAN — body did not include 10.20.30.0/24:\n%s",
+			w.Body.String())
+	}
+}
+
 // TestEventsReturnsArray covers /api/events. events.Read calls
 // journalctl; in a test environment there will be no ZFW drop events,
 // so the response must be an empty JSON array (not null) — the UI's

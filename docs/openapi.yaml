@@ -12,7 +12,7 @@ info:
 
     Non-GET requests share a token-bucket rate-limit (burst 10, sustained
     1/s); excessive traffic is answered with `429 Too Many Requests`.
-  version: "0.3.0"
+  version: "0.3.1"
   license:
     name: See repository
 servers:
@@ -169,6 +169,25 @@ paths:
       responses:
         '200': { description: Defaults installed., content: { application/json: { schema: { $ref: '#/components/schemas/RuleSet' } } } }
         '429': { description: Rate-limited. }
+
+  /api/rules/templates:
+    get:
+      summary: Curated catalog of pre-built rule templates the UI offers in a picker. Each Template embeds Rule objects with the current LAN substituted into "from the LAN" sources.
+      responses:
+        '200':
+          description: Template catalog.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:          { type: string }
+                    name:        { type: string }
+                    description: { type: string }
+                    category:    { type: string, enum: [security, service] }
+                    rules:       { type: array, items: { $ref: '#/components/schemas/Rule' } }
 
   /api/apply:
     post:
