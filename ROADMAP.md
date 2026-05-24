@@ -1,18 +1,20 @@
 # ZFW Roadmap
 
 > Author: Holger Kuehn (Lintux)
-> Status: **v0.3.6 — the v0.4 *UX polish* phase is complete.** Every
-> v0.4 roadmap item has shipped except frontend i18n (dropped — ZFW
-> stays English-only). v0.3.6 adds the *→ Deny* quick-action to the
-> Exposure tab; the v0.4 line runs v0.3.1 (rule-templates) → v0.3.2
-> (per-rule notes) → v0.3.3 (backup/restore) → v0.3.4 (diff view) →
-> v0.3.5 (audit-findings history) → v0.3.6 (Exposure quick-deny).
-> The v0.3 phase itself closed with v0.3.0 (netns integration tests
-> + every v0.3 roadmap item shipped across v0.2.15–v0.3.0). v0.3.0
-> builds on v0.2.21's external sign-off — **Gelbuilding's 2026-05-24
-> ZimaBoard validation of v0.2.20** — and on v0.2.20's three-round
-> security review. Next phase: v0.5 (Distribution & multi-host) —
-> arm64 build, Mod-Store submission, `zpkg` self-update.
+> Status: **v0.3.7 — first v0.5 (*Distribution & multi-host*) item:
+> arm64 build.** `build.sh` loops over `ARCHES` (default
+> `amd64 arm64`) and produces one reproducible tarball per arch;
+> `install.sh` picks the right `dist/zfw-<arch>.raw` from `uname -m`.
+> Cross-compile is free (pure Go, `CGO_ENABLED=0`). The v0.4 *UX
+> polish* phase closed in v0.3.6 with the Exposure → Deny
+> quick-action; every v0.4 roadmap item shipped except frontend i18n
+> (dropped — ZFW stays English-only). The v0.3 phase itself closed
+> with v0.3.0 (netns integration tests + every v0.3 roadmap item
+> shipped across v0.2.15–v0.3.0). v0.3.0 builds on v0.2.21's external
+> sign-off — **Gelbuilding's 2026-05-24 ZimaBoard validation of
+> v0.2.20** — and on v0.2.20's three-round security review. Next
+> v0.5 items: rules.json migration helper, `zpkg` self-update,
+> multi-host rule sync (opt-in), Mod-Store submission prep.
 > English UI, intelligent default-set with live Docker inventory, reboot-persistent,
 > with a working Events / IDS-MVP tab (host + host6 + docker zones),
 > Docker-bridge bypass, the Donezo-style light-theme UI, default-deny IPv6
@@ -28,7 +30,7 @@ quality bar it raises.
 
 ---
 
-## Delivered in v0.2.7 – v0.3.6
+## Delivered in v0.2.7 – v0.3.7
 
 The v0.2 line addressed every regression and gap surfaced by the first
 external test cycle (Gelbuilding / IceWhale forum). v0.3.0 closed the
@@ -59,6 +61,7 @@ changed when.
 | **v0.2.21** | **External tester sign-off baked into the release.** README + ROADMAP carry Gelbuilding's 2026-05-24 ZimaBoard validation of v0.2.20: install, dashboard tile, Safe-Apply, Confirm, custom-port rule-edit (SSH 22 → 2222 for ttydBridge) and full reboot-persistence cycle all confirmed by an external party. Binary code identical to v0.2.20; cache-buster bumped (`?v=0.2.21` on `styles.css` / `app.js`) so the UI doesn't serve stale assets after install; `openapi.yaml` info-version bumped to match. v0.2.20 is preserved as the canonical reproducibility anchor (its tarball SHA stays the reference for the security-reviewed binary). | The first external "works as advertised on hardware I don't control" sign-off since the tester-feedback cycle began. Putting it inside the release tarball — not just in a forum reply — turns word-of-mouth into an artifact a downstream user can inspect before installing. |
 | **v0.2.22** | **Per-rule IPv6 source support** — closes the second-to-last v0.3 item. Compiler dispatches by source family: an IPv6 CIDR or single IPv6 address (`source.type` of `range` or `ip`, value `2001:db8::/64` or `2001:db8::42`) now routes to `ZFW-IN6` only and is skipped on the IPv4 chain. Pre-fix `iptables-legacy -s 2001:db8::/64` returned `Bad argument` and `set -eu` aborted the whole engine apply — an IPv6 source rule was a silent show-stopper. New `system.DetectLAN6()` resolves the host's SLAAC prefix and global IPv6 the same way `DetectLAN()` resolves IPv4 (UDP-dial trick; empty return on no-IPv6 connectivity). Three new compiler tests: `TestIPv6SourceRoutesToIPv6Chain` (range), `TestIPv6SingleSourceRoutesToIPv6Chain` (single address), `TestIPv4SourceStillRoutesToIPv4Chain` (inverse guard so the IPv6 dispatch didn't break the v4 path). Comment in `Compile()` clarified — the previous "destination-port-only mirror" wording described behaviour that did not match the code. | ZimaOS hosts get a SLAAC global address the moment a router advertises a prefix, so any user trying to scope a rule to "from my LAN" on IPv6 hit a blank wall. Closing this gap turns the IPv6 default-deny chain (v0.2.15) into something the user can actually customise per rule. |
 | **v0.3.0** | **v0.3 phase closed — netns integration tests.** New `internal/compiler/integration_test.go` (build tag `netns_integration`) drives `Compile() → bash → live iptables-legacy` inside `unshare -U -r -n` (unprivileged user+network namespace, no sudo needed). Four tests: `TestEngineApplyAllowsExpectedHostPort` (compile a host allow rule, verify the ACCEPT line lands), `TestEngineApplyPortRangeEmitsContiguousRule` (VNC 5900-5999 is one `--dport 5900:5999` line, not 100 entries), `TestEngineApplyIPv6SourceDoesNotCrashIPv4` (live counterpart to v0.2.22's unit tests — IPv6 source under `set -eu` no longer aborts the apply), `TestEngineRevertClearsAllChains` (apply→revert cycle leaves no ZFW chain behind). `requireNetns(t)` skips cleanly when iptables-legacy / unshare / unprivileged userns are absent. With this, the v0.3 exit criterion ("every endpoint has at least one test; CI green on push; release tarball reproducible byte-for-byte") is fully met. | Pre-v0.3.0 the integration was "verified by hand" on a real ZimaCube — a class of regression no unit test could catch (e.g. iptables-legacy's actual syntax for port ranges on the host kernel). Locking these down means the next refactor across compiler / engine / handlers can be reviewed by reading the diff, not by reproducing a manual ZimaCube run. |
+| **v0.3.7** | **arm64 build — first v0.5 (*Distribution & multi-host*) item.** `build.sh` now loops over the `ARCHES` env var (default `amd64 arm64`) and produces one reproducible tarball per arch — `dist/zfw-<v>-amd64.tar.gz` (ZimaBoard 1/2, ZimaCube; N3350/N3450/N100) and `dist/zfw-<v>-arm64.tar.gz` (Lattepanda/Pi-class hosts). The host's arch is auto-detected in `install.sh` via `uname -m` (`x86_64`→`amd64`, `aarch64`→`arm64`) so a source-repo install picks the right `dist/zfw-<arch>.raw` without extra flags; the in-tarball payload stays `zfw.raw` (generic name) so `install.sh` itself does not need to know about arches. Cross-compile is free — the daemon is pure Go (`CGO_ENABLED=0`, `-trimpath -buildvcs=false`) so the existing amd64 build host produces both binaries in one pass. Reproducibility holds per-arch: two clean builds of the same source produce byte-identical tarballs for each arch independently (verified locally — amd64 `0eb75059…`, arm64 `a3ededee…`, both identical across two consecutive runs). Verified binary types via `file(1)` against the unsquashfs'd raw: amd64 → `ELF 64-bit LSB executable, x86-64, statically linked`; arm64 → `ELF 64-bit LSB executable, ARM aarch64, statically linked`. The CI workflow's pre-existing arm64 cross-compile smoke job becomes redundant with this — it will be removed when the repo gets its GitHub remote and the main build path runs in CI. | First v0.5 lever. ZimaBoard 216/432/832 (N3350/N3450) and ZimaBoard 2 (N100) are all amd64 — those users were covered. But third-party hosts running ZimaOS on Lattepanda/Pi-class hardware are arm64, and previously had to compile from source. With `CGO_ENABLED=0` already set, multi-arch was a five-line refactor of `build.sh`; not shipping it was the user-hostile choice. |
 | **v0.3.6** | **Exposure → Deny quick-action — sixth v0.4 item; closes v0.4.** Each listening-port row in the Exposure tab grows a second button (`→ Deny`) next to the existing `+ Rule`. Click opens the rule editor pre-filled for a flat block of that port (`action: deny`, `source.type: any`, `ports.list: [<port>]`, `zone: auto`, name `Block port <port>`). The user still has to Save rules + Safe-Apply — the prefill just collapses a seven-field setup into two clicks. New helper `openDenyEditorForPort(port)` mirrors the existing `openRuleEditorForPort`; `renderExposure` renders both buttons with `.exp-actions` keeping them inline. New CSS for `.exp-deny` (red border on hover) signals the destructive direction. No backend change. | The Exposure tab is where a user actually *sees* an open port they did not expect — making "click → block" the same two-click loop as "click → permit" turns the tab from a read-only scoreboard into the natural place to harden posture. With this, every v0.4 roadmap item has shipped (modulo the deliberately-dropped i18n). |
 | **v0.3.5** | **Audit-findings status history — fifth v0.4 item.** New `internal/audit/history.go` adds a `History` map keyed by finding ID, with `Load` / `Save` / `Update(findings, now)` / `Attach(findings)` helpers. The handler at `/api/audit` now loads the on-disk timeline, recomputes findings against the live firewall state, appends a new `{ts, status}` row to any finding whose status differs from the previous entry, persists the file if anything changed and returns each finding wrapped in a `FindingWithHistory` with `history` always normalised to `[]` (never null — the UI iterates the slice). Per-finding cap of 20 entries prevents a flapping posture from ballooning the file. New config field `HistoryFile` (`/DATA/zfw/audit-history.json` by default), new env var `ZFW_HISTORY`. `auditMu` serialises concurrent /api/audit reads so the file write is race-free. UI renders an inline `History: open → fixed → open (since YYYY-MM-DD)` below each finding card, hidden when the posture has never flipped. Four new unit tests cover round-trip, append-on-change-only, the length cap and the attach shape; the existing `TestAuditReturnsArray` is upgraded to assert `history` is always present and non-null. | Without a timeline, the audit tab is a snapshot — the user can't tell whether "M2 dozzle: fixed" has been stable for a week or just flipped this morning. The history field is the cheapest possible posture-drift signal that does not require an external metrics store. |
 | **v0.3.4** | **Diff view, unsaved vs applied — fourth v0.4 item.** Adds a *Diff* button to the Rules-tab action row, enabled only when `rulesDirty` is true. Click opens a modal that fetches `/api/rules` (the saved snapshot) and compares it against the in-memory `ruleSet`. Each change is one row: added (green `+`, left-border green), removed (red `−`), changed (amber `~`, with before-and-after one-line summaries), plus a leading row when the default policy flipped. The summaries use the same shape across all three cases (`Allow tcp 22 from 192.168.1.0/24 [Host]`) so the user can spot a typo or zone mistake in seconds. Matching is by rule id; rules with empty `id` (added via the editor or templates, not yet saved) are always treated as additions. No new endpoint, no engine change. New helpers `ruleSignature()` (semantic equality test that excludes id/order — both legitimately differ across save cycles) and `ruleSummary()` (the one-line human form). | A "rulesDirty" badge is honest but unhelpful: a user comes back from a five-minute interruption and has no idea what they changed. Diff turns Save rules from "trust me" into "here's exactly what hits the daemon", which matters most for users who only Safe-Apply once a week and need to remember the in-flight edits. |
@@ -123,14 +126,14 @@ posture self-documenting.
 
 ---
 
-## v0.5 — Distribution & multi-host
+## v0.5 — Distribution & multi-host (IN PROGRESS — 1 of 5 shipped)
 
 Stop being a tarball-on-Maintainers-Github tool. Become discoverable, updatable,
 multi-platform.
 
 | Item | Why |
 |---|---|
-| **arm64 build** | ZimaBoard 216/432/832 (N3350/N3450) and ZimaBoard 2 (N100) are all amd64, but third-party Lattepanda/Pi-class hosts run arm64. Cheap win — already `CGO_ENABLED=0`. |
+| **arm64 build** *(shipped v0.3.7)* | `build.sh` loops over `ARCHES` (default `amd64 arm64`) and produces one reproducible tarball per arch; `install.sh` picks the right `dist/zfw-<arch>.raw` from `uname -m`. ZimaBoard 1/2 and ZimaCube stay amd64; third-party Lattepanda/Pi-class hosts can install without compiling from source. |
 | **Mod-Store submission** | PR to `IceWhaleTech/Mod-Store` → ZFW appears in the ZimaOS web UI's Module Store, 1-click install. The official distribution channel. |
 | **`zpkg` self-update** | After Mod-Store entry exists, daemon checks for new versions weekly and shows a non-blocking "v0.3 available" badge on the Versions tab. |
 | **Migration helper** | When v0.2 rules.json is read by v0.3+ daemon, auto-migrate to the new schema with a backup. Today, schema is stable; designing the migration plumbing now keeps future bumps painless. |

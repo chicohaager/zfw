@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.3.6 — see [Status](#status) for the build line.
+> **Current release:** v0.3.7 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -109,21 +109,23 @@ raw/                the sysext file tree (binary, systemd unit, manifest, static
 ## Build
 
 ```sh
-sh build.sh        # -> dist/zfw-<version>.tar.gz  (the release package)
+sh build.sh        # -> dist/zfw-<version>-<arch>.tar.gz  (per arch)
 ```
 
+Default arches: `amd64` (ZimaBoard 1/2, ZimaCube) and `arm64` (Lattepanda/Pi-class
+hosts). Override with `ARCHES="amd64" sh build.sh` to build a single arch.
 Requires `go` 1.22+ and `squashfs-tools` (`mksquashfs`). The image is packed with
 gzip — the ZimaOS kernel is built without zstd/xz squashfs support.
 
 ## Deploy
 
-`build.sh` writes a complete release package to `dist/zfw-<version>.tar.gz` —
-the `zfw.raw` module, the `zfw` engine script, `install.sh` and the docs.
-Copy it to the ZimaOS host and run the installer as root:
+`build.sh` writes one release package per arch — `dist/zfw-<version>-<arch>.tar.gz`
+contains the `zfw.raw` module, the `zfw` engine script, `install.sh` and the docs.
+Copy the matching arch to the ZimaOS host and run the installer as root:
 
 ```sh
-scp dist/zfw-<version>.tar.gz root@<host>:/tmp/
-ssh root@<host> 'cd /tmp && tar xzf zfw-<version>.tar.gz && cd zfw-* && sh install.sh'
+scp dist/zfw-<version>-amd64.tar.gz root@<host>:/tmp/   # ZimaBoard / ZimaCube
+ssh root@<host> 'cd /tmp && tar xzf zfw-<version>-amd64.tar.gz && cd zfw-* && sh install.sh'
 ```
 
 `install.sh` places the sysext module in `/var/lib/extensions/`, installs the
@@ -160,6 +162,25 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.3.7** — first **v0.5 (*Distribution & multi-host*)** item:
+**arm64 build**. `build.sh` now loops over the `ARCHES` env var
+(default `amd64 arm64`) and produces one reproducible tarball per
+arch — `dist/zfw-<v>-amd64.tar.gz` (ZimaBoard 1/2, ZimaCube;
+N3350/N3450/N100) and `dist/zfw-<v>-arm64.tar.gz` (Lattepanda/Pi-class
+hosts). `install.sh` auto-detects the host arch via `uname -m` so a
+source-repo install picks the right `dist/zfw-<arch>.raw` without
+extra flags. Both archs are pure Go (`CGO_ENABLED=0`,
+`-trimpath -buildvcs=false`) so cross-compile costs nothing on the
+existing amd64 build host. Reproducibility holds per-arch — two clean
+builds produce byte-identical tarballs (verified locally for the
+v0.3.6 → v0.3.7 cut: amd64 `0eb75059…`, arm64 `a3ededee…`, both
+identical across two runs). The arm64 binary is `ELF 64-bit ARM
+aarch64, statically linked` (verified via `file(1)` against
+unsquashfs'd `dist/zfw-arm64.raw`); the amd64 binary stays `ELF 64-bit
+x86-64, statically linked`. The CI workflow's pre-existing arm64
+cross-compile smoke job is now redundant with the main build path and
+will be removed when the repo gets its GitHub remote.
 
 **v0.3.6** — sixth (and final) v0.4 item: **Exposure-tab → Deny
 quick-action**. Each listening-port row now carries a second button
@@ -269,5 +290,6 @@ SSH, Samba shares and mDNS discovery (LAN auto-detected from the
 default route), and one additional allow-rule per Docker-published port
 discovered live on the host so running containers stay reachable.
 
-Next phase: **v0.4 — UX polish** (rule templates, per-rule notes,
-backup/restore, diff view, frontend i18n).
+Next phase work (v0.5 — *Distribution & multi-host*): arm64 build
+(shipped v0.3.7), rules.json migration helper, `zpkg` self-update
+check, multi-host rule sync (opt-in), Mod-Store submission prep.

@@ -32,9 +32,19 @@ find_file() {
 	die "$desc not found (looked in: $*)"
 }
 
-# The build bundle (dist/) keeps both payload files next to this script;
-# the source repo keeps them in dist/ and engine/. Support both layouts.
-RAW="$(find_file 'module zfw.raw' "$SELF_DIR/zfw.raw" "$SELF_DIR/dist/zfw.raw")"
+# The build bundle (dist/) keeps both payload files next to this script
+# under the generic name "zfw.raw"; the source repo dist/ keeps them
+# per-arch (zfw-amd64.raw, zfw-arm64.raw). Map the host's uname -m to the
+# Go arch the build produces so a source-repo install picks the right one.
+case "$(uname -m 2>/dev/null)" in
+	x86_64|amd64) HOST_ARCH=amd64 ;;
+	aarch64|arm64) HOST_ARCH=arm64 ;;
+	*) HOST_ARCH="$(uname -m 2>/dev/null || echo unknown)" ;;
+esac
+RAW="$(find_file 'module zfw.raw' \
+	"$SELF_DIR/zfw.raw" \
+	"$SELF_DIR/dist/zfw-$HOST_ARCH.raw" \
+	"$SELF_DIR/dist/zfw.raw")"
 ENGINE="$(find_file 'engine script zfw' "$SELF_DIR/zfw" "$SELF_DIR/engine/zfw")"
 
 # --- preflight ---
