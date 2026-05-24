@@ -302,3 +302,71 @@ func TestRuleWithoutScheduleEmitsNoTimeClause(t *testing.T) {
 	}, nil, nil)
 	mustNotContain(t, out, "-m time")
 }
+
+// TestLogTrueEmitsLogLineBeforeAction guards the v0.4.4 per-rule
+// LOG toggle: a rule with Log=true must emit a `-j LOG --log-prefix
+// "ZFW-RULE-<id> "` line in front of the action line. The LOG
+// target is non-terminating, so the action still fires.
+func TestLogTrueEmitsLogLineBeforeAction(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			ID: "rabcd1234", Order: 10, Enabled: true,
+			Name: "SSH (debug log)", Action: "allow",
+			Source:   rules.Source{Type: "range", Value: "192.168.1.0/24"},
+			Ports:    rules.Ports{Type: "list", List: []int{22}},
+			Protocol: "tcp", Zone: "host",
+			Log: true,
+		}},
+	}, nil, nil)
+	logLine := `$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -j LOG --log-prefix "ZFW-RULE-rabcd1234 " --log-level 6`
+	actLine := "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -j ACCEPT"
+	mustContain(t, out, logLine)
+	mustContain(t, out, actLine)
+	li := strings.Index(out, logLine)
+	ai := strings.Index(out, actLine)
+	if li < 0 || ai < 0 || li > ai {
+		t.Errorf("LOG line must precede ACCEPT line (li=%d ai=%d)", li, ai)
+	}
+}
+
+// TestRateLimitEmitsRecentClause guards the v0.4.4 per-rule rate-
+// limit: a rule with RateLimit{Conn,Seconds} must emit two
+// `-m recent` lines (set + update --hitcount → DROP) in front of
+// the action line, sharing the same match prefix.
+func TestRateLimitEmitsRecentClause(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			ID: "rfeed", Order: 10, Enabled: true,
+			Name: "SSH (3/s)", Action: "allow",
+			Source:   rules.Source{Type: "range", Value: "192.168.1.0/24"},
+			Ports:    rules.Ports{Type: "list", List: []int{22}},
+			Protocol: "tcp", Zone: "host",
+			RateLimit: &rules.RateLimit{Conn: 3, Seconds: 1},
+		}},
+	}, nil, nil)
+	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -m recent --set --name zrfeed")
+	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -m recent --update --seconds 1 --hitcount 3 --name zrfeed -j DROP")
+	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -j ACCEPT")
+}
+
+// TestNoLogNoRateLimitNoExtraLines guards that the v0.4.4 wrapEmit
+// refactor did not leak extra lines into rules that didn't opt in —
+// a rule without Log and without RateLimit must compile to exactly
+// the same single iptables line as pre-v0.4.4.
+func TestNoLogNoRateLimitNoExtraLines(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			ID: "rplain", Order: 10, Enabled: true,
+			Name: "SSH", Action: "allow",
+			Source:   rules.Source{Type: "range", Value: "192.168.1.0/24"},
+			Ports:    rules.Ports{Type: "list", List: []int{22}},
+			Protocol: "tcp", Zone: "host",
+		}},
+	}, nil, nil)
+	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -j ACCEPT")
+	mustNotContain(t, out, "ZFW-RULE-rplain")
+	mustNotContain(t, out, "--name zrplain")
+}

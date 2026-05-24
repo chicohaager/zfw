@@ -267,6 +267,47 @@ func TestScheduleRoundTripsThroughJSON(t *testing.T) {
 	}
 }
 
+// TestValidateAcceptsLogAndRateLimit guards the v0.4.4 fields: a rule
+// with Log=true and a sane RateLimit must pass Validate so the new UI
+// inputs work end-to-end.
+func TestValidateAcceptsLogAndRateLimit(t *testing.T) {
+	r := minimalRule()
+	r.Log = true
+	r.RateLimit = &RateLimit{Conn: 3, Seconds: 1}
+	rs := RuleSet{DefaultPolicy: "deny", Rules: []Rule{r}}
+	if err := Validate(rs); err != nil {
+		t.Fatalf("Validate rejected log + rate_limit: %v", err)
+	}
+}
+
+// TestValidateRejectsBadRateLimit guards the value caps: Conn=0 or
+// negative Seconds must be refused before the compiler ever sees them.
+func TestValidateRejectsBadRateLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rl   RateLimit
+		want string
+	}{
+		{"zero conn", RateLimit{Conn: 0, Seconds: 1}, "conn must be 1..1000"},
+		{"negative seconds", RateLimit{Conn: 3, Seconds: -1}, "seconds must be 1..3600"},
+		{"conn too big", RateLimit{Conn: 9999, Seconds: 1}, "conn must be 1..1000"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := minimalRule()
+			rl := tc.rl
+			r.RateLimit = &rl
+			rs := RuleSet{DefaultPolicy: "deny", Rules: []Rule{r}}
+			err := Validate(rs)
+			if err == nil {
+				t.Fatalf("Validate accepted RateLimit %+v, want error", tc.rl)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not mention %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
 // TestSaveStampsCurrentVersion guards that every Save() writes
 // version=CurrentSchema regardless of what the caller passed in — the
 // version field is daemon-owned, not user-owned.

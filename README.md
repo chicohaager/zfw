@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.4.3 — see [Status](#status) for the build line.
+> **Current release:** v0.4.4 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,35 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.4.4** — fourth + fifth v0.6 items: **per-rule logging toggle**
+and **rate-limit per source**, shipped together because both are
+field-additive Rule extensions with the same compiler-emit shape
+(extra match lines that share the rule's match prefix).
+`Rule.Log` (bool): the compiler emits a non-terminating `-j LOG
+--log-prefix "ZFW-RULE-<id> " --log-level 6` line in front of the
+rule's action line so matching packets appear in the Events tab
+without changing the rule's effect. `Rule.RateLimit{Conn, Seconds}`:
+two `-m recent` lines (set + update --hitcount → DROP) in front of
+the action, using a per-rule `--name z<id>` so each rule's tracking
+table is isolated. The engine preamble `modprobe`s `xt_recent` +
+`xt_time` (v0.4.3) alongside the pre-existing `xt_LOG` so all three
+modules are loaded before any rule references them. Both fields are
+omitempty pointers / bools so a rule that does not opt in
+round-trips byte-equal to a pre-v0.4.4 v2 rules.json — no schema
+bump needed. The compiler refactor extracts a `wrapEmit(match, r,
+target)` helper used by all three chain emitters (hostLines,
+hostLines6, dockerLines) so the LOG/rate-limit emit shape stays
+consistent across host/IPv6/docker zones. Five new tests: two in
+`internal/rules` (validate accepts log + rate_limit; rejects bad
+conn=0, negative seconds, conn>1000), three in `internal/compiler`
+(LOG line emitted before action with correct prefix; recent --set
++ --update lines emitted with `--name z<id>`; no leak — rules
+without log/rate-limit emit a single line unchanged). UI: two new
+controls in the rule editor — a `Log when this rule fires`
+checkbox and a `Rate-limit per source` collapsible fieldset with
+conn/seconds inputs. Both round-trip through `ruleSignature` so the
+diff view surfaces changes correctly.
 
 **v0.4.3** — third v0.6 item: **time-window rules** — and the
 **first real use** of v0.3.8's rules.json migration plumbing. Each

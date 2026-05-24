@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex">
   <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
   <title>ZFW Firewall</title>
-  <link rel="stylesheet" href="./styles.css?v=0.4.3">
+  <link rel="stylesheet" href="./styles.css?v=0.4.4">
 </head>
 <body>
   <header>
@@ -172,6 +172,16 @@
         <label class="fld">Notes <small>(optional, 256 chars max)</small>
           <textarea id="rm-notes" maxlength="256" rows="2" placeholder="Free-text — why does this rule exist? (e.g. temporary M.s_PC test, remove 2026-06-01)"></textarea>
         </label>
+        <label class="fld-check"><input id="rm-log" type="checkbox"> Log when this rule fires <small>(per-rule LOG target; appears in the Events tab)</small></label>
+        <label class="fld-check"><input id="rm-ratelimit-on" type="checkbox"> Rate-limit per source</label>
+        <div class="fld" id="rm-ratelimit-fld" hidden>
+          <div class="ratelimit-row">
+            <label class="ratelimit-num">Max conns <input id="rm-ratelimit-conn" type="number" min="1" max="1000" value="3"></label>
+            <span class="ratelimit-sep">per</span>
+            <label class="ratelimit-num"><input id="rm-ratelimit-secs" type="number" min="1" max="3600" value="1"> seconds</label>
+          </div>
+          <p class="rm-hint">Uses iptables <code>-m recent</code>. A source that exceeds the threshold is dropped until the window clears.</p>
+        </div>
         <label class="fld-check"><input id="rm-schedule-on" type="checkbox"> Time-window rule (active only during selected hours)</label>
         <div class="fld" id="rm-schedule-fld" hidden>
           <div class="schedule-row">
@@ -220,6 +230,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=0.4.3"></script>
+  <script src="./app.js?v=0.4.4"></script>
 </body>
 </html>

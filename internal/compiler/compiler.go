@@ -36,7 +36,12 @@ func Compile(rs rules.RuleSet, dockerPorts map[int]bool, geoFiles map[string]str
 	// (a) the LOG sitting right before the catch-all DROP — only packets
 	// that already failed every allow-rule are logged, and (b) journald's
 	// own RateLimitBurst.
-	b.WriteString("modprobe xt_LOG nf_log_syslog 2>/dev/null || true\n\n")
+	// xt_recent powers per-rule rate-limit (v0.4.4) and xt_time powers
+	// time-window rules (v0.4.3). Both are stock kernel modules on
+	// modern Linux; modprobe is best-effort so the apply still runs on
+	// hosts that built them in (they show as builtin and modprobe
+	// becomes a no-op).
+	b.WriteString("modprobe xt_LOG nf_log_syslog xt_recent xt_time 2>/dev/null || true\n\n")
 
 	// ---- geo country sets (ipset) ----
 	if len(geoFiles) > 0 {
@@ -197,6 +202,38 @@ func Compile(rs rules.RuleSet, dockerPorts map[int]bool, geoFiles map[string]str
 	return b.String()
 }
 
+// wrapEmit returns the iptables lines for one rule emission point:
+// optionally LOG and/or rate-limit lines sharing the match prefix, then
+// the action line itself. The match prefix is everything to the right
+// of the chain name and to the left of -j — protocol, source, ports,
+// schedule, etc. Single-call cohesion keeps host/host6/docker chains
+// from drifting on the LOG/rate-limit emit shape.
+func wrapEmit(match string, r rules.Rule, target string) []string {
+	var out []string
+	if r.RateLimit != nil && r.RateLimit.Conn > 0 && r.RateLimit.Seconds > 0 {
+		// xt_recent --name has a 32-char cap; rule IDs are short
+		// ("r12345678") so prefixing with "z" keeps us well under.
+		// Names collide only across rules sharing the same ID — which
+		// cannot happen because Validate rejects duplicates upstream.
+		name := "z" + r.ID
+		out = append(out,
+			joinArgs(match, "-m", "recent", "--set", "--name", name),
+			joinArgs(match, "-m", "recent", "--update",
+				"--seconds", strconv.Itoa(r.RateLimit.Seconds),
+				"--hitcount", strconv.Itoa(r.RateLimit.Conn),
+				"--name", name,
+				"-j", "DROP"))
+	}
+	if r.Log {
+		out = append(out, joinArgs(match,
+			"-j", "LOG",
+			"--log-prefix", `"ZFW-RULE-`+r.ID+` "`,
+			"--log-level", "6"))
+	}
+	out = append(out, joinArgs(match, "-j", target))
+	return out
+}
+
 // scheduleArg returns the iptables -m time fragment for a rule's
 // schedule, or "" when the rule has no schedule. The kernel time-zone
 // is used (--kerneltz) so HH:MM strings represent the host's wall-clock
@@ -249,14 +286,14 @@ func hostLines6(r rules.Rule, dockerPorts map[int]bool) []string {
 	var lines []string
 	if ps.All {
 		if r.Protocol == "both" {
-			lines = append(lines, joinArgs(src, sch, "-j", target))
+			lines = append(lines, wrapEmit(joinArgs(src, sch), r, target)...)
 		} else {
-			lines = append(lines, joinArgs(src, "-p", r.Protocol, sch, "-j", target))
+			lines = append(lines, wrapEmit(joinArgs(src, "-p", r.Protocol, sch), r, target)...)
 		}
 		return lines
 	}
 	for _, proto := range protoList(r.Protocol) {
-		lines = append(lines, joinArgs(src, "-p", proto, portArg(ps), sch, "-j", target))
+		lines = append(lines, wrapEmit(joinArgs(src, "-p", proto, portArg(ps), sch), r, target)...)
 	}
 	return lines
 }
@@ -323,14 +360,14 @@ func hostLines(r rules.Rule, dockerPorts map[int]bool) []string {
 	for _, src := range sourceArgs(r.Source) {
 		if ps.All {
 			if r.Protocol == "both" {
-				lines = append(lines, joinArgs(src, sch, "-j", target))
+				lines = append(lines, wrapEmit(joinArgs(src, sch), r, target)...)
 			} else {
-				lines = append(lines, joinArgs(src, "-p", r.Protocol, sch, "-j", target))
+				lines = append(lines, wrapEmit(joinArgs(src, "-p", r.Protocol, sch), r, target)...)
 			}
 			continue
 		}
 		for _, proto := range protoList(r.Protocol) {
-			lines = append(lines, joinArgs(src, "-p", proto, portArg(ps), sch, "-j", target))
+			lines = append(lines, wrapEmit(joinArgs(src, "-p", proto, portArg(ps), sch), r, target)...)
 		}
 	}
 	return lines
@@ -358,9 +395,9 @@ func dockerLines(r rules.Rule, dockerPorts map[int]bool) []string {
 	for _, src := range sourceArgs(r.Source) {
 		if ps.All {
 			if r.Protocol == "both" {
-				lines = append(lines, joinArgs(src, sch, "-j", target))
+				lines = append(lines, wrapEmit(joinArgs(src, sch), r, target)...)
 			} else {
-				lines = append(lines, joinArgs(src, "-p", r.Protocol, sch, "-j", target))
+				lines = append(lines, wrapEmit(joinArgs(src, "-p", r.Protocol, sch), r, target)...)
 			}
 			continue
 		}
@@ -369,16 +406,16 @@ func dockerLines(r rules.Rule, dockerPorts map[int]bool) []string {
 		// and a "from:to" range expression.
 		for _, proto := range protoList(r.Protocol) {
 			if ps.isRange() {
-				lines = append(lines, joinArgs(src, "-p", proto,
+				lines = append(lines, wrapEmit(joinArgs(src, "-p", proto,
 					"-m", "conntrack",
 					"--ctorigdstport", fmt.Sprintf("%d:%d", ps.From, ps.To),
-					sch, "-j", target))
+					sch), r, target)...)
 				continue
 			}
 			for _, p := range ps.List {
-				lines = append(lines, joinArgs(src, "-p", proto,
+				lines = append(lines, wrapEmit(joinArgs(src, "-p", proto,
 					"-m", "conntrack", "--ctorigdstport", strconv.Itoa(p),
-					sch, "-j", target))
+					sch), r, target)...)
 			}
 		}
 	}

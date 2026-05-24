@@ -58,6 +58,29 @@ type Rule struct {
 	// an `-m time --timestart … --timestop … --weekdays … --kerneltz`
 	// clause when a Schedule is present. Introduced in schema v2.
 	Schedule *Schedule `json:"schedule,omitempty"`
+	// Log toggles per-rule iptables LOG emission so the user can
+	// sanity-check a specific rule by watching its hits in the Events
+	// tab. Compiler emits a non-terminating `-j LOG --log-prefix
+	// "ZFW-RULE-<id> "` line in front of the rule's action line; the
+	// match still falls through to the action. omitempty so the
+	// default (no per-rule logging) stays compact on the wire.
+	// Field-additive; no schema bump.
+	Log bool `json:"log,omitempty"`
+	// RateLimit caps how many new connections the rule will pass from
+	// a given source within a sliding window. Compiler emits two
+	// `-m recent` lines (one to set, one to drop above threshold) in
+	// front of the action line. Off when nil. Field-additive; no
+	// schema bump.
+	RateLimit *RateLimit `json:"rate_limit,omitempty"`
+}
+
+// RateLimit is the per-rule connection-rate cap. At most Conn new
+// connections from one source within Seconds seconds are allowed; the
+// rest hit a DROP. Implemented via iptables `-m recent` (xt_recent —
+// available on stock kernels; the engine modprobes it before apply).
+type RateLimit struct {
+	Conn    int `json:"conn"`    // max connections in window
+	Seconds int `json:"seconds"` // window length
 }
 
 // Schedule restricts when a rule is active. From and To are wall-clock
@@ -390,6 +413,25 @@ func validateRule(r Rule) error {
 		if err := validateSchedule(*r.Schedule); err != nil {
 			return fmt.Errorf("schedule: %w", err)
 		}
+	}
+	if r.RateLimit != nil {
+		if err := validateRateLimit(*r.RateLimit); err != nil {
+			return fmt.Errorf("rate_limit: %w", err)
+		}
+	}
+	return nil
+}
+
+// validateRateLimit caps Conn/Seconds inside ranges that produce a
+// useful iptables clause without letting a crafted rules.json emit a
+// silly value (e.g. negative seconds, or hitcount in the millions that
+// hash-table-bloats xt_recent).
+func validateRateLimit(rl RateLimit) error {
+	if rl.Conn < 1 || rl.Conn > 1000 {
+		return fmt.Errorf("conn must be 1..1000 (got %d)", rl.Conn)
+	}
+	if rl.Seconds < 1 || rl.Seconds > 3600 {
+		return fmt.Errorf("seconds must be 1..3600 (got %d)", rl.Seconds)
 	}
 	return nil
 }

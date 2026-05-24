@@ -12,7 +12,7 @@ info:
 
     Non-GET requests share a token-bucket rate-limit (burst 10, sustained
     1/s); excessive traffic is answered with `429 Too Many Requests`.
-  version: "0.4.3"
+  version: "0.4.4"
   license:
     name: See repository
 servers:
@@ -75,6 +75,16 @@ components:
               type: array
               maxItems: 7
               items: { type: string, enum: [mon, tue, wed, thu, fri, sat, sun] }
+        log:
+          type: boolean
+          description: "When true, the compiler emits a non-terminating `-j LOG --log-prefix \"ZFW-RULE-<id> \" --log-level 6` line in front of the rule's action so matching packets appear in the Events tab. Field-additive (v0.4.4); no schema bump."
+        rate_limit:
+          type: object
+          nullable: true
+          description: "Per-rule connection-rate cap (v0.4.4). At most `conn` new connections from one source within `seconds` seconds; the rest hit DROP. Implemented via iptables `-m recent` (xt_recent — stock kernel module, the engine modprobes it before apply)."
+          properties:
+            conn:    { type: integer, minimum: 1, maximum: 1000, example: 3 }
+            seconds: { type: integer, minimum: 1, maximum: 3600, example: 1 }
     RuleSet:
       type: object
       properties:

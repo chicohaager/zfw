@@ -363,6 +363,8 @@ function ruleSignature(r) {
     zone: r.zone || '',
     notes: r.notes || '',
     schedule: r.schedule || null,
+    log: !!r.log,
+    rate_limit: r.rate_limit || null,
   });
 }
 
@@ -563,6 +565,15 @@ function openRuleEditor(rule) {
   $('#rm-zone').value = r.zone || 'auto';
   $('#rm-enabled').checked = r.enabled !== false;
   $('#rm-notes').value = r.notes || '';
+  // v0.4.4 advanced fields. Per-rule log: simple checkbox. Per-rule
+  // rate-limit: collapsible fieldset with conn/seconds inputs that
+  // round-trip the RateLimit pointer.
+  $('#rm-log').checked = !!r.log;
+  const rl = r.rate_limit || null;
+  $('#rm-ratelimit-on').checked = !!rl;
+  $('#rm-ratelimit-fld').hidden = !rl;
+  $('#rm-ratelimit-conn').value = (rl && rl.conn) || 3;
+  $('#rm-ratelimit-secs').value = (rl && rl.seconds) || 1;
   // Schedule: load the optional time-window into the fieldset; an
   // absent schedule means always-on (the checkbox stays unchecked
   // and the fieldset stays collapsed).
@@ -672,6 +683,23 @@ function saveRuleFromEditor() {
   if (porttype === 'range') { portsObj.from = portFrom; portsObj.to = portTo; }
   const notes = $('#rm-notes').value.trim();
   if (notes.length > 256) return modalError('Notes are capped at 256 characters.');
+  // v0.4.4 advanced fields. Same nil-pointer contract as Schedule:
+  // only attach when the user opted in, so existing rules stay
+  // byte-equal on the wire after a save-roundtrip with no edits to
+  // these fields.
+  const logOn = $('#rm-log').checked;
+  let rateLimit = null;
+  if ($('#rm-ratelimit-on').checked) {
+    const conn = Number($('#rm-ratelimit-conn').value);
+    const secs = Number($('#rm-ratelimit-secs').value);
+    if (!Number.isInteger(conn) || conn < 1 || conn > 1000) {
+      return modalError('Rate-limit: max conns must be 1–1000.');
+    }
+    if (!Number.isInteger(secs) || secs < 1 || secs > 3600) {
+      return modalError('Rate-limit: seconds must be 1–3600.');
+    }
+    rateLimit = { conn, seconds: secs };
+  }
   // Schedule: only attached when the checkbox is on, so existing
   // rules without a window stay schedule-less on the wire (matches
   // the backend's omitempty + nil-pointer contract).
@@ -696,6 +724,8 @@ function saveRuleFromEditor() {
     zone: $('#rm-zone').value,
     notes,
   };
+  if (logOn) rule.log = true;
+  if (rateLimit) rule.rate_limit = rateLimit;
   if (schedule) rule.schedule = schedule;
   if (editingRuleId) {
     const i = ruleIndex(editingRuleId);
@@ -717,6 +747,9 @@ $('#rm-save').addEventListener('click', saveRuleFromEditor);
 $('#rm-srctype').addEventListener('change', updateModalFields);
 $('#rm-schedule-on').addEventListener('change', e => {
   $('#rm-schedule-fld').hidden = !e.target.checked;
+});
+$('#rm-ratelimit-on').addEventListener('change', e => {
+  $('#rm-ratelimit-fld').hidden = !e.target.checked;
 });
 $('#rm-porttype').addEventListener('change', updateModalFields);
 $('#rule-modal').addEventListener('click', e => {
