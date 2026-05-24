@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -107,6 +108,30 @@ func do(s *Server, method, path string, body any) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	s.Routes().ServeHTTP(w, r)
 	return w
+}
+
+// doRaw sends raw bytes as the request body, bypassing JSON marshalling.
+// Used by malformed-input tests that need to exercise the decoder's
+// failure path.
+func doRaw(s *Server, method, path string, body []byte) *httptest.ResponseRecorder {
+	r := httptest.NewRequest(method, path, bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	if method != http.MethodGet {
+		r.Header.Set("Origin", "http://"+r.Host)
+	}
+	w := httptest.NewRecorder()
+	s.Routes().ServeHTTP(w, r)
+	return w
+}
+
+// seedRules writes a minimal valid RuleSet to rulesPath so apply-path tests
+// can pass the Recompile step without depending on the on-disk defaults.
+func seedRules(t *testing.T, path string) {
+	t.Helper()
+	rs := rules.RuleSet{DefaultPolicy: "deny"}
+	if err := rules.Save(path, rs); err != nil {
+		t.Fatalf("seedRules: %v", err)
+	}
 }
 
 func TestHealthReportsVersion(t *testing.T) {
@@ -299,5 +324,254 @@ func TestOpenAPISpecServed(t *testing.T) {
 				t.Errorf("%s: spec missing %q", p, must)
 			}
 		}
+	}
+}
+
+// TestApplyRejectsMalformedJSON locks in the ZFW-S3 guard: the apply
+// handler must NOT silently fall back to safe=false when the request body
+// is malformed JSON — that would deploy rules without the 120 s dead-man
+// timer. The handler must reject the request with 400 and not touch the
+// firewall.
+func TestApplyRejectsMalformedJSON(t *testing.T) {
+	fw := &fakeFirewall{}
+	s, _ := newTestServer(t, fw)
+	w := doRaw(s, http.MethodPost, "/api/apply", []byte(`{"safe": tru`))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got HTTP %d (body=%s), want 400", w.Code, w.Body.String())
+	}
+	if fw.applyCalls != 0 {
+		t.Errorf("Apply() called %d times on malformed body, want 0", fw.applyCalls)
+	}
+}
+
+// TestApplyHappyPath drives a successful Safe-Apply end-to-end: a valid
+// rule set is seeded on disk, the handler recompiles it, calls
+// fw.Apply(ctx, safe=true) exactly once and writes the compiled script.
+func TestApplyHappyPath(t *testing.T) {
+	fw := &fakeFirewall{applyOut: "applied 0 rules"}
+	s, rulesPath := newTestServer(t, fw)
+	seedRules(t, rulesPath)
+
+	w := do(s, http.MethodPost, "/api/apply", map[string]bool{"safe": true})
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+	if fw.applyCalls != 1 {
+		t.Errorf("Apply() called %d times, want 1", fw.applyCalls)
+	}
+	if _, err := os.Stat(s.compiledPath); err != nil {
+		t.Errorf("compiled.sh not written: %v", err)
+	}
+}
+
+// TestApplyEngineErrorBubblesUp guards the 500-path: when the engine
+// fails (e.g. iptables-restore exits non-zero) the handler must surface
+// a clear error to the UI instead of pretending the apply worked.
+func TestApplyEngineErrorBubblesUp(t *testing.T) {
+	fw := &fakeFirewall{applyErr: errors.New("iptables-restore: line 7 failed")}
+	s, rulesPath := newTestServer(t, fw)
+	seedRules(t, rulesPath)
+
+	w := do(s, http.MethodPost, "/api/apply", map[string]bool{"safe": true})
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("got HTTP %d (body=%s), want 500", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("iptables-restore")) {
+		t.Errorf("error body missing engine output: %s", w.Body.String())
+	}
+}
+
+// TestRulesPostSavesAndRecompiles covers the v0.2 rule-model POST: a
+// valid RuleSet must be written to disk and the compiled script
+// regenerated in one atomic flow.
+func TestRulesPostSavesAndRecompiles(t *testing.T) {
+	s, rulesPath := newTestServer(t, &fakeFirewall{})
+	rs := rules.RuleSet{DefaultPolicy: "deny"}
+
+	w := do(s, http.MethodPost, "/api/rules", rs)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(rulesPath); err != nil {
+		t.Errorf("rules.json not written: %v", err)
+	}
+	if _, err := os.Stat(s.compiledPath); err != nil {
+		t.Errorf("compiled.sh not written: %v", err)
+	}
+}
+
+// TestRulesPostRejectsMalformedJSON locks in the decoder guard on the
+// rule-model POST. A truncated body must return 400 and leave the
+// on-disk rule set untouched.
+func TestRulesPostRejectsMalformedJSON(t *testing.T) {
+	s, rulesPath := newTestServer(t, &fakeFirewall{})
+	w := doRaw(s, http.MethodPost, "/api/rules", []byte(`{"default_policy":`))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got HTTP %d (body=%s), want 400", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(rulesPath); err == nil {
+		t.Errorf("rules.json was written despite malformed body")
+	}
+}
+
+// TestRulesPostRejectsInvalidRuleSet locks in the Validate gate: a
+// well-formed JSON document that fails domain validation (bogus default
+// policy) must be refused before touching the engine.
+func TestRulesPostRejectsInvalidRuleSet(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	w := doRaw(s, http.MethodPost, "/api/rules",
+		[]byte(`{"default_policy":"maybe"}`))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got HTTP %d (body=%s), want 400", w.Code, w.Body.String())
+	}
+}
+
+// TestRulesDefaultsSeedsStarter locks in the v0.2.9/v0.2.10 fresh-install
+// seed flow: POST /api/rules/defaults regenerates the starter rule set
+// (deny-default plus baseline allow-rules) and persists it.
+func TestRulesDefaultsSeedsStarter(t *testing.T) {
+	s, rulesPath := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodPost, "/api/rules/defaults", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+	var rs rules.RuleSet
+	if err := json.Unmarshal(w.Body.Bytes(), &rs); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if rs.DefaultPolicy != "deny" {
+		t.Errorf("default_policy=%q, want deny", rs.DefaultPolicy)
+	}
+	if _, err := os.Stat(rulesPath); err != nil {
+		t.Errorf("rules.json not written: %v", err)
+	}
+}
+
+// TestCommitHappyPath: POST /api/commit must drive fw.Commit() exactly
+// once and return the engine's output untouched.
+func TestCommitHappyPath(t *testing.T) {
+	fw := &fakeFirewall{commitOut: "boot-persistence enabled"}
+	s, _ := newTestServer(t, fw)
+	w := do(s, http.MethodPost, "/api/commit", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+	if fw.commitCalls != 1 {
+		t.Errorf("Commit() called %d times, want 1", fw.commitCalls)
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("boot-persistence enabled")) {
+		t.Errorf("response missing engine output: %s", w.Body.String())
+	}
+}
+
+// TestCommitEngineErrorBubblesUp guards the 500-path on commit — a
+// failed `systemctl enable` (R3-3) must reach the UI instead of being
+// silently swallowed.
+func TestCommitEngineErrorBubblesUp(t *testing.T) {
+	fw := &fakeFirewall{commitErr: errors.New("systemctl: read-only fs")}
+	s, _ := newTestServer(t, fw)
+	w := do(s, http.MethodPost, "/api/commit", nil)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("got HTTP %d (body=%s), want 500", w.Code, w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("read-only fs")) {
+		t.Errorf("error body missing engine output: %s", w.Body.String())
+	}
+}
+
+// TestRevertHappyPath: POST /api/revert must drive fw.Revert() exactly
+// once.
+func TestRevertHappyPath(t *testing.T) {
+	fw := &fakeFirewall{revertOut: "reverted to last good state"}
+	s, _ := newTestServer(t, fw)
+	w := do(s, http.MethodPost, "/api/revert", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+	if fw.revertCalls != 1 {
+		t.Errorf("Revert() called %d times, want 1", fw.revertCalls)
+	}
+}
+
+// TestConfigPostSaves covers the legacy v0.1 /api/config endpoint kept
+// for compatibility: a valid Config must reach fw.SaveConfig.
+func TestConfigPostSaves(t *testing.T) {
+	fw := &fakeFirewall{}
+	s, _ := newTestServer(t, fw)
+	cfg := firewall.Config{HostTCPLAN: []string{"22"}}
+	w := do(s, http.MethodPost, "/api/config", cfg)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+	if fw.saveCalls != 1 {
+		t.Errorf("SaveConfig() called %d times, want 1", fw.saveCalls)
+	}
+}
+
+// TestVersionsReturnsArray asserts the contract: /api/versions answers
+// 200 with a JSON array. The exact contents depend on the host (kernel,
+// iptables, Docker versions) so the test only fixes the shape — the
+// goal is endpoint coverage, not host introspection.
+func TestVersionsReturnsArray(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodGet, "/api/versions", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+	var got []any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("response is not a JSON array: %v (body=%s)", err, w.Body.String())
+	}
+}
+
+// TestAuditReturnsArray covers the Audit-tab endpoint: an empty config
+// plus an inactive firewall must still produce a JSON array (the audit
+// catalogue is static, only the per-finding status varies).
+func TestAuditReturnsArray(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodGet, "/api/audit", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+	var got []any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("response is not a JSON array: %v (body=%s)", err, w.Body.String())
+	}
+	if len(got) == 0 {
+		t.Errorf("audit findings array is empty — catalogue should have entries")
+	}
+}
+
+// TestExposureReturnsArray covers /api/exposure. The handler reads live
+// listening sockets via `ss`, so the array content depends on the test
+// host — only the shape is asserted.
+func TestExposureReturnsArray(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodGet, "/api/exposure", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+	var got []any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("response is not a JSON array: %v (body=%s)", err, w.Body.String())
+	}
+}
+
+// TestEventsReturnsArray covers /api/events. events.Read calls
+// journalctl; in a test environment there will be no ZFW drop events,
+// so the response must be an empty JSON array (not null) — the UI's
+// table rendering relies on iterating a non-nil slice.
+func TestEventsReturnsArray(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodGet, "/api/events", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
+	}
+	if bytes.Equal(bytes.TrimSpace(w.Body.Bytes()), []byte("null")) {
+		t.Errorf("events: returned null, want [] (UI iterates the slice)")
+	}
+	var got []any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("response is not a JSON array: %v (body=%s)", err, w.Body.String())
 	}
 }
