@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.5.0 — see [Status](#status) for the build line.
+> **Current release:** v0.5.1 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,26 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.5.1** — hotfix on top of v0.5.0. Two robustness fixes after a
+live-test report from lan-host that the **Events**, **Connections** and
+**Versions** tabs stuck on "Loading…" with nothing in the console.
+Root cause: a single failure anywhere in the tab-load chain threw
+to `refreshAll()`'s outer `try/catch`, which surfaced the error in
+the status bar but skipped every subsequent tab — and on a host
+where one new endpoint returned an unexpected shape (null / {} /
+non-array), the per-tab renderers tried `.filter` / `.map` /
+`.length` on it and tripped a silent TypeError. Two fixes: (1) new
+`runTab(name, fn)` helper wraps each load in its own `try/catch`
+plus `console.error` so a faulty tab no longer cascades — every
+other tab renders normally and the failing tab name surfaces in
+the status bar and DevTools console. (2) defensive
+`Array.isArray()` coerce in `loadEvents` / `loadConntrack` /
+`loadVersions` so a malformed endpoint response degrades to "no
+data" rather than throwing. The `/api/geo/lookup` consumer also
+coerces non-object responses to `{}`. No backend change — the
+underlying handlers already emit `[]` for empty data; this just
+hardens the client against the possibility.
 
 **v0.5.0** — the **v0.6 (*Intrusion detection & state*) phase is
 complete**. Final piece: **connection-state visibility** — a live

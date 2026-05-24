@@ -929,7 +929,13 @@ async function loadEvents() {
   // honest enough for an at-a-glance signal).
   const nowMs = Date.now();
   const since24 = Math.floor(nowMs / 1000) - 86400;
-  const all = await api('/events?since=' + since24 + '&limit=5000');
+  // Defensive coerce (v0.5.1): api() returns {} on parse failure and
+  // null when the server emits a JSON literal `null`. Treat anything
+  // non-array as "no events" rather than letting `.filter` /
+  // `.map` throw a TypeError that the tab-level try/catch then
+  // silently swallows.
+  const raw = await api('/events?since=' + since24 + '&limit=5000');
+  const all = Array.isArray(raw) ? raw : [];
 
   // Sparkline: 144 buckets × 10 minutes covering the last 24h.
   const bucketMs = 10 * 60 * 1000;
@@ -954,7 +960,8 @@ async function loadEvents() {
     const uniq = [...new Set(recent.map(e => e.source).filter(Boolean))];
     if (uniq.length > 0) {
       try {
-        countryByIP = await api('/geo/lookup?ips=' + uniq.map(encodeURIComponent).join(','));
+        const got = await api('/geo/lookup?ips=' + uniq.map(encodeURIComponent).join(','));
+        if (got && typeof got === 'object' && !Array.isArray(got)) countryByIP = got;
       } catch (_) { /* silent — flags are best-effort */ }
     }
   }
@@ -1028,7 +1035,8 @@ async function loadEvents() {
 
 /* ---------- conntrack ---------- */
 async function loadConntrack() {
-  const d = await api('/conntrack');
+  const raw = await api('/conntrack');
+  const d = Array.isArray(raw) ? raw : [];
   if (!d.length) {
     $('#conntrack-list').innerHTML = '<div class="loading">No active connections, or the kernel conntrack module is not available on this host.</div>';
     return;
@@ -1062,7 +1070,8 @@ async function loadConntrack() {
 
 /* ---------- versions ---------- */
 async function loadVersions() {
-  const d = await api('/versions');
+  const raw = await api('/versions');
+  const d = Array.isArray(raw) ? raw : [];
   // Self-update check: pull the cached status (the daemon polls weekly,
   // this just reads its in-memory snapshot). Render a non-blocking
   // "vX available" banner at the top of the tab when an upgrade exists.
@@ -1089,20 +1098,31 @@ async function loadVersions() {
 }
 
 /* ---------- init ---------- */
+// runTab isolates one tab's load behind its own try/catch so a throw in
+// one renderer cannot stop the rest of the chain from running — the
+// pre-v0.5.1 single try/catch in refreshAll() meant a single faulty load
+// left every subsequent tab stuck on "Loading…" without surfacing the
+// error anywhere visible. console.error makes the throw inspectable
+// in DevTools while setStatus tells the user which tab fell over.
+async function runTab(name, fn) {
+  try {
+    await fn();
+  } catch (e) {
+    console.error('[zfw] tab "' + name + '" failed:', e);
+    setStatus('Error in ' + name + ': ' + e.message, 'err');
+  }
+}
+
 async function refreshAll() {
   setStatus('Loading…');
-  try {
-    await loadFirewall();
-    await loadRules();
-    await loadExposure();
-    await loadEvents();
-    await loadConntrack();
-    await loadAudit();
-    await loadVersions();
-    setStatus('');
-  } catch (e) {
-    setStatus('Error: ' + e.message, 'err');
-  }
+  await runTab('firewall',  loadFirewall);
+  await runTab('rules',     loadRules);
+  await runTab('exposure',  loadExposure);
+  await runTab('events',    loadEvents);
+  await runTab('conntrack', loadConntrack);
+  await runTab('audit',     loadAudit);
+  await runTab('versions',  loadVersions);
+  if (($('#status').textContent || '') === 'Loading…') setStatus('');
 }
 
 $('#refresh-btn').addEventListener('click', refreshAll);
