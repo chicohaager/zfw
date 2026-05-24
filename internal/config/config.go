@@ -20,6 +20,8 @@ type Config struct {
 	DataDir        string // module state directory
 	JWKSURL        string // ZimaOS JWKS endpoint for session-token validation
 	UpdateURL      string // optional manifest URL polled for new releases; empty disables the check
+	PeersFile      string // opt-in peers list for multi-host rule sync (leader-side)
+	PeerToken      string // shared bearer accepted by /api/peers/receive (follower-side); empty disables inbound receive
 }
 
 func env(k, def string) string {
@@ -46,5 +48,7 @@ func Load() Config {
 		DataDir:        env("DATA_DIR", "/DATA/AppData/zfw"),
 		JWKSURL:        env("ZFW_JWKS_URL", "http://127.0.0.1:37815/.well-known/jwks.json"),
 		UpdateURL:      env("ZFW_UPDATE_URL", ""),
+		PeersFile:      env("ZFW_PEERS", "/DATA/zfw/peers.json"),
+		PeerToken:      env("ZFW_PEER_TOKEN", ""),
 	}
 }

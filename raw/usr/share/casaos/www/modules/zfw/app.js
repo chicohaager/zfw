@@ -163,6 +163,7 @@ function renderRules() {
       <input type="file" id="restore-file" accept="application/json,.json" hidden>
       <button id="btn-diff-rules" class="btn-secondary" ${rulesDirty ? '' : 'disabled'} title="Show what Save rules will change vs the currently saved rules.json">Diff</button>
       <button id="btn-save-rules" class="btn-secondary${rulesDirty ? ' dirty' : ''}">Save rules</button>
+      <button id="btn-push-peers" class="btn-secondary" hidden title="Push the currently saved rules.json to every configured follower host (multi-host sync, opt-in)">Push to peers</button>
       <span class="save-hint"${rulesDirty ? '' : ' hidden'}>unsaved changes — save, then Safe-Apply on the Firewall tab</span>
     </div>
     <table class="tbl rules-tbl"><thead><tr>
@@ -185,6 +186,19 @@ function wireRules() {
   $('#restore-file').addEventListener('change', restoreRulesFromFile);
   $('#btn-diff-rules').addEventListener('click', openDiffView);
   $('#btn-save-rules').addEventListener('click', saveRules);
+  $('#btn-push-peers').addEventListener('click', pushToPeers);
+  // Multi-host sync is opt-in: surface the button only when peers.json has
+  // entries. A daemon with no peers configured returns []; the button
+  // stays hidden so a fresh install never sees it.
+  api('/peers').then(ps => {
+    if (Array.isArray(ps) && ps.length > 0) {
+      const btn = $('#btn-push-peers');
+      if (btn) {
+        btn.hidden = false;
+        btn.title = `Push the currently saved rules.json to ${ps.length} configured follower host${ps.length === 1 ? '' : 's'} (${ps.map(p => p.name).join(', ')})`;
+      }
+    }
+  }).catch(() => { /* silent — peers is best-effort */ });
   $$('#rules-panel tbody tr[data-id]').forEach(tr => {
     const id = tr.dataset.id;
     tr.querySelectorAll('[data-act]').forEach(el => {
@@ -481,6 +495,37 @@ async function saveRules() {
     await loadRules();
   } catch (e) {
     setStatus('Error: ' + e.message, 'err');
+  }
+}
+
+// pushToPeers fans out the currently saved rules.json to every configured
+// follower via /api/peers/push. The endpoint reads rules.json off disk
+// itself — so a user with unsaved local changes pushes the LAST SAVED
+// set, not their in-flight edits. The result is one row per peer (ok or
+// error string), surfaced via a status message rather than a modal so
+// it stays consistent with the other action-row buttons.
+async function pushToPeers() {
+  const ps = await api('/peers').catch(() => []);
+  if (!ps || ps.length === 0) {
+    setStatus('No peers configured — set ZFW_PEERS to a peers.json file', 'err');
+    return;
+  }
+  if (!confirm(`Push the currently saved rules.json to ${ps.length} peer${ps.length === 1 ? '' : 's'}?\n\n` +
+               ps.map(p => `• ${p.name} (${p.url})`).join('\n') + '\n\n' +
+               'Each peer must still Safe-Apply afterwards.')) return;
+  setStatus(`Pushing rules to ${ps.length} peer${ps.length === 1 ? '' : 's'}…`);
+  try {
+    const results = await api('/peers/push', { method: 'POST' });
+    const ok = results.filter(r => r.ok).map(r => r.name);
+    const fail = results.filter(r => !r.ok);
+    let msg = '';
+    if (ok.length > 0) msg += `Pushed to: ${ok.join(', ')}. `;
+    if (fail.length > 0) {
+      msg += `Failed: ${fail.map(r => `${r.name} (${r.error || `HTTP ${r.code}`})`).join('; ')}.`;
+    }
+    setStatus(msg || 'Done.', fail.length === 0 ? 'ok' : 'err');
+  } catch (e) {
+    setStatus('Push failed: ' + e.message, 'err');
   }
 }
 

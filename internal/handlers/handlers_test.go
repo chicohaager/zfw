@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"github.com/chicohaager/zfw/internal/firewall"
+	"github.com/chicohaager/zfw/internal/peers"
 	"github.com/chicohaager/zfw/internal/rules"
 	"github.com/chicohaager/zfw/internal/update"
 )
@@ -89,7 +90,7 @@ func newTestServer(t *testing.T, fw *fakeFirewall) (*Server, string) {
 	compiledPath := filepath.Join(dir, "compiled.sh")
 	geoDir := filepath.Join(dir, "geo")
 	historyPath := filepath.Join(dir, "audit-history.json")
-	return NewServer(fw, rulesPath, compiledPath, geoDir, historyPath, nil), rulesPath
+	return NewServer(fw, rulesPath, compiledPath, geoDir, historyPath, nil, "", ""), rulesPath
 }
 
 // do drives a single request through the Server's mux and returns the
@@ -661,7 +662,7 @@ func TestUpdateEndpointReturnsCheckerSnapshot(t *testing.T) {
 
 	chk := update.New("0.3.9", manifest.URL)
 	chk.CheckOnce(context.Background())
-	s := NewServer(&fakeFirewall{}, rulesPath, compiledPath, geoDir, historyPath, chk)
+	s := NewServer(&fakeFirewall{}, rulesPath, compiledPath, geoDir, historyPath, chk, "", "")
 
 	w := do(s, http.MethodGet, "/api/update", nil)
 	if w.Code != http.StatusOK {
@@ -679,6 +680,154 @@ func TestUpdateEndpointReturnsCheckerSnapshot(t *testing.T) {
 	}
 	if got.Notes != "future v0.5 capstone" {
 		t.Errorf("Notes = %q, want %q", got.Notes, "future v0.5 capstone")
+	}
+}
+
+// newTestServerWithPeers constructs a Server with the peers leader/follower
+// paths plumbed in. tokens may be empty to exercise the disabled branches.
+func newTestServerWithPeers(t *testing.T, fw *fakeFirewall, peersList []peers.Peer, peerToken string) (*Server, string) {
+	t.Helper()
+	dir := t.TempDir()
+	rulesPath := filepath.Join(dir, "rules.json")
+	compiledPath := filepath.Join(dir, "compiled.sh")
+	geoDir := filepath.Join(dir, "geo")
+	historyPath := filepath.Join(dir, "audit-history.json")
+	peersPath := ""
+	if peersList != nil {
+		peersPath = filepath.Join(dir, "peers.json")
+		b, _ := json.Marshal(peersList)
+		if err := os.WriteFile(peersPath, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return NewServer(fw, rulesPath, compiledPath, geoDir, historyPath, nil, peersPath, peerToken), rulesPath
+}
+
+// TestPeersListStripsTokens guards the UI-facing list contract: tokens
+// configured in peers.json must NEVER appear in the GET /api/peers
+// response — even if the file mode were ever wrong, the API layer
+// keeps the secret in-process.
+func TestPeersListStripsTokens(t *testing.T) {
+	ps := []peers.Peer{{Name: "zima-2", URL: "http://example/2", Token: "leaks-bad"}}
+	s, _ := newTestServerWithPeers(t, &fakeFirewall{}, ps, "")
+	w := do(s, http.MethodGet, "/api/peers", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d, want 200", w.Code)
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("leaks-bad")) {
+		t.Fatalf("peers list leaked a token in the response: %s", w.Body.String())
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("zima-2")) {
+		t.Errorf("peers list missing the peer name: %s", w.Body.String())
+	}
+}
+
+// TestPeersListEmptyWhenUnconfigured guards the unconfigured branch:
+// a daemon with no peersPath must still respond 200 with an empty
+// array so the UI's `if (peers.length === 0)` works on a fresh
+// install without a phantom 404 or 500.
+func TestPeersListEmptyWhenUnconfigured(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodGet, "/api/peers", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d, want 200", w.Code)
+	}
+	var got []any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body not a JSON array: %v (body=%s)", err, w.Body.String())
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d peers, want 0", len(got))
+	}
+}
+
+// TestPeersPushWithNoPeersReturnsEmptyResults guards the leader-with-no-
+// peers branch: pushing an empty set must return 200 with [] so the UI
+// can show a "no peers configured" notice instead of an error.
+func TestPeersPushWithNoPeersReturnsEmptyResults(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodPost, "/api/peers/push", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d, want 200", w.Code)
+	}
+	var got []any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body not a JSON array: %v (body=%s)", err, w.Body.String())
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d results, want 0", len(got))
+	}
+}
+
+// TestPeersReceiveDisabledReturns403 guards the follower-disabled branch:
+// when ZFW_PEER_TOKEN is unset, /api/peers/receive must refuse every
+// request unconditionally — never become reachable by accident from a
+// fresh install.
+func TestPeersReceiveDisabledReturns403(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodPost, "/api/peers/receive", rules.RuleSet{DefaultPolicy: "deny"})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("got HTTP %d, want 403 (body=%s)", w.Code, w.Body.String())
+	}
+}
+
+// TestPeersReceiveRejectsWrongToken guards the auth path: a
+// configured follower must reject a request whose Bearer does not
+// match the shared token.
+func TestPeersReceiveRejectsWrongToken(t *testing.T) {
+	s, _ := newTestServerWithPeers(t, &fakeFirewall{}, nil, "s3cret")
+	body, _ := json.Marshal(rules.RuleSet{DefaultPolicy: "deny"})
+	req := httptest.NewRequest(http.MethodPost, "/api/peers/receive", bytes.NewReader(body))
+	req.Header.Set("Origin", "http://example.com")
+	req.Header.Set("Host", "example.com")
+	req.Host = "example.com"
+	req.Header.Set("Authorization", "Bearer wrong-token")
+	rec := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("got HTTP %d, want 401 (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
+// TestPeersReceiveHappyPath guards the leader→follower handshake: a
+// correctly-tokenised POST with a valid rule set must save the rules
+// to disk and recompile. fakeFirewall ignores the recompile output
+// path (it goes through the Recompile method which writes a script
+// file — that's the on-disk effect we assert).
+func TestPeersReceiveHappyPath(t *testing.T) {
+	fw := &fakeFirewall{}
+	s, rulesPath := newTestServerWithPeers(t, fw, nil, "s3cret")
+	body, _ := json.Marshal(rules.RuleSet{
+		LAN:           "192.168.1.0/24",
+		DefaultPolicy: "deny",
+		Rules: []rules.Rule{
+			{
+				ID:       "rcafefeed",
+				Name:     "from-leader",
+				Action:   "allow",
+				Source:   rules.Source{Type: "any"},
+				Ports:    rules.Ports{Type: "list", List: []int{22}},
+				Protocol: "tcp",
+				Zone:     "host",
+			},
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/peers/receive", bytes.NewReader(body))
+	req.Header.Set("Origin", "http://example.com")
+	req.Host = "example.com"
+	req.Header.Set("Authorization", "Bearer s3cret")
+	rec := httptest.NewRecorder()
+	s.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+	// rules.json must now contain the leader's payload.
+	rs, err := rules.Load(rulesPath)
+	if err != nil {
+		t.Fatalf("rules.Load after receive: %v", err)
+	}
+	if len(rs.Rules) != 1 || rs.Rules[0].Name != "from-leader" {
+		t.Errorf("rules.json after receive: %+v, want one rule named from-leader", rs)
 	}
 }
 

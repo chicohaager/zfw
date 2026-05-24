@@ -12,7 +12,7 @@ info:
 
     Non-GET requests share a token-bucket rate-limit (burst 10, sustained
     1/s); excessive traffic is answered with `429 Too Many Requests`.
-  version: "0.3.9"
+  version: "0.3.10"
   license:
     name: See repository
 servers:
@@ -130,6 +130,21 @@ components:
         port:     { type: integer }
         protocol: { type: string, enum: [tcp, udp, icmp] }
         zone:     { type: string, enum: [host, host6, docker] }
+    Peer:
+      type: object
+      description: "A configured follower host (token-stripped view served to the UI)."
+      properties:
+        name: { type: string, example: "zima-2" }
+        url:  { type: string, example: "http://192.168.50.27:8489/api/peers/receive" }
+    PeerResult:
+      type: object
+      description: "Per-peer outcome of a /api/peers/push fanout."
+      properties:
+        name:  { type: string }
+        url:   { type: string }
+        ok:    { type: boolean }
+        code:  { type: integer, description: "HTTP status returned by the peer; 0 if the request never completed." }
+        error: { type: string, description: "Network/HTTP error from this peer; empty on success." }
     UpdateStatus:
       type: object
       description: "Cached self-update check. The daemon polls a configurable manifest URL (ZFW_UPDATE_URL, opt-in) once per week; the UI reads this endpoint and shows a non-blocking 'vX available' badge when Available is true. A nil-URL daemon still serves this endpoint — only Current is set."
@@ -270,6 +285,44 @@ paths:
           content:
             application/json:
               schema: { type: array, items: { $ref: '#/components/schemas/Component' } }
+
+  /api/peers:
+    get:
+      summary: List configured follower peers (token-stripped). Empty array when peers.json is missing or empty — the multi-host sync is opt-in.
+      responses:
+        '200':
+          description: Peer list.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Peer' } }
+
+  /api/peers/push:
+    post:
+      summary: Push the currently saved rules.json to every configured follower's /api/peers/receive endpoint. Returns per-peer Result entries in the same order as peers.json.
+      responses:
+        '200':
+          description: Per-peer fanout outcome.
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/PeerResult' } }
+        '400': { description: "No rules saved yet on the leader (UI: 'open the Rules tab, add a rule and click Save')." }
+        '429': { description: Rate-limited. }
+
+  /api/peers/receive:
+    post:
+      summary: "Inbound rules push from a leader host. Authentication is a shared bearer (ZFW_PEER_TOKEN) instead of the ZimaOS JWT — the leader has no follower-side session. Returns 403 when the receiver has no ZFW_PEER_TOKEN configured (opt-in)."
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RuleSet' }
+      responses:
+        '200': { description: Rules accepted, saved and recompiled. }
+        '400': { description: "Invalid JSON or validation error." }
+        '401': { description: "Bearer missing or does not match ZFW_PEER_TOKEN." }
+        '403': { description: "Peer-receive disabled (ZFW_PEER_TOKEN unset on this host)." }
 
   /api/update:
     get:

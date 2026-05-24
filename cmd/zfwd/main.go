@@ -74,7 +74,7 @@ func main() {
 	// (no outbound HTTP from a fresh install). Run loop starts after main's
 	// signal-aware context is constructed below.
 	upd := update.New(buildinfo.Version, cfg.UpdateURL)
-	srv := handlers.NewServer(fw, cfg.RulesFile, cfg.CompiledFile, cfg.GeoDir, cfg.HistoryFile, upd)
+	srv := handlers.NewServer(fw, cfg.RulesFile, cfg.CompiledFile, cfg.GeoDir, cfg.HistoryFile, upd, cfg.PeersFile, cfg.PeerToken)
 
 	// v0.2 rule model: migrate the legacy allowlist.conf on first run; on a
 	// truly fresh host (no allowlist either) seed a recommended starter
@@ -160,9 +160,11 @@ func main() {
 
 	mux := http.NewServeMux()
 	// Every API call needs a valid ZimaOS session token; /api/health stays
-	// open so liveness probes still work.
+	// open so liveness probes still work, and /api/peers/receive uses its
+	// own shared-token auth (it's invoked by a leader host, not a
+	// browser session) so it bypasses the JWT middleware.
 	mux.Handle("/api/", verifier.Middleware(srv.Routes(), func(p string) bool {
-		return p == "/api/health"
+		return p == "/api/health" || p == "/api/peers/receive"
 	}))
 
 	// Static UI fallback for direct localhost access. The gateway also serves

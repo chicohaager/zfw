@@ -20,6 +20,7 @@ import (
 	"github.com/chicohaager/zfw/internal/events"
 	"github.com/chicohaager/zfw/internal/firewall"
 	"github.com/chicohaager/zfw/internal/geo"
+	"github.com/chicohaager/zfw/internal/peers"
 	"github.com/chicohaager/zfw/internal/rules"
 	"github.com/chicohaager/zfw/internal/system"
 	"github.com/chicohaager/zfw/internal/update"
@@ -50,24 +51,32 @@ type Server struct {
 	rulesPath    string
 	compiledPath string
 	historyPath  string
+	peersPath    string
+	peerToken    string // shared secret for inbound /api/peers/receive; empty = disabled
 	geo          *geo.Manager
 	upd          *update.Checker // nil = self-update polling disabled
+	httpClient   *http.Client    // reusable client for outbound peer pushes
 	mutateRL     *rateBucket     // shared by all non-GET endpoints
 }
 
 // NewServer returns a Server. fw may be *firewall.Manager in production or
 // any Firewall implementation in tests. historyPath may be "" to disable
 // audit-finding history persistence. upd may be nil to disable
-// self-update polling — /api/update still responds, just with the
-// daemon's current version and no Latest field.
-func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string, upd *update.Checker) *Server {
+// self-update polling. peersPath may be "" to disable the leader-side
+// /api/peers list+push endpoints; peerToken may be "" to disable the
+// follower-side /api/peers/receive endpoint. The two are independent —
+// a host can be a leader, a follower, both, or neither.
+func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string, upd *update.Checker, peersPath, peerToken string) *Server {
 	return &Server{
 		fw:           fw,
 		rulesPath:    rulesPath,
 		compiledPath: compiledPath,
 		historyPath:  historyPath,
+		peersPath:    peersPath,
+		peerToken:    peerToken,
 		geo:          geo.New(geoDir),
 		upd:          upd,
+		httpClient:   peers.DefaultClient(),
 		// Burst 10, sustained 1/s — a user clicking Safe-Apply repeatedly
 		// passes the burst; a runaway script is throttled to one call/sec.
 		mutateRL: newRateBucket(1, 10),
@@ -131,6 +140,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/audit", s.auditHandler)
 	mux.HandleFunc("/api/versions", s.versions)
 	mux.HandleFunc("/api/update", s.updateStatus)
+	mux.HandleFunc("/api/peers", s.peersList)
+	mux.HandleFunc("/api/peers/push", s.rateLimited(s.peersPush))
+	mux.HandleFunc("/api/peers/receive", s.peersReceive)
 	mux.HandleFunc("/api/events", s.events)
 	mux.HandleFunc("/api/openapi.json", s.openapi)
 	mux.HandleFunc("/api/openapi.yaml", s.openapi)
@@ -488,6 +500,114 @@ func (s *Server) versions(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx()
 	defer cancel()
 	writeJSON(w, http.StatusOK, system.Versions(ctx))
+}
+
+// peersList returns the configured peer list with tokens stripped so a
+// compromised UI session cannot exfiltrate them. Empty list (or
+// missing peers.json) is the normal opt-out state — the UI hides
+// the push button when the array is empty.
+func (s *Server) peersList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	if s.peersPath == "" {
+		writeJSON(w, http.StatusOK, []peers.Public{})
+		return
+	}
+	ps, err := peers.Load(s.peersPath)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "load peers: "+err.Error())
+		return
+	}
+	out := peers.Sanitize(ps)
+	if out == nil {
+		out = []peers.Public{}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// peersPush sends the current saved rules.json to every configured peer
+// via its /api/peers/receive endpoint. Returns one Result per peer (in
+// the same order as peers.json) so the UI can render successes and
+// failures side by side. Reads rules.json off disk — pushes what is
+// saved, not whatever the caller posts, so a peer can never end up
+// with a different rule set than the local one.
+func (s *Server) peersPush(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		fail(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	if s.peersPath == "" {
+		writeJSON(w, http.StatusOK, []peers.Result{})
+		return
+	}
+	ps, err := peers.Load(s.peersPath)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "load peers: "+err.Error())
+		return
+	}
+	if len(ps) == 0 {
+		writeJSON(w, http.StatusOK, []peers.Result{})
+		return
+	}
+	rs, err := rules.Load(s.rulesPath)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "no rules saved yet — open the Rules tab, add a rule and click Save")
+		return
+	}
+	body, err := json.Marshal(rs)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "marshal rules: "+err.Error())
+		return
+	}
+	ctx, cancel := reqCtx()
+	defer cancel()
+	results := peers.Push(ctx, s.httpClient, ps, body)
+	writeJSON(w, http.StatusOK, results)
+}
+
+// peersReceive accepts an inbound rule push from a leader. Authentication
+// is a shared bearer (s.peerToken); ZimaOS-session JWT is bypassed for
+// this route in main.go's middleware wiring. When peerToken is empty,
+// the endpoint is disabled — the host is not configured to act as a
+// follower and returns 403 unconditionally.
+func (s *Server) peersReceive(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		fail(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	if s.peerToken == "" {
+		fail(w, http.StatusForbidden, "peer-receive disabled (ZFW_PEER_TOKEN unset)")
+		return
+	}
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") || auth[len("Bearer "):] != s.peerToken {
+		fail(w, http.StatusUnauthorized, "invalid peer token")
+		return
+	}
+	var rs rules.RuleSet
+	if err := json.NewDecoder(r.Body).Decode(&rs); err != nil {
+		fail(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+		return
+	}
+	if err := rules.Validate(rs); err != nil {
+		fail(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := rules.Save(s.rulesPath, rs); err != nil {
+		fail(w, http.StatusInternalServerError, "save: "+err.Error())
+		return
+	}
+	ctx, cancel := reqCtx()
+	defer cancel()
+	if err := s.Recompile(ctx); err != nil {
+		fail(w, http.StatusInternalServerError, "compile: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "received", "rules": fmt.Sprintf("%d", len(rs.Rules))})
 }
 
 // updateStatus returns the cached self-update check result so the UI can

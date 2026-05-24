@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.3.9 — see [Status](#status) for the build line.
+> **Current release:** v0.3.10 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,32 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.3.10** — fourth v0.5 item: **multi-host rule sync (opt-in)**.
+New `internal/peers` package: each follower host is configured in a
+JSON file (`/DATA/zfw/peers.json` by default, override via
+`ZFW_PEERS`) with `{name, url, token}`; the leader's `POST
+/api/peers/push` reads the currently saved `rules.json` off disk and
+fans it out to every peer's `/api/peers/receive`. Per-peer results
+(`{name, url, ok, code, error}`) are returned in input order so the UI
+can render successes and failures side by side. Authentication on
+the follower side is a shared bearer (`ZFW_PEER_TOKEN` env, empty by
+default — opt-in) checked inside the handler; the ZimaOS-session JWT
+middleware is bypassed for `/api/peers/receive` because a leader has
+no user session on the follower. Both sides are independent — a host
+can be a leader (peers.json configured), a follower
+(`ZFW_PEER_TOKEN` set), both, or neither. `GET /api/peers` returns
+the peer list with tokens stripped so a compromised UI session
+cannot exfiltrate them. The Rules tab grows a *Push to peers* button
+that stays hidden when no peers are configured. Followers must
+still click Safe-Apply themselves after a push — the 120 s dead-man
+remains the last line of defence. New tests: seven in
+`internal/peers` (Load missing/empty/json, Sanitize strips tokens,
+Push wire shape + Bearer + per-peer error + empty-token failure) +
+six handler tests (list strips tokens, list empty when unconfigured,
+push empty without peers, receive disabled 403, receive wrong token
+401, receive happy-path applies to disk). OpenAPI documents the
+three endpoints and the `Peer` / `PeerResult` schemas.
 
 **v0.3.9** — third v0.5 item: **`zpkg` self-update check**. New
 `internal/update` package polls a configurable manifest URL
