@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.3.7 — see [Status](#status) for the build line.
+> **Current release:** v0.3.8 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,25 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.3.8** — second v0.5 item: **rules.json migration helper**. The
+`RuleSet` JSON now carries an explicit `version` field (current schema
+= `1`). `Load(path)` runs `migrate()` on read: an older rules.json
+(no `version` field, or `version < 1`) is upgraded transparently and
+the pre-migration bytes are preserved as `<path>.bak.v<old>` before
+the upgraded form is written back. A rules.json from a **future**
+daemon (`version > 1`) is refused with a clear error rather than
+loaded with silently-dropped fields. `Save(path, rs)` always stamps
+`rs.Version = CurrentSchema` regardless of what the caller passed —
+the version field is daemon-owned. Today the schema is stable, so the
+v0 → v1 step is a field-compatible rename; the plumbing exists so
+future schema bumps land as a single switch-case alongside the field
+change. Four new tests in `internal/rules`: missing-version migrates
++ writes `.bak.v0` with byte-identical original; current-version
+load is a no-op (no .bak, on-disk bytes unchanged); future-version
+refuses (file untouched, no .bak); `Save` stamps `CurrentSchema`
+regardless of input. OpenAPI `RuleSet` schema documents the new
+field.
 
 **v0.3.7** — first **v0.5 (*Distribution & multi-host*)** item:
 **arm64 build**. `build.sh` now loops over the `ARCHES` env var

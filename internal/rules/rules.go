@@ -54,12 +54,52 @@ type Rule struct {
 }
 
 // RuleSet is the whole firewall configuration.
+//
+// Schema versioning: Version is the on-disk schema. Save() always stamps
+// it to CurrentSchema; Load() runs migrate() on read. A rules.json with
+// no version field parses to Version=0 and is upgraded transparently.
+// A rules.json from a *newer* daemon (Version > CurrentSchema) is
+// refused with a clear error rather than silently dropping fields. The
+// migration plumbing is in place even though the schema has not yet
+// changed — keeping future bumps a backwards-compatible single-line
+// add ("case 1: rs.Version = 2; rs.X = default").
 type RuleSet struct {
+	Version       int    `json:"version,omitempty"`
 	LAN           string `json:"lan"`
 	HostIP        string `json:"host_ip"`
 	DefaultPolicy string `json:"default_policy"` // deny | allow
 	V6Drop        []int  `json:"v6_drop"`
 	Rules         []Rule `json:"rules"`
+}
+
+// CurrentSchema is the rules.json schema version this build emits.
+const CurrentSchema = 1
+
+// migrate brings an on-disk RuleSet up to CurrentSchema, one step at a time.
+// Returns (migrated, changed, err). A nil error with changed=false means the
+// input was already current; a non-nil error means the input was from a
+// future schema or hit an unknown step. The chain is intentionally a
+// switch-on-source-version (not a table) so each migration step lives next
+// to the schema change it accompanies.
+func migrate(rs RuleSet) (RuleSet, bool, error) {
+	if rs.Version > CurrentSchema {
+		return rs, false, fmt.Errorf("rules.json schema v%d is newer than this daemon (max v%d) — refusing to load to avoid silent field loss", rs.Version, CurrentSchema)
+	}
+	if rs.Version == CurrentSchema {
+		return rs, false, nil
+	}
+	for rs.Version < CurrentSchema {
+		switch rs.Version {
+		case 0:
+			// Legacy / unversioned rules.json (everything shipped before
+			// v0.3.8). v0 → v1 is a field-compatible rename: no struct
+			// changes, just stamp the version so future bumps land cleanly.
+			rs.Version = 1
+		default:
+			return rs, false, fmt.Errorf("no migration from rules.json schema v%d", rs.Version)
+		}
+	}
+	return rs, true, nil
 }
 
 // NewID returns a short random rule id.
@@ -125,7 +165,11 @@ func Defaults(lan, hostIP string, dockerPorts map[int]bool) RuleSet {
 	}
 }
 
-// Load reads and parses rules.json.
+// Load reads and parses rules.json, migrating the schema in place if the
+// file is from an older daemon. When a migration runs, the pre-migration
+// bytes are preserved as <path>.bak.v<sourceVersion> before the upgraded
+// form is written back — so a user always has a path back even if a future
+// migration step turns out to be wrong.
 func Load(path string) (RuleSet, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -135,16 +179,36 @@ func Load(path string) (RuleSet, error) {
 	if err := json.Unmarshal(b, &rs); err != nil {
 		return RuleSet{}, err
 	}
-	return rs, nil
+	sourceVersion := rs.Version
+	migrated, changed, err := migrate(rs)
+	if err != nil {
+		return RuleSet{}, err
+	}
+	if changed {
+		bak := fmt.Sprintf("%s.bak.v%d", path, sourceVersion)
+		if err := os.WriteFile(bak, b, 0o600); err != nil {
+			return RuleSet{}, fmt.Errorf("rules.json migration backup failed: %w", err)
+		}
+		if err := writeAtomic(path, migrated); err != nil {
+			return RuleSet{}, fmt.Errorf("rules.json migration write failed: %w", err)
+		}
+	}
+	return migrated, nil
 }
 
-// Save validates nothing but assigns missing ids and writes rules.json atomically.
+// Save validates nothing but assigns missing ids, stamps the current schema
+// version and writes rules.json atomically.
 func Save(path string, rs RuleSet) error {
+	rs.Version = CurrentSchema
 	for i := range rs.Rules {
 		if rs.Rules[i].ID == "" {
 			rs.Rules[i].ID = NewID()
 		}
 	}
+	return writeAtomic(path, rs)
+}
+
+func writeAtomic(path string, rs RuleSet) error {
 	b, err := json.MarshalIndent(rs, "", "  ")
 	if err != nil {
 		return err

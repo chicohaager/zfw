@@ -12,7 +12,7 @@ info:
 
     Non-GET requests share a token-bucket rate-limit (burst 10, sustained
     1/s); excessive traffic is answered with `429 Too Many Requests`.
-  version: "0.3.7"
+  version: "0.3.8"
   license:
     name: See repository
 servers:
@@ -67,6 +67,7 @@ components:
     RuleSet:
       type: object
       properties:
+        version:        { type: integer, example: 1, description: "On-disk schema version. Daemon-owned; clients should pass it through unchanged on POST. An older rules.json on disk is migrated transparently on Load (a .bak.v<old> file is preserved). A rules.json from a newer daemon is refused." }
         lan:            { type: string, example: "192.168.1.0/24" }
         host_ip:        { type: string, example: "192.168.50.37" }
         default_policy: { type: string, enum: [deny, allow] }
