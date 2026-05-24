@@ -74,7 +74,7 @@ func main() {
 	// (no outbound HTTP from a fresh install). Run loop starts after main's
 	// signal-aware context is constructed below.
 	upd := update.New(buildinfo.Version, cfg.UpdateURL)
-	srv := handlers.NewServer(fw, cfg.RulesFile, cfg.CompiledFile, cfg.GeoDir, cfg.HistoryFile, upd, cfg.PeersFile, cfg.PeerToken)
+	srv := handlers.NewServer(fw, cfg.RulesFile, cfg.CompiledFile, cfg.GeoDir, cfg.HistoryFile, upd, cfg.PeersFile, cfg.PeerToken, cfg.ExtraBypassIfaces)
 
 	// v0.2 rule model: migrate the legacy allowlist.conf on first run; on a
 	// truly fresh host (no allowlist either) seed a recommended starter

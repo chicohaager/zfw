@@ -90,7 +90,7 @@ func newTestServer(t *testing.T, fw *fakeFirewall) (*Server, string) {
 	compiledPath := filepath.Join(dir, "compiled.sh")
 	geoDir := filepath.Join(dir, "geo")
 	historyPath := filepath.Join(dir, "audit-history.json")
-	return NewServer(fw, rulesPath, compiledPath, geoDir, historyPath, nil, "", ""), rulesPath
+	return NewServer(fw, rulesPath, compiledPath, geoDir, historyPath, nil, "", "", nil), rulesPath
 }
 
 // do drives a single request through the Server's mux and returns the
@@ -662,7 +662,7 @@ func TestUpdateEndpointReturnsCheckerSnapshot(t *testing.T) {
 
 	chk := update.New("0.3.9", manifest.URL)
 	chk.CheckOnce(context.Background())
-	s := NewServer(&fakeFirewall{}, rulesPath, compiledPath, geoDir, historyPath, chk, "", "")
+	s := NewServer(&fakeFirewall{}, rulesPath, compiledPath, geoDir, historyPath, chk, "", "", nil)
 
 	w := do(s, http.MethodGet, "/api/update", nil)
 	if w.Code != http.StatusOK {
@@ -700,7 +700,7 @@ func newTestServerWithPeers(t *testing.T, fw *fakeFirewall, peersList []peers.Pe
 			t.Fatal(err)
 		}
 	}
-	return NewServer(fw, rulesPath, compiledPath, geoDir, historyPath, nil, peersPath, peerToken), rulesPath
+	return NewServer(fw, rulesPath, compiledPath, geoDir, historyPath, nil, peersPath, peerToken, nil), rulesPath
 }
 
 // TestPeersListStripsTokens guards the UI-facing list contract: tokens

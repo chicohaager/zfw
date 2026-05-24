@@ -351,6 +351,33 @@ func TestRateLimitEmitsRecentClause(t *testing.T) {
 	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -j ACCEPT")
 }
 
+// TestWireGuardWildcardBypassed guards the v0.5.4 VPN-interface
+// awareness: WireGuard (wg+) joins tailscale0/zt+ in the default
+// bypass list for every chain. A peer reaching the host on wg0 /
+// wg-clients / wg-mesh is pre-authenticated by the protocol, so
+// default-deny should not catch them.
+func TestWireGuardWildcardBypassed(t *testing.T) {
+	out := Compile(rules.RuleSet{DefaultPolicy: "deny"}, nil, nil)
+	mustContain(t, out, "$IPT -A ZFW-IN -i wg+ -j ACCEPT")
+	mustContain(t, out, "$IPT -A DOCKER-USER -i wg+ -j RETURN")
+	mustContain(t, out, "$IPT6 -A ZFW-IN6 -i wg+ -j RETURN")
+}
+
+// TestExtraBypassIfacesEmittedInAllChains guards the operator-
+// configured extension to the bypass list: ZFW_EXTRA_BYPASS_IFACES
+// names appear in ZFW-IN, ZFW-IN6 and DOCKER-USER so a custom-named
+// VPN interface ("vpn0", "wg-priv+", …) does not require forking
+// the daemon.
+func TestExtraBypassIfacesEmittedInAllChains(t *testing.T) {
+	out := Compile(rules.RuleSet{DefaultPolicy: "deny"}, nil, nil, "vpn0", "mesh+")
+	mustContain(t, out, "$IPT -A ZFW-IN -i vpn0 -j ACCEPT")
+	mustContain(t, out, "$IPT -A ZFW-IN -i mesh+ -j ACCEPT")
+	mustContain(t, out, "$IPT -A DOCKER-USER -i vpn0 -j RETURN")
+	mustContain(t, out, "$IPT -A DOCKER-USER -i mesh+ -j RETURN")
+	mustContain(t, out, "$IPT6 -A ZFW-IN6 -i vpn0 -j RETURN")
+	mustContain(t, out, "$IPT6 -A ZFW-IN6 -i mesh+ -j RETURN")
+}
+
 // TestNoLogNoRateLimitNoExtraLines guards that the v0.4.4 wrapEmit
 // refactor did not leak extra lines into rules that didn't opt in —
 // a rule without Log and without RateLimit must compile to exactly

@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.5.3 — see [Status](#status) for the build line.
+> **Current release:** v0.5.4 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,25 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.5.4** — first **v1.0 (*GA*)** item: **VPN-interface awareness**.
+WireGuard wildcard `wg+` joins the built-in default-bypass list
+(lo / docker0 / br-+ / virbr0 / tailscale0 / zt+) on all three
+chains — ZFW-IN, ZFW-IN6, DOCKER-USER. A peer arriving on `wg0` /
+`wg-clients` / `wg-mesh` is by definition pre-authenticated by
+WireGuard's static-key handshake, so default-deny no longer breaks
+WireGuard's reach to host services or container ports out of the
+box. Operator-supplied extra interface names via the new
+`ZFW_EXTRA_BYPASS_IFACES` env var (comma-separated) get appended to
+the same lists — useful for custom VPN setups (Mullvad's mullvad0,
+Innernet's iface name, etc.) without forking the daemon. Names are
+validated against a strict char-set (alnum, dash, underscore, `+`
+trailing wildcard, ≤15 chars per IFNAMSIZ) so a crafted env var
+cannot inject shell payload into the compiled engine script — that
+defence is in `config.isSafeIfaceName`. Two new compiler tests
+(`TestWireGuardWildcardBypassed`, `TestExtraBypassIfacesEmittedInAllChains`)
+lock the contract. No schema change, no UI change — pure
+infrastructure widening.
 
 **v0.5.3** — second template-catalog expansion (Maintainer pick #2).
 Catalog now **21 entries**. Added: *Paperless-NGX* (8000), *Mealie*

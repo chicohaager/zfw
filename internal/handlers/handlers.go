@@ -53,7 +53,8 @@ type Server struct {
 	compiledPath string
 	historyPath  string
 	peersPath    string
-	peerToken    string // shared secret for inbound /api/peers/receive; empty = disabled
+	peerToken    string   // shared secret for inbound /api/peers/receive; empty = disabled
+	extraBypass  []string // v0.5.4 — extra inbound-bypass iface names appended to every chain
 	geo          *geo.Manager
 	upd          *update.Checker // nil = self-update polling disabled
 	httpClient   *http.Client    // reusable client for outbound peer pushes
@@ -67,7 +68,7 @@ type Server struct {
 // /api/peers list+push endpoints; peerToken may be "" to disable the
 // follower-side /api/peers/receive endpoint. The two are independent —
 // a host can be a leader, a follower, both, or neither.
-func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string, upd *update.Checker, peersPath, peerToken string) *Server {
+func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string, upd *update.Checker, peersPath, peerToken string, extraBypass []string) *Server {
 	return &Server{
 		fw:           fw,
 		rulesPath:    rulesPath,
@@ -75,6 +76,7 @@ func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string,
 		historyPath:  historyPath,
 		peersPath:    peersPath,
 		peerToken:    peerToken,
+		extraBypass:  extraBypass,
 		geo:          geo.New(geoDir),
 		upd:          upd,
 		httpClient:   peers.DefaultClient(),
@@ -120,7 +122,7 @@ func (s *Server) Recompile(ctx context.Context) error {
 			geoFiles[cc] = s.geo.IpsetPath(cc)
 		}
 	}
-	script := compiler.Compile(rs, system.DockerPorts(ctx), geoFiles)
+	script := compiler.Compile(rs, system.DockerPorts(ctx), geoFiles, s.extraBypass...)
 	// 0600: the compiled script is executed as root — keep it owner-only.
 	return os.WriteFile(s.compiledPath, []byte(script), 0o600)
 }
