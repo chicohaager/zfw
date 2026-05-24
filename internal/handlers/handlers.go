@@ -143,6 +143,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/peers", s.peersList)
 	mux.HandleFunc("/api/peers/push", s.rateLimited(s.peersPush))
 	mux.HandleFunc("/api/peers/receive", s.peersReceive)
+	mux.HandleFunc("/api/geo/lookup", s.geoLookup)
 	mux.HandleFunc("/api/events", s.events)
 	mux.HandleFunc("/api/openapi.json", s.openapi)
 	mux.HandleFunc("/api/openapi.yaml", s.openapi)
@@ -608,6 +609,32 @@ func (s *Server) peersReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "received", "rules": fmt.Sprintf("%d", len(rs.Rules))})
+}
+
+// geoLookup turns a comma-separated `ips` query parameter into a
+// {ip: country} map. Reuses the geo manager's cached .zone files —
+// no extra network calls, no extra deps. An IP outside every cached
+// CIDR maps to "" (the UI then silently hides its flag). Empty query
+// returns {}. GET-only and read-only so it sits outside the mutate
+// rate-limit. v0.4.5.
+func (s *Server) geoLookup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	raw := r.URL.Query().Get("ips")
+	if raw == "" {
+		writeJSON(w, http.StatusOK, map[string]string{})
+		return
+	}
+	// Cap the input fan-out to keep the linear-scan lookup cheap. A
+	// typical Events tab refresh has <100 unique source IPs; 500 is
+	// comfortable headroom and bounds a crafted query.
+	ips := strings.Split(raw, ",")
+	if len(ips) > 500 {
+		ips = ips[:500]
+	}
+	writeJSON(w, http.StatusOK, s.geo.LookupBatch(ips))
 }
 
 // updateStatus returns the cached self-update check result so the UI can

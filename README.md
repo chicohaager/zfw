@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.4.4 — see [Status](#status) for the build line.
+> **Current release:** v0.4.5 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,36 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.4.5** — sixth v0.6 item: **GeoIP source flags on the Events
+tab**. Reuses the cached per-country `.zone` files the
+`internal/geo` package already downloads for outbound geo-block
+rules — no extra MMDB download, no extra deps. New
+`geo.Manager.Lookup(ip)` + `LookupBatch(ips)` build an in-memory
+CIDR→country index lazily on first call and rebuild when the
+directory fingerprint (file name + size + mtime nano per `.zone`
+file) changes — staleness-by-fingerprint beats staleness-by-mtime
+because filesystem mtime resolution is 1s on many setups, so adding
+a new `.zone` in the same second as the first build would
+otherwise be missed. New endpoint `GET /api/geo/lookup?ips=
+ip1,ip2,...` returns `{ip: lowercase-cc}` (every input key
+present; unknowns map to `""`) — the UI batches all unique source
+IPs from the visible 1h Events slice into one call. Cap of 500 IPs
+per query bounds the linear-scan lookup. UI: country flag emoji
+(`🇷🇺 RU` regional-indicator pair) + ISO code render as a small
+pill next to the source IP on the Events tab, hidden when the
+lookup returns `""`. The "fundamental limitation" disclosed when
+this was split off in v0.4.1 stands: only countries the user
+configured rules for are in the index, so a fresh install with no
+geo rules sees no flags — but the common case (blocking RU/CN and
+wanting to see RU/CN sources flagged) works exactly. Five new
+tests in `internal/geo`: empty manager returns `""`, cached zone
+hits, miss outside CIDR returns `""`, LookupBatch contract (every
+input key present), rebuild-on-new-zone (fingerprint detects the
+add even within sub-second resolution). Two new handler tests:
+`/api/geo/lookup` empty query returns `{}`, no-data lookup returns
+empty-string values for every input IP. OpenAPI documents the new
+endpoint.
 
 **v0.4.4** — fourth + fifth v0.6 items: **per-rule logging toggle**
 and **rate-limit per source**, shipped together because both are

@@ -12,7 +12,7 @@ info:
 
     Non-GET requests share a token-bucket rate-limit (burst 10, sustained
     1/s); excessive traffic is answered with `429 Too Many Requests`.
-  version: "0.4.4"
+  version: "0.4.5"
   license:
     name: See repository
 servers:
@@ -348,6 +348,23 @@ paths:
         '400': { description: "Invalid JSON or validation error." }
         '401': { description: "Bearer missing or does not match ZFW_PEER_TOKEN." }
         '403': { description: "Peer-receive disabled (ZFW_PEER_TOKEN unset on this host)." }
+
+  /api/geo/lookup:
+    get:
+      summary: "IP→country reverse lookup over the cached per-country .zone files. Reuses the data the geo manager already downloaded for outbound country rules — no extra network calls, no extra deps."
+      parameters:
+        - name: ips
+          in: query
+          schema: { type: string }
+          description: "Comma-separated list of source IPs (max 500). Empty query returns {}."
+      responses:
+        '200':
+          description: "{ip: lowercase ISO-3166 alpha-2}. Every input IP is present; unknowns map to \"\"."
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: { type: string, example: "ru" }
 
   /api/update:
     get:

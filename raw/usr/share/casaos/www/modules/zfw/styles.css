@@ -157,6 +157,13 @@ header h1 { font-size: 26px; font-weight: 600; letter-spacing: -.01em; }
 }
 .threat-pill.threat-brute_force { background: var(--danger); }
 .ev-threat-row > td { background: rgb(255 248 230); }
+.geo-flag {
+  display: inline-block; margin-left: 6px;
+  padding: 1px 7px; border-radius: 4px;
+  background: var(--card-border); color: var(--text);
+  font-size: 11px; font-weight: 500;
+  font-family: var(--font-mono); letter-spacing: 0.4px;
+}
 .sched-pill {
   display: inline-block; margin-left: 6px;
   padding: 1px 7px; border-radius: 999px;

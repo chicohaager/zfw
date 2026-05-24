@@ -907,6 +907,20 @@ function renderTopList(elId, items, label) {
   }).join('');
 }
 
+// flagFor renders an ISO-3166 alpha-2 country code as the matching
+// regional-indicator flag emoji. Empty/unknown codes render as a
+// neutral placeholder so the column stays aligned without the
+// flag-of-undefined-country glyph.
+function flagFor(cc) {
+  if (!cc || cc.length !== 2) return '';
+  const base = 0x1F1E6;
+  const A = 'A'.charCodeAt(0);
+  return String.fromCodePoint(
+    base + (cc.toUpperCase().charCodeAt(0) - A),
+    base + (cc.toUpperCase().charCodeAt(1) - A),
+  );
+}
+
 async function loadEvents() {
   // Fetch the full 24h window once — the sparkline needs the long view
   // and the 1h table is just a slice of the same data. limit=5000 caps
@@ -929,6 +943,21 @@ async function loadEvents() {
 
   $('#stat-events').textContent = recent.length;
   $('#stat-events').className = 'stat-num ' + (recent.length > 0 ? 'warn' : 'ok');
+
+  // GeoIP source-flag enrichment (v0.4.5). Batch-resolve every unique
+  // source IP in the visible window through /api/geo/lookup, which
+  // returns a {ip: country-code} map from the cached geo .zone files.
+  // Missing data = "" = no flag. Network errors degrade silently so a
+  // broken /api/geo never breaks the events table.
+  let countryByIP = {};
+  if (recent.length > 0) {
+    const uniq = [...new Set(recent.map(e => e.source).filter(Boolean))];
+    if (uniq.length > 0) {
+      try {
+        countryByIP = await api('/geo/lookup?ips=' + uniq.map(encodeURIComponent).join(','));
+      } catch (_) { /* silent — flags are best-effort */ }
+    }
+  }
 
   // Top-N analytics: hidden when there's nothing to summarise, so an
   // empty Events tab stays as clean as before v0.4.1.
@@ -980,9 +1009,13 @@ async function loadEvents() {
     const pills = (e.threats || []).map(tag =>
       `<span class="threat-pill threat-${esc(tag)}" title="Classifier flagged this event with ${esc(tag)}">${esc(threatLabel[tag] || tag)}</span>`
     ).join('');
+    const cc = countryByIP[e.source];
+    const flag = cc
+      ? `<span class="geo-flag" title="Source country: ${esc(cc.toUpperCase())} (from cached geo .zone files)">${flagFor(cc)} ${esc(cc.toUpperCase())}</span>`
+      : '';
     return `<tr${e.threats && e.threats.length ? ' class="ev-threat-row"' : ''}>
       <td class="mono">${esc(ts)}</td>
-      <td class="mono">${esc(e.source || '?')}${pills}</td>
+      <td class="mono">${esc(e.source || '?')}${flag}${pills}</td>
       <td class="mono">${e.port || '—'}</td>
       <td>${esc((e.protocol || '').toUpperCase())}</td>
       <td><span class="badge ${cls}">${lbl}</span></td>

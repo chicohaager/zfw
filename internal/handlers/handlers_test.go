@@ -831,6 +831,48 @@ func TestPeersReceiveHappyPath(t *testing.T) {
 	}
 }
 
+// TestGeoLookupEmptyQueryReturnsEmptyMap guards the no-input branch:
+// a /api/geo/lookup with no ips parameter must respond 200 with {}
+// so the UI's batch fetch on a fresh refresh never sees a 400 or 404.
+func TestGeoLookupEmptyQueryReturnsEmptyMap(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodGet, "/api/geo/lookup", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var got map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body not a JSON map: %v (body=%s)", err, w.Body.String())
+	}
+	if len(got) != 0 {
+		t.Errorf("got %d entries, want 0", len(got))
+	}
+}
+
+// TestGeoLookupNoGeoDataReturnsEmptyStrings guards the typical fresh-
+// install case: a Manager with no .zone files maps every input IP to
+// "" — but every input key must be PRESENT in the response so the UI
+// can iterate it nil-safely.
+func TestGeoLookupNoGeoDataReturnsEmptyStrings(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodGet, "/api/geo/lookup?ips=8.8.8.8,1.1.1.1", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var got map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body not a JSON map: %v (body=%s)", err, w.Body.String())
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d entries, want 2", len(got))
+	}
+	for _, ip := range []string{"8.8.8.8", "1.1.1.1"} {
+		if v, ok := got[ip]; !ok || v != "" {
+			t.Errorf("got[%q] = %q (ok=%v), want \"\" present", ip, v, ok)
+		}
+	}
+}
+
 // TestEventsReturnsArray covers /api/events. events.Read calls
 // journalctl; in a test environment there will be no ZFW drop events,
 // so the response must be an empty JSON array (not null) — the UI's
