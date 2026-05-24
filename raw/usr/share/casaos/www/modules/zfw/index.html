@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex">
   <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
   <title>ZFW Firewall</title>
-  <link rel="stylesheet" href="./styles.css?v=0.3.1">
+  <link rel="stylesheet" href="./styles.css?v=0.3.2">
 </head>
 <body>
   <header>
@@ -155,6 +155,9 @@
         </label>
         <p class="rm-hint">Automatic: zfw detects on its own whether a port is host-native or a Docker container port.</p>
         <label class="fld-check"><input id="rm-enabled" type="checkbox" checked> Rule enabled</label>
+        <label class="fld">Notes <small>(optional, 256 chars max)</small>
+          <textarea id="rm-notes" maxlength="256" rows="2" placeholder="Free-text — why does this rule exist? (e.g. temporary M.s_PC test, remove 2026-06-01)"></textarea>
+        </label>
         <p id="rm-error" class="rm-error" hidden></p>
       </div>
       <div class="modal-actions">
@@ -175,6 +178,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=0.3.1"></script>
+  <script src="./app.js?v=0.3.2"></script>
 </body>
 </html>

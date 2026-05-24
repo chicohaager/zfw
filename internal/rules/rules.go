@@ -45,6 +45,12 @@ type Rule struct {
 	Ports    Ports  `json:"ports"`
 	Protocol string `json:"protocol"` // tcp | udp | both
 	Zone     string `json:"zone"`     // auto | host | docker
+	// Notes is free-text the user writes to explain why this rule exists
+	// ("M.s_PC, allow temporarily for testing"). Persisted in rules.json,
+	// rendered as a tooltip + below-row caption in the UI, never read by
+	// the compiler. Length-capped by Validate so an oversize note can't
+	// bloat rules.json or the embedded UI payload.
+	Notes string `json:"notes,omitempty"`
 }
 
 // RuleSet is the whole firewall configuration.
@@ -157,6 +163,11 @@ const (
 	maxPortsPerRule  = 128
 	maxV6DropPorts   = 128
 	maxRuleCountries = 32
+	// maxNoteLen caps free-text rule notes. 256 chars is comfortable for
+	// "M.s_PC, allow temporarily for testing — remove after 2026-06-01"
+	// without letting a crafted rules.json balloon: 256 rules × 256 chars
+	// = 64 KB of notes, bounded.
+	maxNoteLen = 256
 )
 
 // Validate rejects anything that could corrupt the compiled ruleset.
@@ -217,6 +228,9 @@ func validateRule(r Rule) error {
 	}
 	if r.Action != "allow" && r.Action != "deny" {
 		return fmt.Errorf("action must be allow or deny")
+	}
+	if len(r.Notes) > maxNoteLen {
+		return fmt.Errorf("notes too long: %d chars (max %d)", len(r.Notes), maxNoteLen)
 	}
 	switch r.Source.Type {
 	case "any":

@@ -129,9 +129,12 @@ function renderRules() {
     if (r.ports && r.ports.type === 'list') ports = esc((r.ports.list || []).join(', '));
     else if (r.ports && r.ports.type === 'range') ports = esc(r.ports.from + '–' + r.ports.to);
     const zone = { auto: 'Auto', host: 'Host', docker: 'Docker' }[r.zone] || esc(r.zone);
+    const noteBadge = r.notes
+      ? ` <span class="note-pill" title="${esc(r.notes)}">note</span>`
+      : '';
     return `<tr class="${r.enabled ? '' : 'rule-off'}" data-id="${esc(r.id)}">
       <td class="mono">${i + 1}</td>
-      <td>${esc(r.name)}</td>
+      <td>${esc(r.name)}${noteBadge}</td>
       <td><span class="actbadge ${actCls}">${actLbl}</span></td>
       <td class="mono">${src}</td>
       <td class="mono">${ports} <span class="proto">${esc(r.protocol)}</span></td>
@@ -313,6 +316,7 @@ function openRuleEditor(rule) {
   $('#rm-proto').value = r.protocol || 'tcp';
   $('#rm-zone').value = r.zone || 'auto';
   $('#rm-enabled').checked = r.enabled !== false;
+  $('#rm-notes').value = r.notes || '';
   $('#rm-error').hidden = true;
   updateModalFields();
   $('#rule-modal').hidden = false;
@@ -396,6 +400,8 @@ function saveRuleFromEditor() {
   }
   const portsObj = { type: porttype, list: list };
   if (porttype === 'range') { portsObj.from = portFrom; portsObj.to = portTo; }
+  const notes = $('#rm-notes').value.trim();
+  if (notes.length > 256) return modalError('Notes are capped at 256 characters.');
   const rule = {
     id: editingRuleId || '',
     enabled: $('#rm-enabled').checked,
@@ -405,6 +411,7 @@ function saveRuleFromEditor() {
     ports: portsObj,
     protocol: $('#rm-proto').value,
     zone: $('#rm-zone').value,
+    notes,
   };
   if (editingRuleId) {
     const i = ruleIndex(editingRuleId);

@@ -435,6 +435,22 @@ input:focus, select:focus {
 }
 .tmpl-cat.security { background: #FDECEC; color: #B33A3A; }
 .tmpl-cat.service  { background: #E6F1EA; color: #1F7A41; }
+
+/* small badge on a rule row when the user has attached a free-text note */
+.note-pill {
+  display: inline-block; margin-left: 6px; padding: 1px 7px;
+  border-radius: 999px; font-size: 11px; font-weight: 600;
+  background: #F4EBD2; color: #8A5C00;
+  cursor: help; vertical-align: 1px;
+}
+.note-pill:hover { background: #ECDDA8; }
+
+/* notes textarea inside the rule editor — keep the look consistent with .fld inputs */
+#rm-notes {
+  font: inherit; font-size: 14px; color: var(--text);
+  border: 1px solid var(--card-border); border-radius: 8px;
+  padding: 8px 10px; background: #FFFFFF; resize: vertical; min-height: 52px;
+}
 .port-range-row input { width: 110px; }
 .port-range-sep { color: var(--text-muted); font-size: 13px; }
 

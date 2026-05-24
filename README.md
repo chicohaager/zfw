@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.3.1 — see [Status](#status) for the build line.
+> **Current release:** v0.3.2 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -160,6 +160,17 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.3.2** — second v0.4 item: **per-rule notes / comments**. Each
+rule gets an optional free-text `notes` field (up to 256 chars). The
+rule editor modal carries a new textarea; the rule table shows a
+"note" pill next to the name when notes are present, with the full
+text on hover. Compiler ignores the field — it is metadata only.
+`Validate` caps the length so a crafted rules.json can't balloon. New
+backend tests `TestValidateAcceptsNotes` and
+`TestValidateRejectsOversizeNotes` lock in the contract; OpenAPI
+schema is updated. The field is `omitempty` so existing rules.json
+files on disk keep round-tripping cleanly.
 
 **v0.3.1** — first v0.4 (*UX polish*) item shipped: **rule-templates
 library**. The Rules tab now carries a `Templates` button that opens a
