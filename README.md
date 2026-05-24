@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.2.20 — see [Status](#status) for the build line.
+> **Current release:** v0.2.21 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -161,11 +161,20 @@ limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
 
-**v0.2.20** — built, deployed and browser-verified on a ZimaOS 1.6.1 host;
-ZimaOS session authentication, CSRF protection and systemd sandboxing in
-place, the codebase has passed a [code and security review](SECURITY-REPORT.md),
-all user-facing messages are English, and a fresh install now seeds a
-recommended starter rule set: deny-default plus baseline allow-rules for
-the ZimaOS web UI, SSH, Samba shares and mDNS discovery (LAN auto-detected
-from the default route), and one additional allow-rule per Docker-published
-port discovered live on the host so running containers stay reachable.
+**v0.2.21** — documentation release: the binary code is identical to
+v0.2.20, which was **independently validated by external tester
+Gelbuilding on a ZimaBoard (2026-05-24)** — install, dashboard tile,
+Safe-Apply, Confirm, custom-port rule-edit (SSH 22 → 2222 for
+ttydBridge) and full reboot-persistence cycle all confirmed. v0.2.21
+bakes that sign-off into README + ROADMAP so the release tarball
+carries the validation as part of the artifact.
+
+The underlying v0.2.20 line: built, deployed and browser-verified on a
+ZimaOS 1.6.1 host, with ZimaOS session authentication, CSRF protection
+and systemd sandboxing in place; the codebase has passed a [code and
+security review](SECURITY-REPORT.md), all user-facing messages are
+English, and a fresh install seeds a recommended starter rule set:
+deny-default plus baseline allow-rules for the ZimaOS web UI, SSH,
+Samba shares and mDNS discovery (LAN auto-detected from the default
+route), and one additional allow-rule per Docker-published port
+discovered live on the host so running containers stay reachable.

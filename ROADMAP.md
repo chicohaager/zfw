@@ -1,8 +1,13 @@
 # ZFW Roadmap
 
-> Author: Holger Kühn (Lintux)
-> Status: v0.2.20 — live on a ZimaOS 1.6.1 host, security-reviewed (three rounds), English UI,
-> intelligent default-set with live Docker inventory, reboot-persistent,
+> Author: Holger Kuehn (Lintux)
+> Status: v0.2.21 — documentation release carrying the external tester sign-off.
+> Binary code unchanged from v0.2.20, which was **independently validated by
+> external tester Gelbuilding on a ZimaBoard (2026-05-24)** — install, dashboard
+> tile, Safe-Apply, Confirm, custom-port rule-edit SSH 22→2222 for ttydBridge,
+> and full reboot-persistence cycle all confirmed. v0.2.20 itself: live on a
+> ZimaOS 1.6.1 host, security-reviewed (three rounds).
+> English UI, intelligent default-set with live Docker inventory, reboot-persistent,
 > with a working Events / IDS-MVP tab (host + host6 + docker zones),
 > Docker-bridge bypass, the Donezo-style light-theme UI, default-deny IPv6
 > INPUT chain, port-range rule support and the first batch of v0.3 handler
@@ -17,11 +22,13 @@ quality bar it raises.
 
 ---
 
-## Delivered in v0.2.7 – v0.2.13
+## Delivered in v0.2.7 – v0.2.21
 
 The current v0.2 line addressed every regression and gap surfaced by the
-first external test cycle (Gelbuilding / IceWhale forum). All items below
-ship in v0.2.13.
+first external test cycle (Gelbuilding / IceWhale forum). All code items
+below ship by v0.2.20; v0.2.21 is a documentation release carrying
+Gelbuilding's 2026-05-24 ZimaBoard validation into the release tarball —
+see the status line above.
 
 | Version | What shipped | Why it mattered |
 |---|---|---|
@@ -39,6 +46,7 @@ ship in v0.2.13.
 | **v0.2.18** | OpenAPI 3.0 spec — hand-curated `docs/openapi.yaml` covering all 13 endpoints with Bearer-JWT security scheme, request/response schemas (RuleSet, FirewallStatus, Event, Finding, Component, etc.) and the rate-limit `429` documented per endpoint. `build.sh` copies the spec into `internal/handlers/` so it ships via `//go:embed`; the daemon serves it at `/api/openapi.{json,yaml}` so third-party tools (n8n flows, Home Assistant custom integrations, OpenAPI generators) can discover the API without reading Go source. New `TestOpenAPISpecServed` locks in both routes + presence of key endpoints in the spec. | An undocumented HTTP API limits adoption to people willing to read source code — that excludes the IceWhale-community integration ecosystem this module is meant to live in. |
 | **v0.2.19** | Final v0.3 batch: **reproducible builds** (`-buildvcs=false`, `SOURCE_DATE_EPOCH` from the last git commit, GNU-tar `--sort=name --owner=0 --group=0 --mtime --pax-option=delete=atime,delete=ctime`, mksquashfs with the env-var time lock, `touch -d` on every payload file). Two clean builds of the same source produce byte-identical `zfw-<v>.tar.gz` — verified by hand (`7c743441…58c7d4` twice in a row). New `dist/<pkg>.tar.gz.sha256` artifact for downstream verification. Optional CycloneDX SBOM via `cyclonedx-gomod` — included when the tool is installed, skipped with a hint otherwise. **GitHub-Actions CI** (`.github/workflows/ci.yml`): gofmt + vet + race-test, then build twice and assert reproducibility, plus an arm64 cross-compile smoke job. Workflow is committed but inactive until the repo gets a GitHub remote. | Reproducibility is the prerequisite for the Mod-Store submission planned in v0.5 (IceWhale requires verifiable artifacts) and for any external security audit beyond the initial review. |
 | **v0.2.20** | **Round-3 security review** of the v0.2.7–v0.2.19 delta. New section in `SECURITY-REPORT.md`: 10 findings (R3-1…R3-10), 4 fixed in this release, 5 accepted residuals, 1 informational ("injection re-tested, not exploitable"). Fixes: `engine commit` now re-runs `secure_file` on `compiled.sh` before installing the boot-persistence unit (R3-1); `write_persist_unit` writes to `.tmp` and atomically renames so a concurrent `daemon-reload` cannot observe a half-written unit (R3-2); `systemctl enable zfw.service` failure surfaces as a clear `exit 1` instead of being silently swallowed (R3-3); `Retry-After: 1` header on every HTTP 429 (R3-4). Accepted residuals (GET-bypass on rate-limiter, global bucket, unit path hardcoding, journalctl error-swallow, defaults-overwrite without API confirm) are tracked for v0.4 with a clear "per-IP rate-limit + dashboard polling debounce" work-item. Cumulative tally: 27 findings, 22 remediated, 5 accepted. | A second security pass after the v0.2.6 handoff was overdue — every release since has added new attack surface (defaults seeding, boot-persistence unit, events parser, IPv6 chain, rate-limit, OpenAPI). |
+| **v0.2.21** | **External tester sign-off baked into the release.** README + ROADMAP carry Gelbuilding's 2026-05-24 ZimaBoard validation of v0.2.20: install, dashboard tile, Safe-Apply, Confirm, custom-port rule-edit (SSH 22 → 2222 for ttydBridge) and full reboot-persistence cycle all confirmed by an external party. Binary code identical to v0.2.20; cache-buster bumped (`?v=0.2.21` on `styles.css` / `app.js`) so the UI doesn't serve stale assets after install; `openapi.yaml` info-version bumped to match. v0.2.20 is preserved as the canonical reproducibility anchor (its tarball SHA stays the reference for the security-reviewed binary). | The first external "works as advertised on hardware I don't control" sign-off since the tester-feedback cycle began. Putting it inside the release tarball — not just in a forum reply — turns word-of-mouth into an artifact a downstream user can inspect before installing. |
 
 ---
 
