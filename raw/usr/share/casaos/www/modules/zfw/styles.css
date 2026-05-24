@@ -70,11 +70,11 @@ header { margin-bottom: 22px; }
 header h1 { font-size: 26px; font-weight: 600; letter-spacing: -.01em; }
 .logo {
   display: block; vertical-align: middle;
-  height: 144px; width: auto; max-width: 100%;
-  /* v1.0.6: tripled vs. the v1.0.3 baseline (was 48px → 96px → now
-     144px). At the wordmark's 4.17:1 aspect ratio that's ~600px
-     wide — the brand is now the visual centre of the header
-     instead of a thumbnail. Transparent backdrop courtesy of the
+  height: 96px; width: auto; max-width: 100%;
+  /* v1.0.7: 2x baseline (was 48px → tried 96px → 144px → settled on
+     96px). v1.0.6's 144px was too dominant per live-test feedback;
+     96px keeps the wordmark prominent without overwhelming the
+     rest of the header. Transparent backdrop courtesy of the
      v1.0.5 PNG alpha-clean pass. */
   filter: drop-shadow(0 1px 1px rgba(0,0,0,0.08));
   transition: filter .15s ease;
