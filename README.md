@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.5.6 — see [Status](#status) for the build line.
+> **Current release:** v0.5.7 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,27 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.5.7** — fourth v1.0 item: **per-container rule binding**. New
+optional `Rule.ContainerID` (additive — no schema bump) binds a
+rule to a Docker container by short ID or name. At every Recompile,
+the daemon queries the live container inventory and substitutes the
+bound container's current host-published TCP ports into the rule's
+Ports field — so a Plex / Jellyfin / Immich rule follows its
+container across restarts and port remaps without manual editing.
+A bound container that is missing at compile time falls back to the
+saved Ports (the user's safety net never disappears). New
+`system.DockerContainers(ctx)` parses `docker ps` output into
+`{id, name, image, ports}` records; `parseDockerPorts` extracts
+only host-mapped TCP entries (UDP and container-only ports are
+skipped). New endpoint `GET /api/system/containers` powers the
+rule-editor's binding picker. UI: new "Bind to container" select in
+the rule editor, populated live on every editor-open from the
+inventory; rule-table row carries an accent-coloured pill with the
+container name when bound. `ruleSignature` picks up the new field
+so a binding-only edit shows in the diff. One new handler test
+(`TestSystemContainersReturnsArray`) locks in the JSON-array
+contract.
 
 **v0.5.6** — third v1.0 item: **outbound rules (OUTPUT + FORWARD)**.
 The largest v1.0 lift: rules can now target traffic leaving the host

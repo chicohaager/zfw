@@ -851,6 +851,25 @@ func TestConntrackReturnsArray(t *testing.T) {
 	}
 }
 
+// TestSystemContainersReturnsArray guards /api/system/containers
+// (v0.5.7): in the test env there is no docker, so the inventory is
+// empty, but the response must be a JSON array (not null) so the UI
+// picker's `for (const c of cs)` iterates without a TypeError.
+func TestSystemContainersReturnsArray(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodGet, "/api/system/containers", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if bytes.Equal(bytes.TrimSpace(w.Body.Bytes()), []byte("null")) {
+		t.Errorf("system/containers: returned null, want [] (UI iterates the slice)")
+	}
+	var got []any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("response not a JSON array: %v (body=%s)", err, w.Body.String())
+	}
+}
+
 // TestGeoLookupEmptyQueryReturnsEmptyMap guards the no-input branch:
 // a /api/geo/lookup with no ips parameter must respond 200 with {}
 // so the UI's batch fetch on a fresh refresh never sees a 400 or 404.

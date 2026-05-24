@@ -189,6 +189,13 @@ header h1 { font-size: 26px; font-weight: 600; letter-spacing: -.01em; }
   vertical-align: 1px;
 }
 .dir-pill.dir-out { background: var(--warn); color: #fff; }
+.ctr-pill {
+  display: inline-block; margin-left: 6px;
+  padding: 1px 7px; border-radius: 999px;
+  background: var(--accent); color: #fff;
+  font-size: 11px; font-weight: 500;
+  font-family: var(--font-mono);
+}
 .schedule-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
 .schedule-time { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-muted); }
 .schedule-time input { padding: 6px 8px; }

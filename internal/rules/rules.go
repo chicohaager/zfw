@@ -82,6 +82,14 @@ type Rule struct {
 	// reach) and the compiler emits `-d` instead of `-s`. Introduced
 	// in schema v3.
 	Direction string `json:"direction,omitempty"`
+	// ContainerID (v0.5.7) optionally binds the rule to a Docker
+	// container by its short ID or name. At Recompile time the daemon
+	// looks up the container in the live inventory and substitutes
+	// its current host-published ports into the rule, so a rule
+	// follows its container across restarts and port remaps. Empty
+	// disables binding (the rule's Ports field is used directly).
+	// Field-additive; no schema bump.
+	ContainerID string `json:"container_id,omitempty"`
 }
 
 // RateLimit is the per-rule connection-rate cap. At most Conn new

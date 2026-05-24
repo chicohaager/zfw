@@ -113,6 +113,31 @@ func (s *Server) Recompile(ctx context.Context) error {
 	if err := rules.Validate(rs); err != nil {
 		return fmt.Errorf("rule set invalid: %w", err)
 	}
+	// Per-container binding resolution (v0.5.7): a rule with
+	// ContainerID set has its Ports list overridden with the live
+	// host-published ports of the bound container. A bound container
+	// that is missing falls back to the saved Ports — the user-defined
+	// ports stay the rule's safety net even when the container went
+	// away. Resolved by ID first, then by name (handier in the UI).
+	containers := system.DockerContainers(ctx)
+	if len(containers) > 0 {
+		byKey := map[string][]int{}
+		for _, c := range containers {
+			byKey[c.ID] = c.Ports
+			byKey[c.Name] = c.Ports
+		}
+		for i := range rs.Rules {
+			cid := rs.Rules[i].ContainerID
+			if cid == "" {
+				continue
+			}
+			ports, ok := byKey[cid]
+			if !ok || len(ports) == 0 {
+				continue
+			}
+			rs.Rules[i].Ports = rules.Ports{Type: "list", List: ports}
+		}
+	}
 	ccSet := map[string]bool{}
 	for _, r := range rs.Rules {
 		if r.Source.Type == "country" {
@@ -164,6 +189,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/geo/lookup", s.geoLookup)
 	mux.HandleFunc("/api/events", s.events)
 	mux.HandleFunc("/api/conntrack", s.conntrack)
+	mux.HandleFunc("/api/system/containers", s.systemContainers)
 	mux.HandleFunc("/api/openapi.json", s.openapi)
 	mux.HandleFunc("/api/openapi.yaml", s.openapi)
 	return mux
@@ -524,6 +550,24 @@ func (s *Server) versions(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx()
 	defer cancel()
 	writeJSON(w, http.StatusOK, system.Versions(ctx))
+}
+
+// systemContainers returns the live Docker container inventory used
+// by the rule editor's container-binding picker (v0.5.7). Empty list
+// on hosts without docker or in test envs — UI handles the empty
+// case (the container picker shows "no containers detected").
+func (s *Server) systemContainers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	ctx, cancel := reqCtx()
+	defer cancel()
+	cs := system.DockerContainers(ctx)
+	if cs == nil {
+		cs = []system.DockerContainer{}
+	}
+	writeJSON(w, http.StatusOK, cs)
 }
 
 // conntrack returns a snapshot of the kernel's live connection-

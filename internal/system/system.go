@@ -172,6 +172,86 @@ func Listening(ctx context.Context) ([]Socket, error) {
 	return res, nil
 }
 
+// DockerContainer is one live container with its host-published TCP ports.
+// v0.5.7 — drives per-container rule binding: the daemon resolves
+// Rule.ContainerID at compile time and substitutes the container's
+// current published-port list into the rule, so a Docker app's rule
+// follows its ports across restarts and remaps.
+type DockerContainer struct {
+	ID    string `json:"id"`    // short 12-char container ID
+	Name  string `json:"name"`  // container name (handier for the UI than the ID)
+	Image string `json:"image"` // image:tag the container is running
+	Ports []int  `json:"ports"` // host-published TCP ports, sorted+deduped
+}
+
+// DockerContainers returns the live container inventory. Empty slice on
+// error (test envs without docker, daemon down, etc.) — the daemon
+// degrades to using saved Rule.Ports for bound rules.
+func DockerContainers(ctx context.Context) []DockerContainer {
+	out := run(ctx, "docker", "ps",
+		"--format", "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}")
+	var cs []DockerContainer
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) < 3 {
+			continue
+		}
+		portsField := ""
+		if len(parts) == 4 {
+			portsField = parts[3]
+		}
+		cs = append(cs, DockerContainer{
+			ID:    parts[0],
+			Name:  parts[1],
+			Image: parts[2],
+			Ports: parseDockerPorts(portsField),
+		})
+	}
+	return cs
+}
+
+// parseDockerPorts extracts host-side TCP port numbers from the
+// docker-ps Ports column. Format examples:
+//
+//	"0.0.0.0:8096->8096/tcp, :::8096->8096/tcp"
+//	"0.0.0.0:32400->32400/tcp, :::32400->32400/tcp, 32400/udp"
+//
+// Container-only ports (no `->host` mapping) are skipped because they
+// are not LAN-reachable. UDP-mapped ports are dropped because the rule
+// engine emits TCP rules by default; the user can add UDP rules
+// explicitly.
+func parseDockerPorts(s string) []int {
+	seen := map[int]bool{}
+	var ports []int
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		// Only host-mapped TCP entries carry "host:port->container/tcp".
+		if !strings.Contains(p, "->") || !strings.HasSuffix(p, "/tcp") {
+			continue
+		}
+		arrow := strings.Index(p, "->")
+		before := p[:arrow]
+		colon := strings.LastIndex(before, ":")
+		if colon < 0 {
+			continue
+		}
+		n, err := strconv.Atoi(before[colon+1:])
+		if err != nil || n < 1 || n > 65535 {
+			continue
+		}
+		if !seen[n] {
+			seen[n] = true
+			ports = append(ports, n)
+		}
+	}
+	sort.Ints(ports)
+	return ports
+}
+
 // DockerPorts returns the set of TCP ports published by Docker (recognised by
 // the docker-proxy process). Used to resolve firewall rule zone "auto".
 func DockerPorts(ctx context.Context) map[int]bool {

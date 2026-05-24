@@ -12,7 +12,7 @@ info:
 
     Non-GET requests share a token-bucket rate-limit (burst 10, sustained
     1/s); excessive traffic is answered with `429 Too Many Requests`.
-  version: "0.5.6"
+  version: "0.5.7"
   license:
     name: See repository
 servers:
@@ -89,6 +89,9 @@ components:
           type: string
           enum: [inbound, outbound]
           description: "Rule chain routing (schema v3+, v0.5.6). Empty / `inbound` → emits on ZFW-IN / ZFW-IN6 / DOCKER-USER as before. `outbound` → emits on ZFW-OUT (zone host|auto), ZFW-OUT6 (IPv6 host), and/or ZFW-FWD-OUT (zone docker|auto, hooked into FORWARD). For outbound rules the Source field is the destination peer (compiler emits `-d` instead of `-s`). Outbound chains never default-deny — they terminate in RETURN — so blanket OUTPUT/FORWARD denial cannot break the host's own DNS / NTP / Docker pulls."
+        container_id:
+          type: string
+          description: "Optional binding to a Docker container by short ID or name (v0.5.7). At Recompile time the daemon resolves it against the live container inventory and substitutes the current host-published ports into the rule. Empty disables binding. Field-additive; no schema bump."
     RuleSet:
       type: object
       properties:
@@ -363,6 +366,26 @@ paths:
         '400': { description: "Invalid JSON or validation error." }
         '401': { description: "Bearer missing or does not match ZFW_PEER_TOKEN." }
         '403': { description: "Peer-receive disabled (ZFW_PEER_TOKEN unset on this host)." }
+
+  /api/system/containers:
+    get:
+      summary: "Live Docker container inventory (v0.5.7). Used by the rule editor's container-binding picker. Empty array on hosts without docker."
+      responses:
+        '200':
+          description: Container list with host-published TCP ports.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:    { type: string, example: "ad19f01a02fa" }
+                    name:  { type: string, example: "jellyfin" }
+                    image: { type: string, example: "jellyfin/jellyfin:latest" }
+                    ports:
+                      type: array
+                      items: { type: integer }
 
   /api/conntrack:
     get:

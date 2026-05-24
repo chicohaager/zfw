@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex">
   <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
   <title>ZFW Firewall</title>
-  <link rel="stylesheet" href="./styles.css?v=0.5.6">
+  <link rel="stylesheet" href="./styles.css?v=0.5.7">
 </head>
 <body>
   <header>
@@ -185,6 +185,12 @@
             <option value="docker">Docker container</option>
           </select>
         </label>
+        <label class="fld">Bind to container <small>(optional, v0.5.7)</small>
+          <select id="rm-container">
+            <option value="">— none (use the ports above) —</option>
+          </select>
+        </label>
+        <p class="rm-hint">When a container is bound, ZFW resolves its current host-published ports at every Recompile — the rule follows the container across restarts and port remaps. If the container is missing at compile time, the saved Ports above are used as fallback.</p>
         <p class="rm-hint">Automatic: zfw detects on its own whether a port is host-native or a Docker container port.</p>
         <label class="fld-check"><input id="rm-enabled" type="checkbox" checked> Rule enabled</label>
         <label class="fld">Notes <small>(optional, 256 chars max)</small>
@@ -248,6 +254,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=0.5.6"></script>
+  <script src="./app.js?v=0.5.7"></script>
 </body>
 </html>

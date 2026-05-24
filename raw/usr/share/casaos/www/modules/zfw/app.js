@@ -138,9 +138,12 @@ function renderRules() {
     const dirBadge = r.direction === 'outbound'
       ? ' <span class="dir-pill dir-out" title="Outbound — applies to traffic FROM this host / its containers">&rarr;</span>'
       : '';
+    const ctrBadge = r.container_id
+      ? ` <span class="ctr-pill" title="Bound to container ${esc(r.container_id)} — ports resolved live at compile">${esc(r.container_id)}</span>`
+      : '';
     return `<tr class="${r.enabled ? '' : 'rule-off'}" data-id="${esc(r.id)}">
       <td class="mono">${i + 1}</td>
-      <td>${dirBadge}${esc(r.name)}${noteBadge}${schedBadge}</td>
+      <td>${dirBadge}${esc(r.name)}${noteBadge}${schedBadge}${ctrBadge}</td>
       <td><span class="actbadge ${actCls}">${actLbl}</span></td>
       <td class="mono">${src}</td>
       <td class="mono">${ports} <span class="proto">${esc(r.protocol)}</span></td>
@@ -369,7 +372,30 @@ function ruleSignature(r) {
     log: !!r.log,
     rate_limit: r.rate_limit || null,
     direction: r.direction || 'inbound',
+    container_id: r.container_id || '',
   });
+}
+
+// loadContainerOptions populates the rule editor's "Bind to
+// container" picker from the live docker inventory served by
+// /api/system/containers. selected is the currently-bound id or
+// name to pre-select. Network errors are silent — the picker
+// degrades to "no containers detected".
+async function loadContainerOptions(selected) {
+  const sel = $('#rm-container');
+  // Reset to just the "none" option while we fetch.
+  sel.innerHTML = '<option value="">— none (use the ports above) —</option>';
+  let cs = [];
+  try { cs = await api('/system/containers'); } catch (_) { /* silent */ }
+  if (!Array.isArray(cs) || cs.length === 0) return;
+  for (const c of cs) {
+    const opt = document.createElement('option');
+    opt.value = c.name || c.id;
+    const ports = (c.ports && c.ports.length) ? ` [${c.ports.join(', ')}]` : '';
+    opt.textContent = `${c.name || c.id} — ${c.image}${ports}`;
+    sel.appendChild(opt);
+  }
+  if (selected) sel.value = selected;
 }
 
 // ruleSummary returns a one-line human description of a rule —
@@ -573,6 +599,11 @@ function openRuleEditor(rule) {
   // updateModalFields flips the Source label to "Destination / peer"
   // when outbound is selected.
   $('#rm-direction').value = r.direction === 'outbound' ? 'outbound' : 'inbound';
+  // Container binding (v0.5.7). Populate the picker from the live
+  // docker inventory on every editor-open so a newly-started
+  // container appears without a UI refresh. Best-effort: empty
+  // inventory just leaves the only option as "none".
+  loadContainerOptions(r.container_id || '');
   // v0.4.4 advanced fields. Per-rule log: simple checkbox. Per-rule
   // rate-limit: collapsible fieldset with conn/seconds inputs that
   // round-trip the RateLimit pointer.
@@ -746,6 +777,8 @@ function saveRuleFromEditor() {
   if (rateLimit) rule.rate_limit = rateLimit;
   if (schedule) rule.schedule = schedule;
   if ($('#rm-direction').value === 'outbound') rule.direction = 'outbound';
+  const cid = $('#rm-container').value;
+  if (cid) rule.container_id = cid;
   if (editingRuleId) {
     const i = ruleIndex(editingRuleId);
     if (i >= 0) {
