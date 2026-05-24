@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.5.1 — see [Status](#status) for the build line.
+> **Current release:** v0.5.2 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,28 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.5.2** — pre-v1.0 template catalog expansion. Templates picker
+now ships **16 entries** (up from 3): the existing two security
+templates (block VNC consoles, block NFS/rpcbind) and "Allow Plex"
+stay, plus **13 new "Allow"-from-LAN templates for the typical
+ZimaOS Mod-Store app catalog**: *Termina / ttyd* (7681), *Portainer*
+(9000+9443), *Jellyfin* (8096+8920+7359/udp+1900/udp), *Immich*
+(2283), *Home Assistant* (8123), *AdGuard Home* (3000+53 TCP+UDP),
+*Vaultwarden* (8222), *Syncthing* (8384+22000+21027/udp), *Nextcloud*
+(8080), *PhotoPrism* (2342), ***arr suite* (Sonarr 8989, Radarr 7878,
+Bazarr 6767, Prowlarr 9696 in one template — a typical homelab adds
+all four together), *qBittorrent* (8080). Every new template has
+zone `auto` so the compiler routes the rule to `ZFW-IN` or
+`DOCKER-USER` live based on what is actually published; source is
+LAN (auto-substituted via the existing `lanSource(lan)` helper, with
+"any" fallback when no LAN is detected). All template
+implementations go through a single internal `allow(name, proto,
+ports...)` constructor so adding the next Mod-Store entry is a
+one-line literal. No schema bump, no compiler change, no UI change —
+the picker just gets longer. Existing tests (`TestTemplatesAllValid`,
+`TestTemplatesFreshIDs`, `TestTemplatesSubstituteLAN`) cover the
+expanded catalog without modification.
 
 **v0.5.1** — hotfix on top of v0.5.0. Two robustness fixes after a
 live-test report from lan-host that the **Events**, **Connections** and
