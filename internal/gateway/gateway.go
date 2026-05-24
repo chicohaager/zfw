@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -121,17 +122,24 @@ func (m *Manager) LookupTarget(ctx context.Context, path string) (string, error)
 // RegisterWithRetry keeps trying Register until it succeeds or ctx is done,
 // then re-registers every 5 minutes so the route survives a gateway restart
 // (which drops all registered routes). Register() is idempotent.
-func (m *Manager) RegisterWithRetry(ctx context.Context, logf func(string, ...any)) {
+//
+// CQ-13 (v1.0.2): logger is now *slog.Logger directly. A nil logger
+// discards messages — callers that did not previously want output
+// stay quiet without needing a sentinel. The earlier
+// `func(string, ...any)` shape forced a slogf adapter at the
+// main.go callsite; that adapter is gone.
+func (m *Manager) RegisterWithRetry(ctx context.Context, logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 	delay := 2 * time.Second
 	const maxDelay = 30 * time.Second
 	for {
 		if err := m.Register(); err == nil {
-			if logf != nil {
-				logf("gateway route registered: %s -> %s", m.Path, m.Target)
-			}
+			logger.Info("gateway route registered", "path", m.Path, "target", m.Target)
 			break
-		} else if logf != nil {
-			logf("gateway route registration failed (retry in %s): %v", delay, err)
+		} else {
+			logger.Warn("gateway route registration failed", "retry_in", delay, "err", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -150,8 +158,8 @@ func (m *Manager) RegisterWithRetry(ctx context.Context, logf func(string, ...an
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := m.Register(); err != nil && logf != nil {
-				logf("gateway route re-registration failed: %v", err)
+			if err := m.Register(); err != nil {
+				logger.Warn("gateway route re-registration failed", "err", err)
 			}
 		}
 	}

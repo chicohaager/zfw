@@ -7,8 +7,10 @@ package events
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -72,6 +74,15 @@ func Read(ctx context.Context, since time.Time, limit int) ([]Event, error) {
 	if err != nil {
 		return nil, err
 	}
+	// R3-8 (v1.0.2): capture stderr so a journalctl failure is observable
+	// at slog.Debug. The Events tab's "transient hiccup = empty list" UX
+	// is preserved (the function still returns no error and no events),
+	// but an operator running with debug logging on can now diagnose a
+	// persistent failure (read-only /var/log/journal, missing journalctl
+	// binary on a stripped image, AppArmor profile, etc.) without
+	// guessing.
+	var stderrBuf bytes.Buffer
+	cmd.Stderr = &stderrBuf
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -96,7 +107,18 @@ func Read(ctx context.Context, since time.Time, limit int) ([]Event, error) {
 		}
 		out = append(out, ev)
 	}
-	_ = cmd.Wait() // ignore: journalctl exit code is not load-bearing here
+	// R3-8: log Wait error + captured stderr at Debug so a persistent
+	// journalctl problem is diagnosable. The function intentionally
+	// still returns nil error — the events tab fails soft (empty list
+	// on hiccup) by design, callers must not see I/O errors here.
+	if werr := cmd.Wait(); werr != nil {
+		slog.Debug("journalctl exited non-zero",
+			"err", werr,
+			"stderr", strings.TrimSpace(stderrBuf.String()))
+	} else if stderrBuf.Len() > 0 {
+		slog.Debug("journalctl wrote stderr but exited cleanly",
+			"stderr", strings.TrimSpace(stderrBuf.String()))
+	}
 
 	// Classify on the time-ascending series so the sliding window walks
 	// forward naturally. Then reverse for the UI's newest-first
@@ -209,11 +231,15 @@ func parseDropLine(msg, ts string) (Event, bool) {
 		return Event{}, false
 	}
 	// iptables LOG writes space-separated KEY=VALUE pairs after the prefix.
+	// CQ-15 (v1.0.2): use SplitN(_, "=", 2) instead of strings.Cut so a
+	// value containing further '=' chars stays intact (current kernels
+	// don't produce that shape, but kernel format drifts and we should
+	// not silently truncate).
 	fields := map[string]string{}
 	for _, f := range strings.Fields(msg) {
-		k, v, ok := strings.Cut(f, "=")
-		if ok && v != "" {
-			fields[k] = v
+		kv := strings.SplitN(f, "=", 2)
+		if len(kv) == 2 && kv[1] != "" {
+			fields[kv[0]] = kv[1]
 		}
 	}
 	ev := Event{

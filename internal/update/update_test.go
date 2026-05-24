@@ -33,6 +33,26 @@ func TestCompareOrdering(t *testing.T) {
 	}
 }
 
+// TestCompareTreatsPreReleaseAsEqual pins the CQ-12 (v1.0.2) documented
+// trade-off: pre-release suffixes are stripped, so "1.2.3" == "1.2.3-rc1"
+// == "1.2.3+build". The release flow ships no -rc tags so this is a
+// non-issue in practice; documented here so a future maintainer
+// considering -rc publishing knows to revisit Compare first.
+func TestCompareTreatsPreReleaseAsEqual(t *testing.T) {
+	if got := Compare("1.2.3", "1.2.3-rc1"); got != 0 {
+		t.Errorf("Compare(\"1.2.3\",\"1.2.3-rc1\") = %d, want 0 (suffix stripped)", got)
+	}
+	if got := Compare("1.2.3-rc1", "1.2.3"); got != 0 {
+		t.Errorf("Compare(\"1.2.3-rc1\",\"1.2.3\") = %d, want 0 (suffix stripped)", got)
+	}
+	if got := Compare("1.2.3-rc1", "1.2.3-rc2"); got != 0 {
+		t.Errorf("Compare(\"1.2.3-rc1\",\"1.2.3-rc2\") = %d, want 0 (both suffixes stripped)", got)
+	}
+	if got := Compare("1.2.3+build1", "1.2.3"); got != 0 {
+		t.Errorf("Compare(\"1.2.3+build1\",\"1.2.3\") = %d, want 0 (suffix stripped)", got)
+	}
+}
+
 // TestCheckOnceParsesManifest is the happy-path: the manifest endpoint
 // returns a clean JSON body, the checker stores Latest + Available +
 // Notes and clears the Error field.

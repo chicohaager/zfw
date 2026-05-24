@@ -1,6 +1,7 @@
 package rules
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -405,5 +406,29 @@ func TestSaveStampsCurrentVersion(t *testing.T) {
 	}
 	if parsed.Version != CurrentSchema {
 		t.Errorf("Save wrote version=%d, want %d", parsed.Version, CurrentSchema)
+	}
+}
+
+// TestSaveInitialisesV6DropToEmpty pins the CQ-7 (v1.0.2) fix: a
+// freshly seeded RuleSet whose V6Drop slice is nil must marshal as
+// "v6_drop": [] on disk — never "v6_drop": null. Strict third-party
+// JSON tooling (n8n, Home Assistant, generated OpenAPI clients)
+// rejects the null form.
+func TestSaveInitialisesV6DropToEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rules.json")
+	rs := RuleSet{LAN: "192.168.1.0/24", DefaultPolicy: "deny", V6Drop: nil}
+	if err := Save(path, rs); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"v6_drop": []`)) {
+		t.Errorf("expected v6_drop empty-array shape on disk, got:\n%s", b)
+	}
+	if bytes.Contains(b, []byte(`"v6_drop": null`)) {
+		t.Errorf("v6_drop must never marshal as null:\n%s", b)
 	}
 }

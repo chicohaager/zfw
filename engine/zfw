@@ -25,6 +25,15 @@ IPT6="$(command -v ip6tables-legacy 2>/dev/null || command -v ip6tables 2>/dev/n
 
 log(){ echo "[zfw] $*"; }
 
+# apply_or_die runs a command and aborts the engine if it fails. Used to
+# wrap the commit-side chain (write_persist_unit + daemon-reload +
+# systemctl enable) so a silent failure in any one step no longer leaves
+# the operator believing boot-persistence is active when it isn't.
+# CQ-10 (v1.0.2). Each step is run via "$@" so quoted arguments survive.
+apply_or_die(){
+  "$@" || { echo "[zfw] ERROR: $* failed" >&2; exit 1; }
+}
+
 # secure_file refuses a file that is not root-owned or is group/world-writable
 # before it is executed as root (ZFW-S8).
 secure_file(){
@@ -140,19 +149,22 @@ case "${1:-}" in
     # immediately instead of on the next reboot (security-review v0.2.20 M1).
     [ -r "$COMPILED" ] || { echo "[zfw] ERROR: compiled ruleset missing: $COMPILED" >&2; exit 1; }
     secure_file "$COMPILED" || exit 1
+    # Dead-man teardown stays best-effort — the timer may simply not be
+    # running on a host where commit is called outside an apply --safe
+    # sequence, and that is fine.
     systemctl stop "${DEADMAN}.timer" 2>/dev/null || true
     systemctl reset-failed "${DEADMAN}.service" 2>/dev/null || true
-    # Install + enable the boot-restore unit so the committed rules survive
-    # reboot. Idempotent: re-running commit just rewrites the same unit.
-    write_persist_unit
-    systemctl daemon-reload
-    # Surface enable failures (read-only /etc, masked unit, sysext quirks)
-    # rather than silently lying "boot-persistence enabled" — security-review
-    # v0.2.20 L1.
-    if ! systemctl enable zfw.service >/dev/null 2>&1; then
-      echo "[zfw] ERROR: systemctl enable zfw.service failed — boot-persistence is NOT active" >&2
-      exit 1
-    fi
+    # CQ-10 (v1.0.2): every step that materially affects boot-persistence
+    # is wrapped in apply_or_die so a silent failure no longer lets the
+    # operator believe the commit succeeded. Pre-v1.0.2 only `enable`
+    # was checked (R3-3); write_persist_unit and daemon-reload were
+    # implicit-success.
+    apply_or_die write_persist_unit
+    apply_or_die systemctl daemon-reload
+    # Surface enable failures (read-only /etc, masked unit, sysext
+    # quirks). The redirect to /dev/null is dropped here so the
+    # underlying systemctl error reaches the operator's terminal.
+    apply_or_die systemctl enable zfw.service
     log "committed — deadman cancelled, boot-persistence enabled (zfw.service)"
     ;;
   revert)

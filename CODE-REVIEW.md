@@ -31,11 +31,15 @@ worst instance — `rulesDefaults` silently skipped Validate,
 Recompile and emitEvent. The remaining duplication (CQ-1) is on the
 v1.x refactor list.
 
-Five packages ship without any tests: `config`, `firewall`,
-`gateway`, `system`, `watchdog`. These are exactly the layer that
-talks to the world (env, subprocess, HTTP, systemd) — the parsers
-in `system.parseDockerPorts`, `extractVersion`, `parseKernel` are
-the most exposed to format drift in external tools.
+Five packages shipped without any tests at v1.0.0: `config`, `firewall`,
+`gateway`, `system`, `watchdog`. v1.0.2 adds tests for `config` and
+`system` (the two pure-function packages); `firewall`, `gateway`,
+`watchdog` still need real systemd / iptables / HTTP test infrastructure
+and stay on the v1.1 list. The added tests lock in the parsers that are
+most exposed to external-tool format drift —
+`system.parseDockerPorts`, `extractVersion`, `parseKernel`,
+`opensshVersion`, `kernelVulnerable`, `dockerOld`, plus
+`config.parseIfaceList` / `isSafeIfaceName`.
 
 ---
 
@@ -94,9 +98,8 @@ cosmetic).
 
 ### CQ-3 — Container-binding name/ID map collides silently — **Medium**
 **Where:** `internal/handlers/handlers.go:124-128`.
-**Status:** Open — flagged for v1.x.
-**Smell:** `byKey[c.ID] = c.Ports` then `byKey[c.Name] = c.Ports` in the same loop. Two containers with the same name during a recreate, or a name that happens to match another container's short ID, silently collapses to one ports list.
-**Fix sketch:** Two separate maps (`byID`, `byName`), explicit precedence, `slog.Warn` on collision.
+**Status:** ✅ **Fixed in v1.0.2.**
+**What changed:** Split into two maps — `byID` (canonical, looked up first) and `byName` (fallback). A genuine name/ID collision between *different* containers now emits a `slog.Warn` so the operator can rename one; the byID/byName split keeps the lookup semantics deterministic (ID wins).
 
 ### CQ-4 — Remaining German strings in user-facing paths — **Medium**
 **Status:** ✅ **Fixed in v1.0.1**.
@@ -104,35 +107,31 @@ cosmetic).
 
 ### CQ-5 — Five packages have zero tests — **Medium**
 **Where:** `internal/config`, `internal/firewall`, `internal/gateway`, `internal/system`, `internal/watchdog`.
-**Status:** Open — flagged for v1.x.
-**Smell:** These are the packages that talk to the world (env, subprocess, HTTP, systemd) and have the highest format-drift risk. `parseDockerPorts`, `extractVersion`, `parseKernel`, `parseIfaceList`/`isSafeIfaceName` are pure functions ripe for table-tests.
-**Fix sketch:** Start with `system/system_test.go` and `config/config_test.go` — pure-function table-tests, no subprocess needed.
+**Status:** ✅ **Fixed in v1.0.2 (partial — config + system).** firewall, gateway and watchdog still lack tests (they need real systemd / iptables / HTTP test infrastructure) and remain on the v1.1 list.
+**What changed:** New `internal/config/config_test.go` covers `parseIfaceList` + `isSafeIfaceName` with a strict-allowlist + injection-attempt table. New `internal/system/system_test.go` covers `parseDockerPorts` (three documented input shapes), `extractVersion`, `opensshVersion`, `parseKernel`, `kernelVulnerable`, `dockerOld`.
 
 ### CQ-6 — `peersPush` is the only lifecycle handler without webhook emit — **Low**
 **Where:** `internal/handlers/handlers.go` peersPush.
-**Status:** Open — flagged for v1.x.
-**Fix sketch:** `s.emitEvent("peers.pushed", map[string]any{"peers": len(ps), "ok": <count>, "fail": <count>})` after `peers.Push` returns.
+**Status:** ✅ **Fixed in v1.0.2.**
+**What changed:** `peersPush` now emits `peers.pushed` with `{peers, ok, fail}` totals after `peers.Push` returns. n8n / Home Assistant integrations get the multi-host sync signal that other lifecycle events have always had.
 
 ### CQ-7 — `RuleSet.V6Drop` lacks `omitempty` — marshals as `null` — **Low**
 **Where:** `internal/rules/rules.go` RuleSet struct.
-**Status:** Open — flagged for v1.x.
-**Smell:** A freshly seeded RuleSet whose V6Drop is `nil` marshals as `"v6_drop": null` on the wire, which strict third-party tools (n8n, Home Assistant, OpenAPI consumers) will reject.
-**Fix sketch:** Either add `,omitempty` (and update the OpenAPI required-fields list) or initialise V6Drop to `[]int{}` in `Save`.
+**Status:** ✅ **Fixed in v1.0.2.**
+**What changed:** `Save()` initialises `V6Drop` to `[]int{}` when nil so the wire shape is always `"v6_drop": []`. Chosen over `,omitempty` so the OpenAPI required-fields list does not change. Pinned by `TestSaveInitialisesV6DropToEmpty`.
 
 ### CQ-8 — `rulesDefaults` re-detected LAN, overwriting user-set value — **Low**
 **Status:** ✅ **Fixed in v1.0.1** alongside CQ-2.
 
 ### CQ-9 — `Recompile` holds the lock through `docker ps` + geo downloads — **Low**
 **Where:** `internal/handlers/handlers.go` Recompile.
-**Status:** Open — flagged for v1.x.
-**Smell:** With `s.mu` held, Recompile can take ~20 minutes worst-case on a 40-country rule set with slow geo downloads. Single-admin appliance keeps it from being a hot path, but the mutex span is wider than its docstring implies.
-**Fix sketch:** Pre-resolve `DockerContainers` and `DockerPorts` outside the mutex; pass them into Recompile.
+**Status:** ✅ **Fixed in v1.0.2.**
+**What changed:** Split into `prefetchForCompile` (slow IO — `DockerContainers`, `DockerPorts`, `geo.Ensure` — outside any lock) and `recompileLocked` (fast in-memory + `os.WriteFile` under `s.mu`). The public `Recompile` chains both. Every mutate handler (`rules` POST, `apply`, `rulesDefaults`, `peersReceive`) now runs the slow prefetch *before* taking `s.mu` so a concurrent commit/revert no longer queues behind a 40-country geo refresh.
 
 ### CQ-10 — Engine `commit` chains five steps but only checks one — **Low**
 **Where:** `engine/zfw` commit case.
-**Status:** Open — flagged for v1.x.
-**Smell:** `daemon-reload` and `secure_file` results are implicit-success. R3-3 fixed the `enable` check; the rest still aren't checked.
-**Fix sketch:** `apply_or_die() { "$@" || { echo "[zfw] ERROR: $* failed" >&2; exit 1; }; }` helper, wrap each step.
+**Status:** ✅ **Fixed in v1.0.2.**
+**What changed:** New `apply_or_die "$@"` helper at the top of the engine. `write_persist_unit`, `systemctl daemon-reload` and `systemctl enable zfw.service` are each wrapped — a silent failure in any step now aborts commit with a clear `[zfw] ERROR: <cmd> failed` instead of letting the operator believe boot-persistence is active when it isn't.
 
 ### CQ-11 — `app.js saveRuleFromEditor` is 120 lines of inline validation — **Low**
 **Where:** `raw/usr/share/casaos/www/modules/zfw/app.js` saveRuleFromEditor.
@@ -140,11 +139,11 @@ cosmetic).
 **Smell:** Reads 19 DOM inputs and re-implements every server-side validation rule. When schema v4 lands, eleven `modalError(...)` calls have to mirror the backend change.
 **Fix sketch:** Extract `validateRulePartial(fields) → errorString | null` as a pure JS function. The single-file vanilla-JS design intent stays — the refactor is *inside* that decision.
 
-### CQ-12..CQ-15 — Nits — **Nit**
-- **CQ-12** `update.Compare("1.2.3", "1.2.3-rc1")` returns 0 (suffix stripped). Document or extend.
-- **CQ-13** `gateway`/`watchdog` take legacy `func(string, ...any)` loggers via the `slogf` bridge — could take `*slog.Logger` directly.
-- **CQ-14** `Versions` is cached, `DetectLAN` is not — inconsistent host-introspection caching policy.
-- **CQ-15** `events.parseDropLine` uses `strings.Cut` which truncates values containing further `=` chars — defensible today but brittle if kernel format changes.
+### CQ-12..CQ-15 — Nits — **Nit** — all ✅ Fixed in v1.0.2
+- **CQ-12** `update.Compare("1.2.3", "1.2.3-rc1")` returns 0 (suffix stripped). v1.0.2: documented in the Compare doc-comment + pinned by `TestCompareTreatsPreReleaseAsEqual` so a future maintainer considering -rc publishing knows to revisit.
+- **CQ-13** `gateway`/`watchdog` took legacy `func(string, ...any)` loggers via the `slogf` bridge. v1.0.2: both now accept `*slog.Logger` directly (nil logger discards via `io.Discard`); `slogf` adapter removed from `main.go`.
+- **CQ-14** `Versions` was cached, `DetectLAN` was not. v1.0.2: `DetectLAN` cached behind `lanMu` with the same 60s TTL (`lanTTL`).
+- **CQ-15** `events.parseDropLine` used `strings.Cut` which truncates values containing further `=`. v1.0.2: switched to `strings.SplitN(_, "=", 2)`; regression-locked by `TestParseDropLinePreservesEqualsInValue`.
 
 ---
 
@@ -152,18 +151,21 @@ cosmetic).
 
 | ID | Severity | Title | Effort | Status |
 |---|---|---|---|---|
-| CQ-1 | High | Four lifecycle handlers duplicate plumbing | M | Open (v1.x) |
+| CQ-1 | High | Four lifecycle handlers duplicate plumbing | M | Open (v1.1) |
 | CQ-2 | High | rulesDefaults skipped Validate + Recompile + emit | S | ✅ Fixed v1.0.1 |
-| CQ-3 | Medium | Container-binding map collision | S | Open (v1.x) |
+| CQ-3 | Medium | Container-binding map collision | S | ✅ Fixed v1.0.2 |
 | CQ-4 | Medium | German strings in user-facing paths | S | ✅ Fixed v1.0.1 |
-| CQ-5 | Medium | 5 packages with zero tests | M | Open (v1.x) |
-| CQ-6 | Low | peersPush has no webhook emit | S | Open (v1.x) |
-| CQ-7 | Low | RuleSet.V6Drop marshals as null | S | Open (v1.x) |
+| CQ-5 | Medium | 5 packages with zero tests | M | ✅ Fixed v1.0.2 (config + system; firewall/gateway/watchdog deferred to v1.1) |
+| CQ-6 | Low | peersPush has no webhook emit | S | ✅ Fixed v1.0.2 |
+| CQ-7 | Low | RuleSet.V6Drop marshals as null | S | ✅ Fixed v1.0.2 |
 | CQ-8 | Low | rulesDefaults overwrote saved LAN | S | ✅ Fixed v1.0.1 |
-| CQ-9 | Low | Recompile holds mutex through subprocess/HTTP | M | Open (v1.x) |
-| CQ-10 | Low | Engine commit only checks last step | S | Open (v1.x) |
-| CQ-11 | Low | app.js saveRuleFromEditor monolith | M | Open (v1.x) |
-| CQ-12..15 | Nit | Various small items | S | Open (v1.x) |
+| CQ-9 | Low | Recompile holds mutex through subprocess/HTTP | M | ✅ Fixed v1.0.2 |
+| CQ-10 | Low | Engine commit only checks last step | S | ✅ Fixed v1.0.2 |
+| CQ-11 | Low | app.js saveRuleFromEditor monolith | M | Open (v1.1) |
+| CQ-12 | Nit | update.Compare ignores -rc suffix | S | ✅ Fixed v1.0.2 (documented + test) |
+| CQ-13 | Nit | gateway/watchdog use printf-shape logger | S | ✅ Fixed v1.0.2 |
+| CQ-14 | Nit | DetectLAN not cached like Versions | S | ✅ Fixed v1.0.2 |
+| CQ-15 | Nit | events.parseDropLine truncates '=' values | S | ✅ Fixed v1.0.2 |
 
 ---
 

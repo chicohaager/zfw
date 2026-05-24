@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -62,6 +63,14 @@ type Server struct {
 	hook         *notify.Hook    // v0.5.5 — nil = webhook disabled
 	httpClient   *http.Client    // reusable client for outbound peer pushes
 	mutateRL     *rateBucket     // shared by all non-GET endpoints
+	// readRL caps expensive GET endpoints (exposure, events, conntrack,
+	// versions) that shell out to ss / journalctl / docker / sshd. An
+	// authenticated user could otherwise flood them and CPU-pin the
+	// daemon (R3-5). Burst 60 / sustained 5/s comfortably covers
+	// normal browser refresh + dashboard polling on a multi-tab UI
+	// session while capping abusive flooding. /api/health stays
+	// uncapped (liveness probe).
+	readRL *rateBucket
 }
 
 // NewServer returns a Server. fw may be *firewall.Manager in production or
@@ -87,6 +96,8 @@ func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string,
 		// Burst 10, sustained 1/s — a user clicking Safe-Apply repeatedly
 		// passes the burst; a runaway script is throttled to one call/sec.
 		mutateRL: newRateBucket(1, 10),
+		// Burst 60, sustained 5/s — see Server.readRL field doc above.
+		readRL: newRateBucket(5, 60),
 	}
 }
 
@@ -105,39 +116,51 @@ func (s *Server) emitEvent(typ string, details map[string]any) {
 // Recompile loads the rule set, ensures geo data for any country rules,
 // resolves zones against live Docker ports and writes the engine's compiled
 // ruleset script.
+//
+// CQ-9 (v1.0.2): the slow external IO (DockerContainers, DockerPorts,
+// geo.Ensure downloads) runs BEFORE the per-server mutex is acquired so
+// concurrent callers no longer block one another for the full 20-minute
+// worst-case of a 40-country geo refresh. Recompile takes s.mu itself
+// for the rules.Load + Validate + compile + write step. Callers must
+// NOT hold s.mu when calling Recompile (the lock is non-reentrant —
+// re-acquiring s.mu would deadlock). Mutating handlers that already
+// hold s.mu do the prefetch themselves via prefetchForCompile, then
+// call recompileLocked under their existing lock.
 func (s *Server) Recompile(ctx context.Context) error {
-	rs, err := rules.Load(s.rulesPath)
+	containers, dockerPorts, err := s.prefetchForCompile(ctx, nil)
 	if err != nil {
 		return err
 	}
-	// Never compile unvalidated rules: the result is run as root by the engine.
-	if err := rules.Validate(rs); err != nil {
-		return fmt.Errorf("rule set invalid: %w", err)
-	}
-	// Per-container binding resolution (v0.5.7): a rule with
-	// ContainerID set has its Ports list overridden with the live
-	// host-published ports of the bound container. A bound container
-	// that is missing falls back to the saved Ports — the user-defined
-	// ports stay the rule's safety net even when the container went
-	// away. Resolved by ID first, then by name (handier in the UI).
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.recompileLocked(containers, dockerPorts)
+}
+
+// prefetchForCompile does the slow external IO that recompile needs
+// (Docker container inventory, host-published port map, geo downloads
+// for any country sources in the current rule set). Safe to call
+// without s.mu — it talks to docker / ss / disk-cached geo files only.
+// Returns the prefetched containers + dockerPorts so the caller can
+// hand them to recompileLocked without re-querying. The optional
+// rsHint lets a caller pass a not-yet-saved rule set so the geo
+// prefetch covers the about-to-be-saved country codes; passing nil
+// reads the current rules.json from disk for the geo plan.
+func (s *Server) prefetchForCompile(ctx context.Context, rsHint *rules.RuleSet) ([]system.DockerContainer, map[int]bool, error) {
 	containers := system.DockerContainers(ctx)
-	if len(containers) > 0 {
-		byKey := map[string][]int{}
-		for _, c := range containers {
-			byKey[c.ID] = c.Ports
-			byKey[c.Name] = c.Ports
+	dockerPorts := system.DockerPorts(ctx)
+
+	var rs rules.RuleSet
+	if rsHint != nil {
+		rs = *rsHint
+	} else {
+		// A fresh install has no rules.json yet — geo prefetch in that
+		// case is empty, which is fine. Surface any other read error so
+		// the caller can fail loud.
+		loaded, err := rules.Load(s.rulesPath)
+		if err != nil && !os.IsNotExist(err) {
+			return nil, nil, err
 		}
-		for i := range rs.Rules {
-			cid := rs.Rules[i].ContainerID
-			if cid == "" {
-				continue
-			}
-			ports, ok := byKey[cid]
-			if !ok || len(ports) == 0 {
-				continue
-			}
-			rs.Rules[i].Ports = rules.Ports{Type: "list", List: ports}
-		}
+		rs = loaded
 	}
 	ccSet := map[string]bool{}
 	for _, r := range rs.Rules {
@@ -148,22 +171,84 @@ func (s *Server) Recompile(ctx context.Context) error {
 		}
 	}
 	if len(ccSet) > maxGeoCountries {
-		return fmt.Errorf("too many countries (%d) — at most %d geo sets", len(ccSet), maxGeoCountries)
+		return nil, nil, fmt.Errorf("too many countries (%d) — at most %d geo sets", len(ccSet), maxGeoCountries)
 	}
-	geoFiles := map[string]string{}
 	if len(ccSet) > 0 {
 		codes := make([]string, 0, len(ccSet))
 		for cc := range ccSet {
 			codes = append(codes, cc)
 		}
 		if err := s.geo.Ensure(ctx, codes, nil); err != nil {
-			return err
-		}
-		for cc := range ccSet {
-			geoFiles[cc] = s.geo.IpsetPath(cc)
+			return nil, nil, err
 		}
 	}
-	script := compiler.Compile(rs, system.DockerPorts(ctx), geoFiles, s.extraBypass...)
+	return containers, dockerPorts, nil
+}
+
+// recompileLocked does the fast lock-protected portion of Recompile:
+// load rules.json, validate, substitute container-bound ports, run the
+// compiler, write compiled.sh. Caller must already hold s.mu. Slow IO
+// (Docker, geo downloads) is the caller's responsibility — pass live
+// containers + dockerPorts maps and pre-warm s.geo if any country
+// sources are in play. Used by both the unlocked-entry Recompile and
+// by mutate handlers that hold s.mu across save+recompile.
+func (s *Server) recompileLocked(containers []system.DockerContainer, dockerPorts map[int]bool) error {
+	rs, err := rules.Load(s.rulesPath)
+	if err != nil {
+		return err
+	}
+	// Never compile unvalidated rules: the result is run as root by the engine.
+	if err := rules.Validate(rs); err != nil {
+		return fmt.Errorf("rule set invalid: %w", err)
+	}
+	// Per-container binding resolution (v0.5.7) — see Recompile doc.
+	if len(containers) > 0 {
+		byID := make(map[string][]int, len(containers))
+		byName := make(map[string][]int, len(containers))
+		for _, c := range containers {
+			if c.ID != "" {
+				byID[c.ID] = c.Ports
+			}
+			if c.Name != "" {
+				byName[c.Name] = c.Ports
+			}
+		}
+		// CQ-3: warn if a name doubles as some other container's ID
+		// and the two would resolve to different ports.
+		for _, c := range containers {
+			if c.Name == "" {
+				continue
+			}
+			if idPorts, ok := byID[c.Name]; ok && !portsEqual(idPorts, c.Ports) {
+				slog.Warn("docker name collides with another container's ID",
+					"name", c.Name, "id_ports", idPorts, "name_ports", c.Ports)
+			}
+		}
+		for i := range rs.Rules {
+			cid := rs.Rules[i].ContainerID
+			if cid == "" {
+				continue
+			}
+			ports, ok := byID[cid]
+			if !ok {
+				ports, ok = byName[cid]
+			}
+			if !ok || len(ports) == 0 {
+				continue
+			}
+			rs.Rules[i].Ports = rules.Ports{Type: "list", List: ports}
+		}
+	}
+	geoFiles := map[string]string{}
+	for _, r := range rs.Rules {
+		if r.Source.Type == "country" {
+			for _, cc := range rules.SplitCountries(r.Source.Value) {
+				lc := strings.ToLower(cc)
+				geoFiles[lc] = s.geo.IpsetPath(lc)
+			}
+		}
+	}
+	script := compiler.Compile(rs, dockerPorts, geoFiles, s.extraBypass...)
 	// 0600: the compiled script is executed as root — keep it owner-only.
 	return os.WriteFile(s.compiledPath, []byte(script), 0o600)
 }
@@ -180,16 +265,22 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/apply", s.rateLimited(s.apply))
 	mux.HandleFunc("/api/commit", s.rateLimited(s.commit))
 	mux.HandleFunc("/api/revert", s.rateLimited(s.revert))
-	mux.HandleFunc("/api/exposure", s.exposure)
+	// R3-5 (closed v1.0.2): the four endpoints that shell out to ss /
+	// journalctl / docker / sshd are wrapped in the read-side rate
+	// limiter so an authenticated user cannot flood them and CPU-pin
+	// the daemon. Cheaper reads (status, config, audit, peers list,
+	// geo lookup, openapi, system/containers, update, rules GET, etc.)
+	// stay uncapped — they hit memory + a small JSON encode at worst.
+	mux.HandleFunc("/api/exposure", s.rateLimitedGet(s.exposure))
 	mux.HandleFunc("/api/audit", s.auditHandler)
-	mux.HandleFunc("/api/versions", s.versions)
+	mux.HandleFunc("/api/versions", s.rateLimitedGet(s.versions))
 	mux.HandleFunc("/api/update", s.updateStatus)
 	mux.HandleFunc("/api/peers", s.peersList)
 	mux.HandleFunc("/api/peers/push", s.rateLimited(s.peersPush))
 	mux.HandleFunc("/api/peers/receive", s.peersReceive)
 	mux.HandleFunc("/api/geo/lookup", s.geoLookup)
-	mux.HandleFunc("/api/events", s.events)
-	mux.HandleFunc("/api/conntrack", s.conntrack)
+	mux.HandleFunc("/api/events", s.rateLimitedGet(s.events))
+	mux.HandleFunc("/api/conntrack", s.rateLimitedGet(s.conntrack))
 	mux.HandleFunc("/api/system/containers", s.systemContainers)
 	mux.HandleFunc("/api/openapi.json", s.openapi)
 	mux.HandleFunc("/api/openapi.yaml", s.openapi)
@@ -292,19 +383,27 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 			fail(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
-		s.mu.Lock()
-		defer s.mu.Unlock()
 		if err := rules.Validate(rs); err != nil {
 			fail(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		ctx, cancel := reqCtx()
+		defer cancel()
+		// CQ-9: slow IO (docker inventory, geo downloads) happens
+		// outside s.mu so a concurrent commit/revert is not blocked
+		// behind a country-list refresh.
+		containers, dockerPorts, err := s.prefetchForCompile(ctx, &rs)
+		if err != nil {
+			fail(w, http.StatusInternalServerError, "prepare: "+err.Error())
+			return
+		}
+		s.mu.Lock()
+		defer s.mu.Unlock()
 		if err := rules.Save(s.rulesPath, rs); err != nil {
 			fail(w, http.StatusInternalServerError, "save: "+err.Error())
 			return
 		}
-		ctx, cancel := reqCtx()
-		defer cancel()
-		if err := s.Recompile(ctx); err != nil {
+		if err := s.recompileLocked(containers, dockerPorts); err != nil {
 			fail(w, http.StatusInternalServerError, "compile: "+err.Error())
 			return
 		}
@@ -325,6 +424,17 @@ func (s *Server) rulesDefaults(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusMethodNotAllowed, "POST required")
 		return
 	}
+	// R3-9 (v1.0.2): this endpoint overwrites the saved rule set with
+	// the recommended defaults. The UI's JS confirms first, but a
+	// direct curl/script call had no such gate. Require an explicit
+	// `?confirm=1` query parameter so an automation written against
+	// the API has to opt into the destructive behaviour rather than
+	// stumble into it. The UI sends ?confirm=1.
+	if r.URL.Query().Get("confirm") != "1" {
+		fail(w, http.StatusBadRequest,
+			"this overwrites your saved rules; pass ?confirm=1 to acknowledge")
+		return
+	}
 	ctx, cancel := reqCtx()
 	defer cancel()
 	// CQ-8: prefer the user's saved LAN over a fresh DetectLAN —
@@ -339,22 +449,25 @@ func (s *Server) rulesDefaults(w http.ResponseWriter, r *http.Request) {
 	}
 	dp := system.DockerPorts(ctx)
 	rs := rules.Defaults(lan, hostIP, dp)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	// CQ-2: mirror the rules POST contract — Validate before Save,
-	// Recompile after, fire the webhook. Earlier behaviour silently
-	// skipped all three; the next Safe-Apply would Recompile anyway,
-	// but the compiled.sh stayed stale in the gap and the
-	// rules.saved-equivalent event was never emitted.
+	// Recompile after, fire the webhook.
 	if err := rules.Validate(rs); err != nil {
 		fail(w, http.StatusInternalServerError, "defaults invalid: "+err.Error())
 		return
 	}
+	// CQ-9: pre-resolve slow IO outside s.mu.
+	containers, dockerPorts, err := s.prefetchForCompile(ctx, &rs)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "prepare: "+err.Error())
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := rules.Save(s.rulesPath, rs); err != nil {
 		fail(w, http.StatusInternalServerError, "save: "+err.Error())
 		return
 	}
-	if err := s.Recompile(ctx); err != nil {
+	if err := s.recompileLocked(containers, dockerPorts); err != nil {
 		fail(w, http.StatusInternalServerError, "compile: "+err.Error())
 		return
 	}
@@ -397,12 +510,23 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	ctx, cancel := reqCtx()
 	defer cancel()
+	// CQ-9: slow IO outside s.mu so a concurrent operator click on
+	// commit/revert is not blocked behind docker ps + geo Ensure.
+	containers, dockerPorts, err := s.prefetchForCompile(ctx, nil)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fail(w, http.StatusBadRequest, "no rules saved yet — open the Rules tab, add a rule and click Save")
+			return
+		}
+		fail(w, http.StatusInternalServerError, "prepare: "+err.Error())
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	// Recompile so the engine applies the current rule set.
-	if err := s.Recompile(ctx); err != nil {
+	if err := s.recompileLocked(containers, dockerPorts); err != nil {
 		if os.IsNotExist(err) {
 			// Fresh install: rules.json does not exist yet. Don't surface
 			// the raw file-not-found error — tell the user what to do.
@@ -678,6 +802,25 @@ func (s *Server) peersPush(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx()
 	defer cancel()
 	results := peers.Push(ctx, s.httpClient, ps, body)
+	// CQ-6 (closed v1.0.2): peersPush was the only lifecycle handler
+	// that did not fire a webhook on completion. Operators wiring n8n /
+	// Home Assistant to ZFW events otherwise had no signal that a
+	// rule-set distribution had happened — and crucially no signal when
+	// some followers failed (ok=false). The event carries the totals so
+	// the receiver does not need to walk the Results array.
+	okN, failN := 0, 0
+	for _, r := range results {
+		if r.OK {
+			okN++
+		} else {
+			failN++
+		}
+	}
+	s.emitEvent("peers.pushed", map[string]any{
+		"peers": len(ps),
+		"ok":    okN,
+		"fail":  failN,
+	})
 	writeJSON(w, http.StatusOK, results)
 }
 
@@ -720,15 +863,21 @@ func (s *Server) peersReceive(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	ctx, cancel := reqCtx()
+	defer cancel()
+	// CQ-9: pre-resolve slow IO before taking the lock.
+	containers, dockerPorts, err := s.prefetchForCompile(ctx, &rs)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "prepare: "+err.Error())
+		return
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := rules.Save(s.rulesPath, rs); err != nil {
 		fail(w, http.StatusInternalServerError, "save: "+err.Error())
 		return
 	}
-	ctx, cancel := reqCtx()
-	defer cancel()
-	if err := s.Recompile(ctx); err != nil {
+	if err := s.recompileLocked(containers, dockerPorts); err != nil {
 		fail(w, http.StatusInternalServerError, "compile: "+err.Error())
 		return
 	}
@@ -783,4 +932,21 @@ func toSet(xs []string) map[string]bool {
 		m[x] = true
 	}
 	return m
+}
+
+// portsEqual reports whether two int slices represent the same set of
+// host-published ports. Both inputs come from system.DockerContainers,
+// which already sorts and de-duplicates them, so a straight element-
+// wise compare is sufficient (no sort needed). Used by Recompile to
+// gate the name/ID collision warning (CQ-3).
+func portsEqual(a, b []int) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

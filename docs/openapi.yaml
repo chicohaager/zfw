@@ -12,7 +12,7 @@ info:
 
     Non-GET requests share a token-bucket rate-limit (burst 10, sustained
     1/s); excessive traffic is answered with `429 Too Many Requests`.
-  version: "1.0.1"
+  version: "1.0.2"
   license:
     name: See repository
 servers:
@@ -243,9 +243,16 @@ paths:
 
   /api/rules/defaults:
     post:
-      summary: Generate and persist the recommended starter rule set (auto-LAN + live Docker inventory).
+      summary: Generate and persist the recommended starter rule set (auto-LAN + live Docker inventory). Overwrites any existing rules.json — requires ?confirm=1 (R3-9, v1.0.2).
+      parameters:
+        - in: query
+          name: confirm
+          required: true
+          schema: { type: string, enum: ["1"] }
+          description: Must be "1". Acknowledges that the saved rules will be replaced by the recommended defaults.
       responses:
         '200': { description: Defaults installed., content: { application/json: { schema: { $ref: '#/components/schemas/RuleSet' } } } }
+        '400': { description: Missing ?confirm=1 — destructive overwrite refused. }
         '429': { description: Rate-limited. }
 
   /api/rules/templates:

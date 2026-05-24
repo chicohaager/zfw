@@ -369,7 +369,11 @@ func TestOutboundHostRuleEmitsZFWOut(t *testing.T) {
 		}},
 	}, nil, nil)
 	mustContain(t, out, "$IPT -N ZFW-OUT")
-	mustContain(t, out, "$IPT -A ZFW-OUT -d 203.0.113.42 -j DROP")
+	// R4-6 (v1.0.2): destination is emitted as a strconv.Quote'd literal
+	// for shell-injection defence-in-depth, so the assertion matches the
+	// quoted form. rules.Validate is still the load-bearing control —
+	// only digits/dots/colons/slashes reach here today.
+	mustContain(t, out, `$IPT -A ZFW-OUT -d "203.0.113.42" -j DROP`)
 	mustContain(t, out, "$IPT -C OUTPUT -j ZFW-OUT 2>/dev/null || $IPT -I OUTPUT 1 -j ZFW-OUT")
 	// Inbound chains must not carry the outbound rule.
 	mustNotContain(t, out, "$IPT -A ZFW-IN -d 203.0.113.42")
@@ -392,7 +396,8 @@ func TestOutboundDockerRuleEmitsZFWFwdOut(t *testing.T) {
 		}},
 	}, nil, nil)
 	mustContain(t, out, "$IPT -N ZFW-FWD-OUT")
-	mustContain(t, out, "$IPT -A ZFW-FWD-OUT -d 169.254.169.254 -j DROP")
+	// R4-6: quoted destination — see TestOutboundHostRuleEmitsZFWOut.
+	mustContain(t, out, `$IPT -A ZFW-FWD-OUT -d "169.254.169.254" -j DROP`)
 	mustContain(t, out, "$IPT -C FORWARD -j ZFW-FWD-OUT 2>/dev/null || $IPT -I FORWARD 1 -j ZFW-FWD-OUT")
 }
 
@@ -460,6 +465,37 @@ func TestExtraBypassIfacesEmittedInAllChains(t *testing.T) {
 	mustContain(t, out, "$IPT -A DOCKER-USER -i mesh+ -j RETURN")
 	mustContain(t, out, "$IPT6 -A ZFW-IN6 -i vpn0 -j RETURN")
 	mustContain(t, out, "$IPT6 -A ZFW-IN6 -i mesh+ -j RETURN")
+}
+
+// TestOutboundDestQuotedAsDefenseInDepth pins the R4-6 (v1.0.2) fix:
+// outbound rules emit the destination via strconv.Quote so a future
+// rules.Validate relaxation cannot quietly re-open a shell-injection
+// vector into the root-run compiled.sh. Validate already chokes any
+// non-canonical address today; the quoting is a second wall.
+func TestOutboundDestQuotedAsDefenseInDepth(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{
+			{
+				ID: "rout46v4", Order: 10, Enabled: true,
+				Name: "ipv4 outbound", Action: "deny",
+				Source:   rules.Source{Type: "ip", Value: "203.0.113.42"},
+				Ports:    rules.Ports{Type: "all"},
+				Protocol: "both", Zone: "host",
+				Direction: "outbound",
+			},
+			{
+				ID: "rout46v6", Order: 20, Enabled: true,
+				Name: "ipv6 outbound", Action: "deny",
+				Source:   rules.Source{Type: "ip", Value: "2001:db8::1"},
+				Ports:    rules.Ports{Type: "all"},
+				Protocol: "both", Zone: "host",
+				Direction: "outbound",
+			},
+		},
+	}, nil, nil)
+	mustContain(t, out, `$IPT -A ZFW-OUT -d "203.0.113.42" -j DROP`)
+	mustContain(t, out, `$IPT6 -A ZFW-OUT6 -d "2001:db8::1" -j DROP`)
 }
 
 // TestNoLogNoRateLimitNoExtraLines guards that the v0.4.4 wrapEmit

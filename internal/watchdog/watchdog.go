@@ -5,6 +5,8 @@ package watchdog
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"time"
@@ -31,7 +33,13 @@ WantedBy=timers.target
 
 // EnsureInstalled writes the watchdog units (if missing or changed) and
 // enables the timer. Idempotent; safe to call on every daemon start.
-func EnsureInstalled(logf func(string, ...any)) error {
+//
+// CQ-13 (v1.0.2): accepts *slog.Logger directly; a nil logger discards
+// (callers stop forwarding a slogf adapter from main.go).
+func EnsureInstalled(logger *slog.Logger) error {
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
 	changed := false
 	for path, content := range map[string]string{svcPath: svcUnit, timerPath: timerUnit} {
 		if b, err := os.ReadFile(path); err != nil || string(b) != content {
@@ -47,9 +55,7 @@ func EnsureInstalled(logf func(string, ...any)) error {
 		_ = exec.CommandContext(ctx, "systemctl", "daemon-reload").Run()
 	}
 	if err := exec.CommandContext(ctx, "systemctl", "enable", "--now", "zfw-ui-watchdog.timer").Run(); err != nil {
-		if logf != nil {
-			logf("watchdog: enable timer: %v", err)
-		}
+		logger.Warn("watchdog: enable timer", "err", err)
 		return err
 	}
 	return nil

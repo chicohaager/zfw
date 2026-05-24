@@ -10,7 +10,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -34,14 +33,6 @@ import (
 	"github.com/chicohaager/zfw/internal/update"
 	"github.com/chicohaager/zfw/internal/watchdog"
 )
-
-// slogf adapts a printf-style logger call to slog.Info. Used as a callback
-// argument for library code (gateway.RegisterWithRetry, watchdog.EnsureInstalled)
-// that still takes the legacy `func(string, ...any)` signature so those
-// packages stay slog-agnostic.
-func slogf(format string, args ...any) {
-	slog.Info(fmt.Sprintf(format, args...))
-}
 
 func main() {
 	// Use the text handler — key=value lines stay readable in journalctl
@@ -211,7 +202,9 @@ func main() {
 	defer stop()
 
 	// Keep the reverse-proxy route registered so the UI reaches this daemon.
-	go gw.RegisterWithRetry(ctx, slogf)
+	// CQ-13 (v1.0.2): pass *slog.Logger directly — the gateway package
+	// no longer takes a printf-shape callback.
+	go gw.RegisterWithRetry(ctx, slog.Default())
 
 	// Poll for upstream releases once per week. A disabled checker
 	// (empty ZFW_UPDATE_URL) returns immediately without starting the
@@ -221,7 +214,7 @@ func main() {
 	// Install the boot watchdog on the persistent root (ZimaOS sysext units
 	// can lose the multi-user.target race — see KB §18.9).
 	go func() {
-		if err := watchdog.EnsureInstalled(slogf); err != nil {
+		if err := watchdog.EnsureInstalled(slog.Default()); err != nil {
 			slog.Warn("watchdog setup (non-fatal)", "err", err)
 		}
 	}()

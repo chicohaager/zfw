@@ -328,6 +328,14 @@ func Compile(rs rules.RuleSet, dockerPorts map[int]bool, geoFiles map[string]str
 // is always the destination port regardless of direction. Rules with
 // no peer source ("any") emit only the port match. Empty result if
 // the rule is misshaped for outbound.
+//
+// Round-4 R4-6 (closed v1.0.2): the destination address is emitted via
+// strconv.Quote as defence-in-depth. rules.Validate already canonicalises
+// ip/range values via net.ParseIP / net.ParseCIDR (so only digits, dots,
+// colons and slashes reach here today), but quoting the literal keeps
+// a future Validate relaxation from silently re-opening a shell-injection
+// vector into the root-run compiled.sh. Mirrors the R4-1 LOG --log-prefix
+// strconv.Quote fix.
 func outboundLines(r rules.Rule) []string {
 	target := "ACCEPT"
 	if r.Action == "deny" {
@@ -340,7 +348,7 @@ func outboundLines(r rules.Rule) []string {
 	case "any":
 		dst = ""
 	case "ip", "range":
-		dst = "-d " + r.Source.Value
+		dst = "-d " + strconv.Quote(r.Source.Value)
 	case "country":
 		// Country sources for outbound = "block egress to <country>".
 		// Each ipset emits its own line.
@@ -374,7 +382,8 @@ func outboundLines6(r rules.Rule) []string {
 		if !strings.Contains(r.Source.Value, ":") {
 			return nil // IPv4 destination — IPv6 chain skips
 		}
-		dst = "-d " + r.Source.Value
+		// R4-6: defence-in-depth quoting; see outboundLines comment.
+		dst = "-d " + strconv.Quote(r.Source.Value)
 	default:
 		return nil
 	}

@@ -519,7 +519,9 @@ async function applyRecommendedDefaults() {
   }
   setStatus('Applying recommended defaults…');
   try {
-    await api('/rules/defaults', { method: 'POST' });
+    // R3-9: ?confirm=1 is required server-side so a stray automation
+    // can't overwrite a saved rule set without an explicit acknowledgement.
+    await api('/rules/defaults?confirm=1', { method: 'POST' });
     setStatus('Defaults installed — review here, then Safe-Apply on the Firewall tab.', 'ok');
     await loadRules();
   } catch (e) {

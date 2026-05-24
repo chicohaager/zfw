@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/chicohaager/zfw/internal/httputil"
 )
 
 // Event is the JSON body posted to the configured URL. Type is the
@@ -37,13 +39,19 @@ type Hook struct {
 // New returns a *Hook configured against url. An empty url returns nil
 // so callers can hold a *Hook field and call Send unconditionally —
 // the nil receiver path is a no-op.
+//
+// R4-7 (v1.0.2): same redirect hardening as update.Checker — refuse
+// https→http downgrade and public→private/loopback redirects.
 func New(url string) *Hook {
 	if url == "" {
 		return nil
 	}
 	return &Hook{
-		url:    url,
-		client: &http.Client{Timeout: 10 * time.Second},
+		url: url,
+		client: &http.Client{
+			Timeout:       10 * time.Second,
+			CheckRedirect: httputil.SafeCheckRedirect(5),
+		},
 	}
 }
 

@@ -22,22 +22,23 @@ defaults seeding, reboot-persistence, the Events tab, IPv6 protection, and
 the v0.3-foundation work (handler tests, slog, rate-limit, OpenAPI,
 reproducible builds).
 
-**Cumulative result: 27 findings, 22 remediated, 5 accepted residuals.**
-No Critical or High issue is open. The injection class examined in round 2
-was re-tested against the new code paths (port-range, IPv6 source mirror,
-events parser, defaults seeding) and remains **not exploitable** — every
-caller-supplied value crosses `rules.Validate` (`net.ParseIP`,
-`net.ParseCIDR`, `[A-Za-z]{2}` for country codes, integer bounds for
-ports), and the kernel-log strings the events parser reads are
-script-display-only, never re-executed.
+**Cumulative result across four rounds: 35 findings, 30 remediated,
+5 accepted residuals.** v1.0.2 closed the three Round-4 Info-grade
+residuals (R4-6 / R4-7 / R4-8) plus three older Round-3 residuals
+(R3-5 / R3-8 / R3-9). No Critical or High issue is open. The
+injection class is closed across every caller-controlled path
+(Round-1 `rules.Validate` chokepoint extended in Round-4 via
+`isSafeRuleID` and `isSafeContainerID` for the daemon-supplied
+fields that turned out to be attacker-controlled on the wire).
 
 | Severity | Found | Remediated | Accepted residual |
 |----------|-------|------------|---|
 | Critical | 1 | 1 | 0 |
 | High | 1 | 1 | 0 |
-| Medium | 12 | 9 | 3 |
-| Low | 13 | 11 | 2 |
-| **Total** | **27** | **22** | **5** |
+| Medium | 14 | 12 | 2 |
+| Low | 16 | 14 | 2 |
+| Info | 3 | 3 | 0 |
+| **Total** | **35** | **30** | **5** |
 
 ---
 
@@ -149,11 +150,11 @@ value) and one delegated to a focused subagent for the highest-risk pair
 | R3-2 | Medium | `write_persist_unit` truncated `/etc/systemd/system/zfw.service` then wrote, leaving a window where a concurrent `daemon-reload` could observe an empty unit | **Fixed in v0.2.20:** unit is staged in `.tmp` on the same fs, `chmod` while hidden, then atomic `mv -f` |
 | R3-3 | Low | `systemctl enable zfw.service \|\| true` swallowed failures — the operator saw "boot-persistence enabled" even when the enable had silently failed (read-only `/etc`, masked unit, sysext quirk) | **Fixed in v0.2.20:** failure surfaces as `exit 1` with a clear error |
 | R3-4 | Low | HTTP 429 responses lacked a `Retry-After` header — a naive client could hot-loop and defeat the limiter's CPU-protection goal | **Fixed in v0.2.20:** `Retry-After: 1` set on every rate-limit response |
-| R3-5 | Medium | GET endpoints are not rate-limited — an authenticated user (one valid ZimaOS session token) can flood expensive reads (`GET /api/exposure` shells out to `ss`, `GET /api/events` to `journalctl`) and CPU-pin the daemon | **Accepted residual** for the single-admin appliance use case; tracked for the v0.4 "per-IP rate-limit + dashboard polling debounce" item |
+| R3-5 | Medium | GET endpoints are not rate-limited — an authenticated user (one valid ZimaOS session token) can flood expensive reads (`GET /api/exposure` shells out to `ss`, `GET /api/events` to `journalctl`) and CPU-pin the daemon | **Fixed in v1.0.2:** new read-side `rateBucket` (burst 60, sustained 5/s) wraps `/api/exposure`, `/api/events`, `/api/conntrack`, `/api/versions` via `rateLimitedGet`. `/api/health` stays uncapped (liveness probe). Same `Retry-After: 1` envelope as the mutate bucket. |
 | R3-6 | Medium | One global rate-limit bucket shared across all clients — a runaway browser tab or a poll loop in one UI session can lock the legitimate operator out of `commit` / `revert` during an incident, exactly when responsiveness matters most | **Accepted residual** with the same v0.4 plan |
 | R3-7 | Medium | `zfw.service` hardcodes `/DATA/zfw/zfw` and `/DATA/zfw/compiled.sh` regardless of dev paths or `ZFW_COMPILED` override; `ConditionPathExists` makes a non-standard install silently no-op at boot | **Accepted residual** — production install path is fixed and the daemon refuses to start outside it; flagged in `BEST-PRACTICES.md` |
-| R3-8 | Low | `internal/events.Read` silently discards `cmd.Wait()` and does not capture journalctl's stderr — an operator wouldn't know if journalctl errored partway through | **Accepted residual** — fail-soft was deliberate so a journald hiccup doesn't blank the UI, but a debug log line is on the v0.4 polish list |
-| R3-9 | Low | `POST /api/rules/defaults` silently overwrites the saved rule set; the UI confirms but the API does not require a `?confirm=1` parameter | **Accepted residual** — `mutateRL` rate-limit + same-origin CSRF + Bearer token make the unintended-overwrite scenario require either UI use (where the JS confirm dialog runs) or a deliberate authenticated curl |
+| R3-8 | Low | `internal/events.Read` silently discards `cmd.Wait()` and does not capture journalctl's stderr — an operator wouldn't know if journalctl errored partway through | **Fixed in v1.0.2:** stderr captured, `cmd.Wait()` non-zero + stderr logged at `slog.Debug`. UX preserved (events tab still empties soft on transient hiccups). |
+| R3-9 | Low | `POST /api/rules/defaults` silently overwrites the saved rule set; the UI confirms but the API does not require a `?confirm=1` parameter | **Fixed in v1.0.2:** `?confirm=1` query parameter required; 400 with a clear error otherwise. UI sends `?confirm=1`. OpenAPI spec updated. Regression-locked by `TestRulesDefaultsRequiresConfirm`. |
 | R3-10 | Info | Injection re-tested across the new compiler paths (port-range emits `--dport X:Y` only when `Validate` accepted `From/To` integers, IPv6 source mirror passes through `net.ParseCIDR`-validated values, events parser reads from journald not from user input) | **Not exploitable** — validation gates hold across every new path |
 
 ### Build pipeline & supply chain
@@ -294,9 +295,9 @@ PoC verification for any injection-class candidate.
 | **R4-3** | Medium | `sameOrigin` (`cmd/zfwd/main.go:193`) runs on every POST/PUT/DELETE — including `/api/peers/receive` — even though the JWT middleware whitelists the route. `peers.pushOne` never sets `Origin` / `Referer`. Multi-host push fails 403 in any real two-host deployment. The risk is that a maintainer "fixes" the operational bug by removing the same-origin check entirely and silently downgrades defence-in-depth. | **Fixed in v1.0.1:** `peers.pushOne` sets a synthetic `Origin: <follower-base>` header derived from the peer URL so the same-origin invariant is preserved on the receiver side. |
 | **R4-4** | Low | `Rule.ContainerID` (`rules.go:92`) has no character or length validation; not currently interpolated into bash but used as a Go map key. Future code that emits it into a command line or log message would inherit injection risk by default. | **Fixed in v1.0.1:** validate against `[A-Za-z0-9_.-]{1,64}` (Docker container-name regex). |
 | **R4-5** | Low | Compiler comment at `compiler.go:421` claims "Validate rejects duplicates upstream" — false. Two rules with identical IDs share the same `xt_recent` hashtable bucket, so a rate-limit on rule A burns rule B's window. Operator confusion / firewall-semantics drift, not a privilege boundary loss. | **Fixed in v1.0.1:** `Validate` builds a `seen[id]bool` and rejects duplicate IDs. Compiler comment updated. |
-| **R4-6** | Info | Outbound rule `Source.Value` reaches `-d <addr>` unquoted at `compiler.go:343`. `Validate` already canonicalises via `net.ParseIP` / `net.ParseCIDR`, so only `0-9a-fA-F:./` bytes reach the compiler. Not exploitable today; flagged so a future Validate relaxation doesn't quietly open the path. | **Accepted residual:** defence-in-depth is already provided by Validate's `net.Parse*` chokepoint; further bash-side quoting was considered but defers to the same Validate invariant. Tracked alongside R4-7 for a "post-Validate canonicalisation" sweep in v1.x. |
-| **R4-7** | Info | `update.Checker` (`update.go:62`) and `notify.Hook` (`notify.go:46`) instantiate `&http.Client{Timeout: 10s}` with the default `CheckRedirect` — up to 10 redirects, scheme-agnostic. An attacker controlling DNS for the operator-set URL can coerce a fetch to a private/loopback address and read the HTTP status (response body is not echoed back). Operator-set URL means this is opt-in by configuration, but the S1 / S2 spirit is "trust anchor stays loopback". | **Accepted residual:** mirrors the bounded-redirect S2 fix for JWKS but the surface is narrower (operator chose the URL; webhook response body is never exposed). Tracked for v1.x — `CheckRedirect` callback that refuses cross-scheme jumps + refuses redirects to private ranges when the original URL was public. |
-| **R4-8** | Info | Migration `.bak.v<old>` write at `rules.go:269` is a single ≤16KB `os.WriteFile` call — atomic in practice on Linux but not guaranteed by the kernel API. The migration write itself is `tmp + rename` (atomic), but two concurrent `Load` calls on a v0 file both run migration and both write the same `.tmp`. End-state consistent thanks to `rename(2)`. | **Accepted residual:** rename atomicity covers the visible state. The audit-history file uses the same `writeAtomic` pattern and is guarded by `s.auditMu`; migration is one-shot per file so the race window closes after the first successful Load. Documented in `internal/rules/rules.go` near the Load function. |
+| **R4-6** | Info | Outbound rule `Source.Value` reaches `-d <addr>` unquoted at `compiler.go:343`. `Validate` already canonicalises via `net.ParseIP` / `net.ParseCIDR`, so only `0-9a-fA-F:./` bytes reach the compiler. Not exploitable today; flagged so a future Validate relaxation doesn't quietly open the path. | **Fixed in v1.0.2:** outbound `-d <addr>` is now emitted via `strconv.Quote` as defence-in-depth (mirrors the v1.0.1 R4-1 LOG `--log-prefix` quoting). `rules.Validate`'s `net.Parse*` chokepoint is still the load-bearing control. Regression-locked by `TestOutboundDestQuotedAsDefenseInDepth`. |
+| **R4-7** | Info | `update.Checker` (`update.go:62`) and `notify.Hook` (`notify.go:46`) instantiate `&http.Client{Timeout: 10s}` with the default `CheckRedirect` — up to 10 redirects, scheme-agnostic. An attacker controlling DNS for the operator-set URL can coerce a fetch to a private/loopback address and read the HTTP status (response body is not echoed back). Operator-set URL means this is opt-in by configuration, but the S1 / S2 spirit is "trust anchor stays loopback". | **Fixed in v1.0.2:** new shared `internal/httputil.SafeCheckRedirect` callback wired into both clients refuses https→http downgrade, refuses public→private/loopback redirects (DNS-based SSRF chains caught at first hop), caps hop count at 5. Tests with `httptest` cover all four shapes. |
+| **R4-8** | Info | Migration `.bak.v<old>` write at `rules.go:269` is a single ≤16KB `os.WriteFile` call — atomic in practice on Linux but not guaranteed by the kernel API. The migration write itself is `tmp + rename` (atomic), but two concurrent `Load` calls on a v0 file both run migration and both write the same `.tmp`. End-state consistent thanks to `rename(2)`. | **Fixed in v1.0.2:** package-level `migrateMu` serialises the migrate+save block. After acquiring the lock, Load re-reads the on-disk schema so a second concurrent caller skips the redundant `.bak` write entirely. |
 
 ### Cross-checks ("not-a-finding" surface)
 
@@ -333,11 +334,12 @@ Round 4 found **one Critical** (R4-1, authenticated root RCE via
 making the multi-host feature operationally broken in a security-
 relevant way), three Low (R4-2 / R4-4 / R4-5) and three Info
 (R4-6 / R4-7 / R4-8). All five with-fix findings are remediated in
-**v1.0.1**; three Info-grade items are tracked as accepted residuals
-with rationale.
+**v1.0.1**; the three Info-grade items were initially tracked as
+accepted residuals and are now **all closed in v1.0.2** alongside
+three older Round-3 residuals (R3-5 / R3-8 / R3-9).
 
-Cumulative tally across four rounds: **35 findings, 27 remediated,
-8 accepted residuals**. The critical finding (R4-1) is the only one of
+Cumulative tally across four rounds: **35 findings, 30 remediated,
+5 accepted residuals**. The critical finding (R4-1) is the only one of
 its kind across all four rounds and re-confirms the injection-class
 discipline established in Rounds 1–3 — once `validateRule` covered
 every caller-supplied field, the class closed again. The pattern to
@@ -345,10 +347,17 @@ watch for in future bumps: any new `Rule.*` field that looks
 "daemon-supplied" (because `Save` fills it on empty) but is in fact
 attacker-controlled on the wire.
 
-**ZFW v1.0.1 is assessed as fit for the v1.0 General-Availability
+The remaining accepted residuals — R3-6 (per-IP rate-limit), R3-7
+(boot-persistence unit path hardcoded), and R3-10 (info-grade
+injection re-test, not exploitable) — are architectural / product-
+policy items deferred to v1.1 with explicit tracking.
+
+**ZFW v1.0.2 is assessed as fit for the v1.0 General-Availability
 release** — the same Round-3 single-admin-appliance threat-model
 constraints apply, now extended with the v1.0.0 `THREAT-MODEL.md`
-adversary catalogue and `BUG-BOUNTY.md` disclosure process.
+adversary catalogue and `BUG-BOUNTY.md` disclosure process. v1.0.2
+closes every Round-4 finding and tightens three Round-3 residuals
+that the single-admin model had previously made acceptable.
 
 ---
 

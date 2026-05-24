@@ -305,6 +305,36 @@ func TestMutateRateLimitTrips(t *testing.T) {
 	}
 }
 
+// TestReadRateLimitTrips pins the R3-5 (v1.0.2) fix: the four expensive
+// read endpoints share a read-side bucket of burst 60 / sustained 5/s so
+// an authenticated client cannot flood them and CPU-pin the daemon.
+// /api/conntrack is the cheapest to exercise — no kernel module needed,
+// the handler swallows the conntrack-read error and returns 200 [] so
+// the test environment is fine. The 61st call in a tight loop must
+// answer 429.
+func TestReadRateLimitTrips(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	for i := 0; i < 60; i++ {
+		w := do(s, http.MethodGet, "/api/conntrack", nil)
+		if w.Code == http.StatusTooManyRequests {
+			t.Fatalf("burst %d: tripped read-rate-limit too early (HTTP 429)", i)
+		}
+	}
+	w := do(s, http.MethodGet, "/api/conntrack", nil)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("61st GET /api/conntrack: HTTP %d, want 429", w.Code)
+	}
+	if got := w.Header().Get("Retry-After"); got == "" {
+		t.Errorf("rate-limit 429 missing Retry-After header (got %q)", got)
+	}
+	// Cheap GETs (e.g. /api/health) must NOT share the bucket — liveness
+	// stays uncapped.
+	w = do(s, http.MethodGet, "/api/health", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/health: HTTP %d, want 200 (must not share read bucket)", w.Code)
+	}
+}
+
 // TestOpenAPISpecServed locks in v0.2.18: the daemon embeds its own OpenAPI
 // 3.0 spec and serves it under /api/openapi.{json,yaml}. Third-party tools
 // (n8n, Home Assistant, OpenAPI generators) can discover the API without
@@ -434,9 +464,13 @@ func TestRulesPostRejectsInvalidRuleSet(t *testing.T) {
 // TestRulesDefaultsSeedsStarter locks in the v0.2.9/v0.2.10 fresh-install
 // seed flow: POST /api/rules/defaults regenerates the starter rule set
 // (deny-default plus baseline allow-rules) and persists it.
+//
+// R3-9 (v1.0.2): the endpoint now requires ?confirm=1 so a scripted caller
+// has to acknowledge the destructive overwrite. The UI sends ?confirm=1
+// after its JS prompt.
 func TestRulesDefaultsSeedsStarter(t *testing.T) {
 	s, rulesPath := newTestServer(t, &fakeFirewall{})
-	w := do(s, http.MethodPost, "/api/rules/defaults", nil)
+	w := do(s, http.MethodPost, "/api/rules/defaults?confirm=1", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("got HTTP %d (body=%s), want 200", w.Code, w.Body.String())
 	}
@@ -449,6 +483,19 @@ func TestRulesDefaultsSeedsStarter(t *testing.T) {
 	}
 	if _, err := os.Stat(rulesPath); err != nil {
 		t.Errorf("rules.json not written: %v", err)
+	}
+}
+
+// TestRulesDefaultsRequiresConfirm pins R3-9: without ?confirm=1 the
+// endpoint must return 400 (and must NOT write rules.json).
+func TestRulesDefaultsRequiresConfirm(t *testing.T) {
+	s, rulesPath := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodPost, "/api/rules/defaults", nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("got HTTP %d (body=%s), want 400", w.Code, w.Body.String())
+	}
+	if _, err := os.Stat(rulesPath); err == nil {
+		t.Errorf("rules.json must NOT be written without ?confirm=1")
 	}
 }
 

@@ -12,7 +12,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
+
+// migrateMu serialises the migrate-and-save path in Load. Two
+// concurrent callers on a v0 rules.json otherwise both write the
+// same `.bak.v<old>` file and race the atomic rename of the
+// upgraded payload. The final on-disk state is correct either way
+// (rename(2) is atomic) but the .bak write itself is not — Round-4
+// R4-8 closed in v1.0.2.
+var migrateMu sync.Mutex
 
 // Source is a rule's traffic source.
 type Source struct {
@@ -267,6 +276,22 @@ func Load(path string) (RuleSet, error) {
 		return RuleSet{}, err
 	}
 	if changed {
+		// R4-8 (closed v1.0.2): serialise the migrate+save block so two
+		// concurrent Loads on a v0 file do not race each other's .bak
+		// write. The atomic rename in writeAtomic guards the visible
+		// state, but two writers walking through os.WriteFile on the
+		// same bak path is still a defined-but-undesired race. After
+		// the lock, re-check the source file's version: a concurrent
+		// caller may already have completed the migration, in which
+		// case there is nothing left to do.
+		migrateMu.Lock()
+		defer migrateMu.Unlock()
+		if cur, rerr := os.ReadFile(path); rerr == nil {
+			var check RuleSet
+			if jerr := json.Unmarshal(cur, &check); jerr == nil && check.Version >= CurrentSchema {
+				return check, nil
+			}
+		}
 		bak := fmt.Sprintf("%s.bak.v%d", path, sourceVersion)
 		if err := os.WriteFile(bak, b, 0o600); err != nil {
 			return RuleSet{}, fmt.Errorf("rules.json migration backup failed: %w", err)
@@ -280,8 +305,18 @@ func Load(path string) (RuleSet, error) {
 
 // Save validates nothing but assigns missing ids, stamps the current schema
 // version and writes rules.json atomically.
+//
+// CQ-7 (closed v1.0.2): V6Drop is initialised to an empty slice when nil
+// so the JSON wire shape is always `"v6_drop": []` instead of `null`.
+// Strict third-party tools (n8n, Home Assistant, OpenAPI generators)
+// rejected the null form. Picking the in-Save initialisation rather
+// than `,omitempty` keeps the field on the wire — the OpenAPI required-
+// fields list does not have to change.
 func Save(path string, rs RuleSet) error {
 	rs.Version = CurrentSchema
+	if rs.V6Drop == nil {
+		rs.V6Drop = []int{}
+	}
 	for i := range rs.Rules {
 		if rs.Rules[i].ID == "" {
 			rs.Rules[i].ID = NewID()

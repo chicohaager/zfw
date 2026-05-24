@@ -72,3 +72,21 @@ func (s *Server) rateLimited(h http.HandlerFunc) http.HandlerFunc {
 		h(w, r)
 	}
 }
+
+// rateLimitedGet caps expensive read endpoints (the ones that shell
+// out to `ss`, `journalctl`, `docker`, `ssh -V`, or read /proc) with
+// the dedicated readRL bucket — burst 60, sustained 5/s. Closes R3-5:
+// an authenticated client can no longer flood these to CPU-pin the
+// daemon. The same Retry-After/429 envelope as rateLimited so naive
+// clients back off cleanly.
+func (s *Server) rateLimitedGet(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !s.readRL.allow() {
+			w.Header().Set("Retry-After", "1")
+			fail(w, http.StatusTooManyRequests,
+				"rate limit exceeded — slow down (burst 60, 5/s sustained on expensive reads)")
+			return
+		}
+		h(w, r)
+	}
+}

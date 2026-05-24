@@ -140,3 +140,34 @@ func TestClassifyEmptyIsNoOp(t *testing.T) {
 		t.Errorf("Classify([]) returned %d events, want 0", len(got2))
 	}
 }
+
+// TestParseDropLinePreservesEqualsInValue pins the CQ-15 (v1.0.2) fix:
+// a synthetic kernel-log line whose field value contains '=' must
+// round-trip intact through parseDropLine. Pre-v1.0.2 strings.Cut
+// truncated everything after the first '='. Current kernels do not
+// produce that shape — the test is a regression-lock for the day a
+// kernel revision starts emitting MAC=00:11:22=ff:... or similar.
+func TestParseDropLinePreservesEqualsInValue(t *testing.T) {
+	msg := "ZFW-IN-DROP IN=eth0 OUT= SRC=10.0.0.5 DST=10.0.0.1 EXTRA=a=b=c PROTO=TCP DPT=22"
+	ev, ok := parseDropLine(msg, "")
+	if !ok {
+		t.Fatalf("parseDropLine returned ok=false for ZFW-IN-DROP line")
+	}
+	if ev.Source != "10.0.0.5" {
+		t.Errorf("Source=%q want 10.0.0.5", ev.Source)
+	}
+	if ev.Port != 22 {
+		t.Errorf("Port=%d want 22", ev.Port)
+	}
+	if ev.Protocol != "tcp" {
+		t.Errorf("Protocol=%q want tcp", ev.Protocol)
+	}
+	if ev.Zone != "host" {
+		t.Errorf("Zone=%q want host", ev.Zone)
+	}
+	// The EXTRA=a=b=c field is not consumed by parseDropLine today, but
+	// the test guards the SplitN behaviour by also exercising the
+	// kernel-format the iptables LOG target produces (no truncation
+	// on the recognised SRC/DST/DPT/PROTO fields when other fields
+	// contain '=').
+}

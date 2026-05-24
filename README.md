@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v1.0.1 — GA + Round-4 review hotfix. See [Status](#status) for the build line.
+> **Current release:** v1.0.2 — Round-4 review residual closeout (security R4-6/R4-7/R4-8 closed, plus 10 code-quality fixes). See [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,84 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v1.0.2 — Round-4 residual closeout + code-quality batch.** Closes
+the three Info-grade Round-4 residuals (R4-6 / R4-7 / R4-8) plus the
+non-architectural items on the `CODE-REVIEW.md` v1.x list. No schema
+change, no new endpoints, no API contract shifts.
+
+Security closeouts (residual → fixed):
+
+  * **R4-6 — outbound `-d <addr>` quoted via `strconv.Quote`** as
+    defence-in-depth. `rules.Validate` is still the load-bearing
+    `net.ParseIP` / `net.ParseCIDR` chokepoint; the quoting closes
+    the path so a future Validate relaxation cannot quietly
+    re-open the injection vector. Mirrors the v1.0.1 R4-1 LOG
+    `--log-prefix` fix.
+  * **R4-7 — update.Checker and notify.Hook follow redirects safely.**
+    Shared `internal/httputil.SafeCheckRedirect` callback refuses
+    https→http downgrade, refuses public→private/loopback redirects,
+    caps hop count at 5. Tests with `httptest` cover all four cases.
+  * **R4-8 — migration `.bak` writes serialised** with a package-level
+    `sync.Mutex` so two concurrent `Load` calls on a v0 file no
+    longer race the .bak write. After the lock, re-checks the
+    on-disk schema so the second caller is a no-op.
+
+Older residuals also closed:
+
+  * **R3-5 — expensive GET endpoints rate-limited.** `/api/exposure`,
+    `/api/events`, `/api/conntrack`, `/api/versions` share a new
+    read-side bucket (burst 60, sustained 5/s) so an authenticated
+    client can no longer CPU-pin the daemon. `/api/health` stays
+    uncapped (liveness probe).
+  * **R3-8 — journalctl errors observable.** `cmd.Wait()` non-zero
+    + captured stderr surface as `slog.Debug` so an operator with
+    debug logging can diagnose persistent failures. UX unchanged
+    (events tab still empties soft on transient hiccups).
+  * **R3-9 — `/api/rules/defaults` requires `?confirm=1`** so a
+    scripted caller has to acknowledge the destructive overwrite.
+    UI button now sends `?confirm=1`; OpenAPI spec updated.
+
+Code-quality fixes:
+
+  * **CQ-3 — container-binding name/ID collision** split into
+    `byID` + `byName` maps with a `slog.Warn` on name/ID disagreement.
+  * **CQ-5 — config + system packages now have unit tests**
+    (`parseIfaceList`, `isSafeIfaceName`, `parseDockerPorts`,
+    `extractVersion`, `opensshVersion`, `parseKernel`,
+    `kernelVulnerable`, `dockerOld`) — pure-function table tests.
+  * **CQ-6 — `peersPush` emits `peers.pushed`** with ok/fail counts;
+    multi-host sync is no longer the only lifecycle handler without
+    a webhook.
+  * **CQ-7 — `RuleSet.V6Drop` initialises to `[]int{}`** in Save so
+    the wire shape is always `"v6_drop": []`, never `null`.
+  * **CQ-9 — Recompile holds the lock only for the fast work.**
+    Docker inventory + geo downloads pre-resolved before s.mu is
+    acquired. New `prefetchForCompile` + `recompileLocked` split.
+  * **CQ-10 — engine `commit` checks every step** via `apply_or_die`
+    helper. Pre-v1.0.2 only `enable` was checked (R3-3 fix);
+    `write_persist_unit` and `daemon-reload` were implicit-success.
+  * **CQ-12 — `update.Compare`** suffix-stripping behaviour
+    documented + regression-locked (`-rc1` == GA tag today; the
+    release flow ships no -rc tags, but a future maintainer
+    considering them is warned).
+  * **CQ-13 — `gateway.RegisterWithRetry` and `watchdog.EnsureInstalled`**
+    accept `*slog.Logger` directly. `main.go`'s `slogf` adapter is
+    removed.
+  * **CQ-14 — `DetectLAN` caches with the same 60s TTL** as
+    `Versions()` — consistent host-introspection caching.
+  * **CQ-15 — `events.parseDropLine` uses `strings.SplitN(_, "=", 2)`**
+    so a kernel-log field value containing further `=` characters
+    no longer silently truncates. Defensive against kernel-format
+    drift.
+
+Cumulative across four review rounds: **35 findings, 30 remediated,
+5 accepted residuals.** CQ-1 (lifecycle handler extraction) and
+CQ-11 (app.js validation extraction) remain open for v1.1 — they're
+architectural refactors out of scope for the 1.0.x patch line.
+R3-6 (per-IP rate-limit) and R3-7 (boot-persistence unit path
+hardcoded) stay accepted residuals — both require feature-level work
+tracked for v1.1 / v0.4 line items respectively.
 
 **v1.0.1 — Round-4 review hotfix.** Two parallel agents reviewed
 the v1.0.0 codebase: a security pass (RedTeam framing, every

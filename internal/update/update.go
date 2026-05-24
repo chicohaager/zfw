@@ -21,6 +21,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/chicohaager/zfw/internal/httputil"
 )
 
 // Manifest is the on-network shape of a release manifest.
@@ -55,12 +57,20 @@ type Checker struct {
 // New returns a Checker. current is the daemon's own version (from
 // buildinfo.Version). url is the manifest URL; an empty url disables
 // the checker (Disabled() reports true, CheckOnce is a no-op).
+//
+// R4-7 (v1.0.2): the http.Client refuses cross-scheme downgrade and
+// public→private/loopback redirects so an attacker who controls DNS for
+// the operator-set URL cannot coerce the daemon into hitting a local
+// service via a redirect chain.
 func New(current, url string) *Checker {
 	return &Checker{
 		current: current,
 		url:     url,
-		client:  &http.Client{Timeout: 10 * time.Second},
-		last:    Status{Current: current},
+		client: &http.Client{
+			Timeout:       10 * time.Second,
+			CheckRedirect: httputil.SafeCheckRedirect(5),
+		},
+		last: Status{Current: current},
 	}
 }
 
@@ -154,6 +164,16 @@ func (c *Checker) set(s Status) {
 // a leading "v" and trims any "-suffix" / "+suffix" (e.g. "-dev", "+build").
 // Non-numeric components compare as 0. Missing trailing components are
 // treated as 0 ("0.3" == "0.3.0").
+//
+// CQ-12 (documented v1.0.2): the suffix-stripping means
+// Compare("1.2.3", "1.2.3-rc1") returns 0, NOT +1 — i.e. a -rc tag is
+// treated as equal to its released form. Strictly this is wrong for
+// semver pre-release ordering, but the release flow never ships -rc
+// tags (the manifest only lists final releases) so the inaccuracy has
+// no operational effect today. If a future release pipeline starts
+// publishing -rc manifests, this function must be revisited so an
+// installed -rc does not silently mark itself current vs the GA tag.
+// TestCompareTreatsPreReleaseAsEqual pins the current behaviour.
 func Compare(a, b string) int {
 	pa := parts(a)
 	pb := parts(b)

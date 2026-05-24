@@ -67,7 +67,23 @@ func DetectLAN6() (lan6CIDR, hostIP6 string) {
 // packets are sent, the UDP dial only resolves the default-route source.
 // Both return values fall back to safe placeholders when detection fails so
 // the caller never has to handle errors.
+//
+// CQ-14 (v1.0.2): the result is cached for lanTTL to mirror Versions()'s
+// caching policy. A repeated dashboard refresh that hits both /api/versions
+// and any handler reaching DetectLAN was otherwise inconsistent — one
+// payed the kernel-route-resolution cost, the other did not.
 func DetectLAN() (lanCIDR, hostIP string) {
+	lanMu.Lock()
+	defer lanMu.Unlock()
+	if !lanCached.IsZero() && time.Since(lanCached) < lanTTL {
+		return lanCacheLAN, lanCacheIP
+	}
+	lan, ip := detectLANUncached()
+	lanCacheLAN, lanCacheIP, lanCached = lan, ip, time.Now()
+	return lan, ip
+}
+
+func detectLANUncached() (lanCIDR, hostIP string) {
 	lanCIDR = "192.168.1.0/24"
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
@@ -101,6 +117,18 @@ func DetectLAN() (lanCIDR, hostIP string) {
 	}
 	return
 }
+
+// LAN detection cache — same TTL shape as Versions(). Mutex-guarded so a
+// concurrent dashboard refresh from multiple browser tabs cannot race
+// the cache fields.
+var (
+	lanMu       sync.Mutex
+	lanCached   time.Time
+	lanCacheLAN string
+	lanCacheIP  string
+)
+
+const lanTTL = 60 * time.Second
 
 func run(ctx context.Context, name string, args ...string) string {
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
