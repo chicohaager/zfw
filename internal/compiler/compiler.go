@@ -413,13 +413,21 @@ func emitOutboundPortLines(r rules.Rule, baseMatch, target string) []string {
 // of the chain name and to the left of -j — protocol, source, ports,
 // schedule, etc. Single-call cohesion keeps host/host6/docker chains
 // from drifting on the LOG/rate-limit emit shape.
+//
+// Round-4 R4-1: defence-in-depth — even though rules.Validate now
+// rejects unsafe Rule.ID via isSafeRuleID, the LOG --log-prefix path
+// uses strconv.Quote so a future Validate relaxation cannot quietly
+// re-open the injection class. The xt_recent --name token has no
+// shell metacharacters inside iptables' own parser (it is a single
+// `--name <token>` arg) but joinArgs interpolates it as bash, so the
+// allowlist on the input side is the load-bearing control.
 func wrapEmit(match string, r rules.Rule, target string) []string {
 	var out []string
 	if r.RateLimit != nil && r.RateLimit.Conn > 0 && r.RateLimit.Seconds > 0 {
-		// xt_recent --name has a 32-char cap; rule IDs are short
-		// ("r12345678") so prefixing with "z" keeps us well under.
-		// Names collide only across rules sharing the same ID — which
-		// cannot happen because Validate rejects duplicates upstream.
+		// xt_recent --name has a 32-char cap; isSafeRuleID caps Rule.ID
+		// at 16, plus the "z" prefix → max 17. Validate rejects
+		// duplicate IDs upstream (R4-5), so two rate-limited rules
+		// cannot share a tracking bucket.
 		name := "z" + r.ID
 		out = append(out,
 			joinArgs(match, "-m", "recent", "--set", "--name", name),
@@ -432,7 +440,7 @@ func wrapEmit(match string, r rules.Rule, target string) []string {
 	if r.Log {
 		out = append(out, joinArgs(match,
 			"-j", "LOG",
-			"--log-prefix", `"ZFW-RULE-`+r.ID+` "`,
+			"--log-prefix", strconv.Quote("ZFW-RULE-"+r.ID+" "),
 			"--log-level", "6"))
 	}
 	out = append(out, joinArgs(match, "-j", target))

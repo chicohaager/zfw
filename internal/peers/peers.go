@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 )
@@ -108,6 +109,16 @@ func pushOne(ctx context.Context, client *http.Client, p Peer, body []byte) Resu
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+p.Token)
+	// R4-3: the follower's outer middleware runs a same-origin CSRF
+	// check on every POST, including /api/peers/receive (which the
+	// JWT middleware whitelists). Without an Origin header from the
+	// leader, every push would 403 before the bearer check fires.
+	// Set Origin to the URL's scheme+host so same-origin holds. The
+	// shared bearer is still the load-bearing auth — Origin is
+	// defence-in-depth, not the trust anchor.
+	if u, perr := url.Parse(p.URL); perr == nil && u.Scheme != "" && u.Host != "" {
+		req.Header.Set("Origin", u.Scheme+"://"+u.Host)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		r.Error = err.Error()

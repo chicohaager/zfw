@@ -213,7 +213,7 @@ func secureRootFile(path string) error {
 		return fmt.Errorf("%s is not root-owned (uid=%d)", path, st.Uid)
 	}
 	if fi.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("%s ist group/world-writable (%#o)", path, fi.Mode().Perm())
+		return fmt.Errorf("%s is group/world-writable (%#o)", path, fi.Mode().Perm())
 	}
 	return nil
 }

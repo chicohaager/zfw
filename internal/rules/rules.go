@@ -340,12 +340,77 @@ func Validate(rs RuleSet) error {
 			return fmt.Errorf("v6_drop: invalid port %d", p)
 		}
 	}
+	// Round-4 (R4-5): reject duplicate rule IDs. xt_recent --name and
+	// the LOG --log-prefix line both key on Rule.ID; collisions silently
+	// share an xt_recent hashtable bucket which makes rate-limit
+	// semantics surprising. Same-id rules are almost always a mistake
+	// (copy-paste, restore-after-edit), not an intentional pattern.
+	seenID := make(map[string]bool, len(rs.Rules))
 	for _, r := range rs.Rules {
 		if err := validateRule(r); err != nil {
 			return fmt.Errorf("rule %q: %w", r.Name, err)
 		}
+		if r.ID != "" {
+			if seenID[r.ID] {
+				return fmt.Errorf("rule %q: duplicate id %q", r.Name, r.ID)
+			}
+			seenID[r.ID] = true
+		}
 	}
 	return nil
+}
+
+// isSafeContainerID matches Docker's container-name regex
+// (alphanumeric + dot + dash + underscore), capped at 64 chars
+// — Docker's own limit. Empty is accepted (no binding).
+func isSafeContainerID(s string) bool {
+	if len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.':
+			// ok
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// isSafeRuleID guards against shell-injection through Rule.ID. The
+// compiler interpolates the value into the generated bash script's
+// xt_recent `--name z<ID>` clause and into the per-rule LOG prefix
+// `"ZFW-RULE-<ID> "`. Round-4 R4-1 PoC: an ID containing `;` lands two
+// commands in the root-run compiled.sh because the inner `--log-prefix
+// "ZFW-RULE-<ID> "` quoting is bash-fragile under set -eu. Locking the
+// character set + length here closes that path before it ever reaches
+// the compiler. Empty IDs are accepted because Save() fills them in;
+// Validate is called both before Save (rules POST) and after (engine
+// recompile) and the compiler tolerates the empty-id wrapEmit path
+// (it just emits no LOG/recent line for that rule).
+func isSafeRuleID(s string) bool {
+	if s == "" {
+		return true
+	}
+	if len(s) > 16 {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '-', r == '_':
+			// ok
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // SplitCountries parses a comma-separated ISO-3166 country-code list.
@@ -369,6 +434,20 @@ func isAlpha(s string) bool {
 }
 
 func validateRule(r Rule) error {
+	// Round-4 R4-1: id must be empty (Save fills it) or pass the
+	// strict allowlist — Rule.ID lands raw in the compiled bash via
+	// xt_recent --name and the LOG --log-prefix; without this guard a
+	// crafted id of `ok"; rm -rf / #` becomes root code execution.
+	if !isSafeRuleID(r.ID) {
+		return fmt.Errorf("id %q invalid (expected empty or 1..16 chars of [A-Za-z0-9_-])", r.ID)
+	}
+	// Round-4 R4-4: container_id is used as a Go map key today and
+	// not interpolated into bash, but the field is free-form and
+	// persisted — locking the char-set keeps future emit paths from
+	// inheriting injection risk by default.
+	if r.ContainerID != "" && !isSafeContainerID(r.ContainerID) {
+		return fmt.Errorf("container_id %q invalid (expected 1..64 chars of [A-Za-z0-9_.-])", r.ContainerID)
+	}
 	if r.Name == "" {
 		return fmt.Errorf("name is required")
 	}

@@ -45,9 +45,9 @@ func FromTiers(cfg firewall.Config, dockerListening []int) RuleSet {
 		})
 		order += 10
 	}
-	add("Host-TCP-Ports (migriert)", "tcp", "host", atoiList(cfg.HostTCPLAN))
-	add("Host-UDP-Ports (migriert)", "udp", "host", atoiList(cfg.HostUDPLAN))
-	add("Docker-Apps (migriert)", "tcp", "docker", dockerAllow)
+	add("Host TCP ports (migrated)", "tcp", "host", atoiList(cfg.HostTCPLAN))
+	add("Host UDP ports (migrated)", "udp", "host", atoiList(cfg.HostUDPLAN))
+	add("Docker apps (migrated)", "tcp", "docker", dockerAllow)
 	return rs
 }
 

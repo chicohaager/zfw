@@ -264,7 +264,7 @@ script.
 
 ---
 
-## Conclusion
+## Conclusion of Rounds 1–3
 
 Across three review rounds, 22 of 27 findings are remediated and 5 are
 accepted residuals (all Medium/Low, all documented). No Critical or High
@@ -277,6 +277,78 @@ source mirror, events parser, defaults seeding) and remains closed.
 single-admin-appliance threat model explicit in the residual list and
 clear v0.4 work-items (per-IP rate-limit, GET-throttle, journalctl error
 logging) to close the remaining Medium gaps.
+
+---
+
+## Findings — Round 4 (R4-1 … R4-8, v1.0.0 GA review)
+
+Round 4 covers every code path that landed between v0.2.21 and v1.0.0
+(~25 releases / six phases). Methodology: file-by-file adversarial
+read driven by the v1.0.0 `THREAT-MODEL.md` adversaries (A1–A7), with
+PoC verification for any injection-class candidate.
+
+| ID | Severity | Where | Status |
+|---|---|---|---|
+| **R4-1** | **Critical** | `Rule.ID` interpolated raw into `compiled.sh` at `compiler.go:423` (`--name z<ID>`) and `:435` (`--log-prefix "ZFW-RULE-<ID> "`); `validateRule` at `rules.go:371` never touches `r.ID`. An authenticated POST `/api/rules` (or `/api/peers/receive` with a valid peer token) with an id like `"ok\"; touch /tmp/zfw-pwned; #"` lands two commands in the root-run bash; the first is a valid LOG line that succeeds under `set -eu`, the second runs as root. Confirmed local PoC by the review agent. | **Fixed in v1.0.1:** new `isSafeRuleID(s)` (rules.go) accepts only `[A-Za-z0-9_-]{1,16}`; `validateRule` calls it before every other check. New test `TestValidateRejectsInjectionID` pins a representative injection string. Compiler at `compiler.go:435` switches to `strconv.Quote("ZFW-RULE-"+r.ID+" ")` as defence-in-depth so a future Validate relaxation can't quietly re-open this path. |
+| **R4-2** | Low | `internal/handlers/handlers.go:675` peer-bearer compare uses Go `!=`, which short-circuits and leaks length-information by timing. Globally rate-limited (10/burst, 1/s) so a remote attacker can only run ~60 probes/min. Token space is operator-set with typical high entropy. | **Fixed in v1.0.1:** switched to `crypto/subtle.ConstantTimeCompare` after a length-matched check. |
+| **R4-3** | Medium | `sameOrigin` (`cmd/zfwd/main.go:193`) runs on every POST/PUT/DELETE — including `/api/peers/receive` — even though the JWT middleware whitelists the route. `peers.pushOne` never sets `Origin` / `Referer`. Multi-host push fails 403 in any real two-host deployment. The risk is that a maintainer "fixes" the operational bug by removing the same-origin check entirely and silently downgrades defence-in-depth. | **Fixed in v1.0.1:** `peers.pushOne` sets a synthetic `Origin: <follower-base>` header derived from the peer URL so the same-origin invariant is preserved on the receiver side. |
+| **R4-4** | Low | `Rule.ContainerID` (`rules.go:92`) has no character or length validation; not currently interpolated into bash but used as a Go map key. Future code that emits it into a command line or log message would inherit injection risk by default. | **Fixed in v1.0.1:** validate against `[A-Za-z0-9_.-]{1,64}` (Docker container-name regex). |
+| **R4-5** | Low | Compiler comment at `compiler.go:421` claims "Validate rejects duplicates upstream" — false. Two rules with identical IDs share the same `xt_recent` hashtable bucket, so a rate-limit on rule A burns rule B's window. Operator confusion / firewall-semantics drift, not a privilege boundary loss. | **Fixed in v1.0.1:** `Validate` builds a `seen[id]bool` and rejects duplicate IDs. Compiler comment updated. |
+| **R4-6** | Info | Outbound rule `Source.Value` reaches `-d <addr>` unquoted at `compiler.go:343`. `Validate` already canonicalises via `net.ParseIP` / `net.ParseCIDR`, so only `0-9a-fA-F:./` bytes reach the compiler. Not exploitable today; flagged so a future Validate relaxation doesn't quietly open the path. | **Accepted residual:** defence-in-depth is already provided by Validate's `net.Parse*` chokepoint; further bash-side quoting was considered but defers to the same Validate invariant. Tracked alongside R4-7 for a "post-Validate canonicalisation" sweep in v1.x. |
+| **R4-7** | Info | `update.Checker` (`update.go:62`) and `notify.Hook` (`notify.go:46`) instantiate `&http.Client{Timeout: 10s}` with the default `CheckRedirect` — up to 10 redirects, scheme-agnostic. An attacker controlling DNS for the operator-set URL can coerce a fetch to a private/loopback address and read the HTTP status (response body is not echoed back). Operator-set URL means this is opt-in by configuration, but the S1 / S2 spirit is "trust anchor stays loopback". | **Accepted residual:** mirrors the bounded-redirect S2 fix for JWKS but the surface is narrower (operator chose the URL; webhook response body is never exposed). Tracked for v1.x — `CheckRedirect` callback that refuses cross-scheme jumps + refuses redirects to private ranges when the original URL was public. |
+| **R4-8** | Info | Migration `.bak.v<old>` write at `rules.go:269` is a single ≤16KB `os.WriteFile` call — atomic in practice on Linux but not guaranteed by the kernel API. The migration write itself is `tmp + rename` (atomic), but two concurrent `Load` calls on a v0 file both run migration and both write the same `.tmp`. End-state consistent thanks to `rename(2)`. | **Accepted residual:** rename atomicity covers the visible state. The audit-history file uses the same `writeAtomic` pattern and is guarded by `s.auditMu`; migration is one-shot per file so the race window closes after the first successful Load. Documented in `internal/rules/rules.go` near the Load function. |
+
+### Cross-checks ("not-a-finding" surface)
+
+Review agent verified the following paths and found no vulnerability:
+
+- **Frontend XSS** — every `${...}` interpolation in `app.js` that handles
+  user/API data passes through `esc()`; unescaped interpolations are
+  fixed enum lookups, daemon-controlled integers, or `toFixed()` numerics.
+- **Compiler input validation** — country codes, IP/CIDR, port-int, schedule
+  HH:MM, weekday names, rate-limit Conn/Seconds, interface names
+  (`ZFW_EXTRA_BYPASS_IFACES`) all pass through strict allowlists in
+  `rules.Validate` or `config.isSafeIfaceName` before reaching the
+  compiler.
+- **Schema migration** — future-version refusal path is correct; crafted
+  version fields can't poison the round-trip because `Save` always
+  overwrites `Version` to `CurrentSchema`.
+- **`/api/conntrack`** — JWT-gated; matches the single-admin appliance model.
+  Cap of 500 entries; `/proc` parser handles malformed lines safely.
+- **`/api/audit` history** — file `0600` in `0700` directory; per-finding cap
+  of 20; concurrent reads/writes serialised by `s.auditMu`.
+- **Webhook (`internal/notify`)** — fire-and-forget, 15s detached timeout,
+  never blocks the firewall flow, response body never reaches a UI client.
+- **GeoIP lookup** — `/api/geo/lookup?ips=` capped at 500 entries before
+  `LookupBatch`; fingerprint-based staleness detection correct.
+- **Docker inventory** — names/images used as map keys (no compile-time
+  interpolation); ports `strconv.Atoi`-validated. Safe through to Recompile.
+
+---
+
+## Conclusion of Round 4
+
+Round 4 found **one Critical** (R4-1, authenticated root RCE via
+`Rule.ID` injection), **one Medium** (R4-3, peer-push CSRF-rejection
+making the multi-host feature operationally broken in a security-
+relevant way), three Low (R4-2 / R4-4 / R4-5) and three Info
+(R4-6 / R4-7 / R4-8). All five with-fix findings are remediated in
+**v1.0.1**; three Info-grade items are tracked as accepted residuals
+with rationale.
+
+Cumulative tally across four rounds: **35 findings, 27 remediated,
+8 accepted residuals**. The critical finding (R4-1) is the only one of
+its kind across all four rounds and re-confirms the injection-class
+discipline established in Rounds 1–3 — once `validateRule` covered
+every caller-supplied field, the class closed again. The pattern to
+watch for in future bumps: any new `Rule.*` field that looks
+"daemon-supplied" (because `Save` fills it on empty) but is in fact
+attacker-controlled on the wire.
+
+**ZFW v1.0.1 is assessed as fit for the v1.0 General-Availability
+release** — the same Round-3 single-admin-appliance threat-model
+constraints apply, now extended with the v1.0.0 `THREAT-MODEL.md`
+adversary catalogue and `BUG-BOUNTY.md` disclosure process.
 
 ---
 

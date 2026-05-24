@@ -3,6 +3,7 @@ package handlers
 
 import (
 	"context"
+	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -326,15 +327,38 @@ func (s *Server) rulesDefaults(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := reqCtx()
 	defer cancel()
-	lan, hostIP := system.DetectLAN()
+	// CQ-8: prefer the user's saved LAN over a fresh DetectLAN —
+	// multi-homed hosts where the kernel's default-route IP isn't the
+	// LAN the operator cares about would otherwise have their
+	// custom LAN overwritten by the "Recommended defaults" button.
+	lan, hostIP := "", ""
+	if existing, err := rules.Load(s.rulesPath); err == nil && existing.LAN != "" {
+		lan, hostIP = existing.LAN, existing.HostIP
+	} else {
+		lan, hostIP = system.DetectLAN()
+	}
 	dp := system.DockerPorts(ctx)
 	rs := rules.Defaults(lan, hostIP, dp)
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// CQ-2: mirror the rules POST contract — Validate before Save,
+	// Recompile after, fire the webhook. Earlier behaviour silently
+	// skipped all three; the next Safe-Apply would Recompile anyway,
+	// but the compiled.sh stayed stale in the gap and the
+	// rules.saved-equivalent event was never emitted.
+	if err := rules.Validate(rs); err != nil {
+		fail(w, http.StatusInternalServerError, "defaults invalid: "+err.Error())
+		return
+	}
 	if err := rules.Save(s.rulesPath, rs); err != nil {
 		fail(w, http.StatusInternalServerError, "save: "+err.Error())
 		return
 	}
+	if err := s.Recompile(ctx); err != nil {
+		fail(w, http.StatusInternalServerError, "compile: "+err.Error())
+		return
+	}
+	s.emitEvent("rules.defaulted", map[string]any{"rules": len(rs.Rules)})
 	writeJSON(w, http.StatusOK, rs)
 }
 
@@ -671,8 +695,19 @@ func (s *Server) peersReceive(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusForbidden, "peer-receive disabled (ZFW_PEER_TOKEN unset)")
 		return
 	}
+	// R4-2: constant-time compare against the shared bearer token —
+	// non-constant `!=` short-circuits on the first byte mismatch and
+	// leaks token length / common-prefix length by timing. Length
+	// match check happens first (cheap and not timing-sensitive
+	// because token length is operator-set and not secret-by-itself).
 	auth := r.Header.Get("Authorization")
-	if !strings.HasPrefix(auth, "Bearer ") || auth[len("Bearer "):] != s.peerToken {
+	if !strings.HasPrefix(auth, "Bearer ") {
+		fail(w, http.StatusUnauthorized, "invalid peer token")
+		return
+	}
+	provided := auth[len("Bearer "):]
+	if len(provided) != len(s.peerToken) ||
+		subtle.ConstantTimeCompare([]byte(provided), []byte(s.peerToken)) != 1 {
 		fail(w, http.StatusUnauthorized, "invalid peer token")
 		return
 	}

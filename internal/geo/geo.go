@@ -93,7 +93,7 @@ func (m *Manager) Ensure(ctx context.Context, codes []string, logf func(string, 
 					return fmt.Errorf("country %s: no cache and download failed: %w", cc, err)
 				}
 				if logf != nil {
-					logf("geo: %s — Update fehlgeschlagen, nutze Cache: %v", cc, err)
+					logf("geo: %s — update failed, using cache: %v", cc, err)
 				}
 			}
 		}

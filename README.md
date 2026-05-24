@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v1.0.0 — GA. See [Status](#status) for the build line.
+> **Current release:** v1.0.1 — GA + Round-4 review hotfix. See [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,57 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v1.0.1 — Round-4 review hotfix.** Two parallel agents reviewed
+the v1.0.0 codebase: a security pass (RedTeam framing, every
+adversary from `THREAT-MODEL.md`) and a code-quality pass
+(architecture, smells, test gaps). Eight security findings
+documented as Round-4 in `SECURITY-REPORT.md`; fifteen engineering
+findings documented in the new `CODE-REVIEW.md`. **Five fixes
+landed in this release:**
+
+  * **R4-1 (Critical) — `Rule.ID` shell-injection.** Authenticated
+    POST `/api/rules` with an ID like `"ok\"; touch /tmp/x; #"`
+    landed two commands in the root-run `compiled.sh` — the LOG
+    `--log-prefix "ZFW-RULE-<ID> "` line split on `;` under `set -eu`,
+    the second command ran as root. Fix: `validateRule` now rejects
+    unsafe IDs via `isSafeRuleID` (`[A-Za-z0-9_-]{1,16}` or empty);
+    compiler defence-in-depth via `strconv.Quote` on the log-prefix.
+    Regression-locked by `TestValidateRejectsInjectionID`.
+  * **R4-2 (Low) — non-constant-time bearer compare** on
+    `/api/peers/receive`. Now uses `crypto/subtle.ConstantTimeCompare`
+    after a length-matched check.
+  * **R4-3 (Medium) — peer push 403'd on receiver same-origin check.**
+    Leader-side `peers.pushOne` now sets `Origin: <follower-base>`
+    derived from the peer URL so the multi-host sync feature works
+    end-to-end and the same-origin defence-in-depth invariant holds.
+  * **R4-4 (Low) — `Rule.ContainerID`** now validated against the
+    Docker container-name regex (`[A-Za-z0-9_.-]{1,64}`).
+  * **R4-5 (Low) — duplicate Rule.ID** rejected by Validate
+    (previous compiler comment claimed Validate caught these — it
+    didn't, until v1.0.1).
+
+Quality fixes landed alongside:
+
+  * **CQ-2 — `rulesDefaults`** now validates, saves, recompiles, and
+    emits `rules.defaulted` — matching the rules-POST contract.
+    Previously skipped all three silently.
+  * **CQ-4 — three German strings** replaced (`firewall.go:216`,
+    `geo.go:96`, three `migrate.go` rule names) — the "english-only"
+    project policy now holds across user-visible Go strings.
+  * **CQ-8 — `rulesDefaults`** now prefers the user's saved LAN over
+    a fresh `DetectLAN()` — multi-homed hosts no longer lose their
+    custom LAN when clicking "Recommended defaults".
+
+Three Info-grade Round-4 findings (R4-6 outbound `Source.Value`
+unquoted but Validate-canonicalised, R4-7 update/notify follow
+redirects without scheme pinning, R4-8 migration `.bak` writes not
+serialised across concurrent Load) are documented as accepted
+residuals in SECURITY-REPORT.md with rationale and v1.x tracking.
+
+Cumulative tally across four review rounds: **35 findings,
+27 remediated, 8 accepted residuals.** v1.0.1 is the new baseline
+for the Mod-Store submission and external pen-test outreach.
 
 **v1.0.0 — General Availability.** Six full phases, sixty-plus
 releases, three rounds of internal security review, one external

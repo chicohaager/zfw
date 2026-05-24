@@ -280,6 +280,83 @@ func TestValidateAcceptsLogAndRateLimit(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsInjectionID (Round-4 R4-1 regression lock): a
+// rule whose ID contains shell metacharacters MUST be rejected by
+// Validate before the compiler interpolates it into the root-run
+// bash. Without this guard the LOG --log-prefix line at
+// compiler.go:wrapEmit becomes `LOG --log-prefix "ZFW-RULE-ok"; rm
+// -rf /; #"` and bash runs the second command as root.
+func TestValidateRejectsInjectionID(t *testing.T) {
+	for _, badID := range []string{
+		`ok"; touch /tmp/pwn; #`,
+		`ok\nrm -rf /`,
+		`ok rm`,
+		`abcdefghijklmnopqr`, // 18 chars — over the 16-char cap
+		"ok\x00null",         // embedded NUL
+	} {
+		r := minimalRule()
+		r.ID = badID
+		rs := RuleSet{DefaultPolicy: "deny", Rules: []Rule{r}}
+		if err := Validate(rs); err == nil {
+			t.Errorf("Validate accepted unsafe id %q — R4-1 regression", badID)
+		}
+	}
+}
+
+// TestValidateAcceptsCleanID guards the inverse: a normal random id
+// shape (NewID produces 9-char r-prefixed hex) MUST be accepted, and
+// an empty id MUST be accepted (Save fills it in).
+func TestValidateAcceptsCleanID(t *testing.T) {
+	for _, goodID := range []string{"", "r12345678", "r-abc", "ABC_def-09"} {
+		r := minimalRule()
+		r.ID = goodID
+		rs := RuleSet{DefaultPolicy: "deny", Rules: []Rule{r}}
+		if err := Validate(rs); err != nil {
+			t.Errorf("Validate rejected clean id %q: %v", goodID, err)
+		}
+	}
+}
+
+// TestValidateRejectsDuplicateID (R4-5): two rules sharing the same
+// non-empty ID must be refused so xt_recent --name collisions don't
+// silently corrupt rate-limit semantics.
+func TestValidateRejectsDuplicateID(t *testing.T) {
+	a := minimalRule()
+	a.ID = "rdupAAAA"
+	a.Name = "rule-a"
+	b := minimalRule()
+	b.ID = "rdupAAAA"
+	b.Name = "rule-b"
+	rs := RuleSet{DefaultPolicy: "deny", Rules: []Rule{a, b}}
+	err := Validate(rs)
+	if err == nil {
+		t.Fatal("Validate accepted duplicate Rule.ID — R4-5 regression")
+	}
+	if !strings.Contains(err.Error(), "duplicate id") {
+		t.Errorf("error did not mention duplicate id: %v", err)
+	}
+}
+
+// TestValidateRejectsBadContainerID (R4-4): ContainerID is reserved
+// for Docker-style identifiers; reject anything outside Docker's
+// own container-name char-set so a future emit path can't inherit
+// injection risk.
+func TestValidateRejectsBadContainerID(t *testing.T) {
+	for _, bad := range []string{
+		`name with space`,
+		`name;rm`,
+		`/etc/passwd`,
+		strings.Repeat("a", 65),
+	} {
+		r := minimalRule()
+		r.ContainerID = bad
+		rs := RuleSet{DefaultPolicy: "deny", Rules: []Rule{r}}
+		if err := Validate(rs); err == nil {
+			t.Errorf("Validate accepted unsafe container_id %q", bad)
+		}
+	}
+}
+
 // TestValidateRejectsBadRateLimit guards the value caps: Conn=0 or
 // negative Seconds must be refused before the compiler ever sees them.
 func TestValidateRejectsBadRateLimit(t *testing.T) {
