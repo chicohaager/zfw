@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex">
   <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
   <title>ZFW Firewall</title>
-  <link rel="stylesheet" href="./styles.css?v=0.3.3">
+  <link rel="stylesheet" href="./styles.css?v=0.3.4">
 </head>
 <body>
   <header>
@@ -178,6 +178,17 @@
     </div>
   </div>
 
-  <script src="./app.js?v=0.3.3"></script>
+  <div id="diff-modal" class="modal-overlay" hidden>
+    <div class="modal modal-wide" role="dialog" aria-modal="true">
+      <h2>Unsaved changes</h2>
+      <p class="rm-hint">What Save rules will push to the daemon, compared against the currently saved rule set on disk. The firewall is not re-applied automatically &mdash; click Safe-Apply on the Firewall tab to deploy.</p>
+      <div class="modal-body" id="diff-list"><div class="loading">Loading&hellip;</div></div>
+      <div class="modal-actions">
+        <button id="diff-close" class="btn-secondary">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="./app.js?v=0.3.4"></script>
 </body>
 </html>

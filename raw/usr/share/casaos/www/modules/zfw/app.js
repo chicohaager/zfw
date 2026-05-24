@@ -161,6 +161,7 @@ function renderRules() {
       <button id="btn-backup-rules" class="btn-secondary" title="Download the currently saved rules.json as a timestamped JSON file">Backup</button>
       <button id="btn-restore-rules" class="btn-secondary" title="Restore rules from a previously downloaded JSON file (replaces current rules)">Restore&hellip;</button>
       <input type="file" id="restore-file" accept="application/json,.json" hidden>
+      <button id="btn-diff-rules" class="btn-secondary" ${rulesDirty ? '' : 'disabled'} title="Show what Save rules will change vs the currently saved rules.json">Diff</button>
       <button id="btn-save-rules" class="btn-secondary${rulesDirty ? ' dirty' : ''}">Save rules</button>
       <span class="save-hint"${rulesDirty ? '' : ' hidden'}>unsaved changes — save, then Safe-Apply on the Firewall tab</span>
     </div>
@@ -182,6 +183,7 @@ function wireRules() {
   $('#btn-backup-rules').addEventListener('click', backupRules);
   $('#btn-restore-rules').addEventListener('click', () => $('#restore-file').click());
   $('#restore-file').addEventListener('change', restoreRulesFromFile);
+  $('#btn-diff-rules').addEventListener('click', openDiffView);
   $('#btn-save-rules').addEventListener('click', saveRules);
   $$('#rules-panel tbody tr[data-id]').forEach(tr => {
     const id = tr.dataset.id;
@@ -326,6 +328,127 @@ async function restoreRulesFromFile(ev) {
   } catch (e) {
     setStatus('Restore failed: ' + e.message, 'err');
   }
+}
+
+// ruleSignature collapses the semantic content of a rule to a single
+// string for equality testing. Excludes id (may be empty for not-yet-
+// saved rules) and order (renumbered on save), so two rules with the
+// same effect but different positions count as identical.
+function ruleSignature(r) {
+  if (!r) return '';
+  return JSON.stringify({
+    enabled: r.enabled !== false,
+    name: r.name || '',
+    action: r.action || '',
+    source: r.source || {},
+    ports: r.ports || {},
+    protocol: r.protocol || '',
+    zone: r.zone || '',
+    notes: r.notes || '',
+  });
+}
+
+// ruleSummary returns a one-line human description of a rule —
+// "Allow tcp 22 from 192.168.1.0/24 (Host)" — used in diff rows.
+function ruleSummary(r) {
+  const verb = r.action === 'deny' ? 'Deny' : 'Allow';
+  const src = (r.source && r.source.type && r.source.type !== 'any')
+    ? `from ${r.source.value || r.source.type}`
+    : 'from any';
+  let ports;
+  if (!r.ports || r.ports.type === 'all') ports = 'all ports';
+  else if (r.ports.type === 'range') ports = `${r.ports.from}–${r.ports.to}`;
+  else ports = (r.ports.list || []).join(',');
+  const zone = { auto: 'Auto', host: 'Host', docker: 'Docker' }[r.zone] || r.zone;
+  return `${verb} ${r.protocol || '?'} ${ports} ${src} [${zone}]`;
+}
+
+// computeDiff compares the saved snapshot (server-side rules.json)
+// against the local rule set in memory and returns a list of changes.
+// Each entry has a `type` field: "policy" (default_policy changed),
+// "added" (rule in local but not saved), "removed" (rule saved but
+// not local), "changed" (same id, different content).
+function computeDiff(saved, local) {
+  const changes = [];
+  const savedPol = (saved && saved.default_policy) || 'deny';
+  const localPol = (local && local.default_policy) || 'deny';
+  if (savedPol !== localPol) changes.push({ type: 'policy', from: savedPol, to: localPol });
+
+  const savedById = {};
+  for (const r of (saved.rules || [])) if (r.id) savedById[r.id] = r;
+  const localById = {};
+  for (const r of (local.rules || [])) if (r.id) localById[r.id] = r;
+
+  for (const r of (local.rules || [])) {
+    if (!r.id) { changes.push({ type: 'added', rule: r }); continue; }
+    if (!savedById[r.id]) { changes.push({ type: 'added', rule: r }); continue; }
+    if (ruleSignature(savedById[r.id]) !== ruleSignature(r)) {
+      changes.push({ type: 'changed', before: savedById[r.id], after: r });
+    }
+  }
+  for (const id of Object.keys(savedById)) {
+    if (!localById[id]) changes.push({ type: 'removed', rule: savedById[id] });
+  }
+  return changes;
+}
+
+// openDiffView fetches the currently saved rule set and renders the
+// changes against the local in-memory ruleSet. Read-only: the modal
+// has no action other than Close — the user reviews and then clicks
+// Save rules in the action row when ready.
+async function openDiffView() {
+  const m = $('#diff-modal');
+  const list = $('#diff-list');
+  list.innerHTML = '<div class="loading">Computing diff&hellip;</div>';
+  m.hidden = false;
+  let saved;
+  try {
+    saved = await api('/rules');
+  } catch (e) {
+    list.innerHTML = `<p class="rm-error">Failed to load the saved rules: ${esc(e.message)}</p>`;
+    return;
+  }
+  const changes = computeDiff(saved, ruleSet || { rules: [], default_policy: 'deny' });
+  if (changes.length === 0) {
+    list.innerHTML = '<p class="rm-hint">No changes — the local rule set matches what is saved on disk.</p>';
+  } else {
+    const parts = changes.map(c => {
+      if (c.type === 'policy') {
+        return `<div class="diff-row diff-changed">
+          <span class="diff-mark">~</span>
+          <div><div class="diff-title">Default policy</div>
+            <div class="diff-detail"><span class="diff-from">${esc(c.from)}</span> → <span class="diff-to">${esc(c.to)}</span></div>
+          </div></div>`;
+      }
+      if (c.type === 'added') {
+        return `<div class="diff-row diff-added">
+          <span class="diff-mark">+</span>
+          <div><div class="diff-title">${esc(c.rule.name || '(unnamed)')}</div>
+            <div class="diff-detail">${esc(ruleSummary(c.rule))}</div>
+          </div></div>`;
+      }
+      if (c.type === 'removed') {
+        return `<div class="diff-row diff-removed">
+          <span class="diff-mark">−</span>
+          <div><div class="diff-title">${esc(c.rule.name || '(unnamed)')}</div>
+            <div class="diff-detail">${esc(ruleSummary(c.rule))}</div>
+          </div></div>`;
+      }
+      // changed
+      return `<div class="diff-row diff-changed">
+        <span class="diff-mark">~</span>
+        <div><div class="diff-title">${esc(c.after.name || '(unnamed)')}</div>
+          <div class="diff-detail"><span class="diff-from">${esc(ruleSummary(c.before))}</span></div>
+          <div class="diff-detail"><span class="diff-to">${esc(ruleSummary(c.after))}</span></div>
+        </div></div>`;
+    });
+    const counts = changes.reduce((a, c) => (a[c.type] = (a[c.type] || 0) + 1, a), {});
+    const summary = Object.entries(counts)
+      .map(([k, v]) => `${v} ${k}`).join(', ');
+    list.innerHTML = `<div class="diff-summary">${esc(summary)}</div>${parts.join('')}`;
+  }
+  $('#diff-close').onclick = () => { m.hidden = true; };
+  m.onclick = (ev) => { if (ev.target === m) m.hidden = true; };
 }
 
 // applyRecommendedDefaults replaces the current rules with the server's

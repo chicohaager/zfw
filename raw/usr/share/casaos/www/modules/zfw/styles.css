@@ -451,6 +451,25 @@ input:focus, select:focus {
   border: 1px solid var(--card-border); border-radius: 8px;
   padding: 8px 10px; background: #FFFFFF; resize: vertical; min-height: 52px;
 }
+
+/* diff modal — added / removed / changed rule rows */
+.diff-summary { font-size: 13px; color: var(--text-muted); margin-bottom: 4px; }
+.diff-row {
+  display: grid; grid-template-columns: auto 1fr; gap: 10px;
+  padding: 10px 12px; border-radius: 8px; border-left: 4px solid transparent;
+  background: #FAF9F4;
+}
+.diff-row .diff-mark { font-weight: 700; font-size: 16px; line-height: 1; padding-top: 1px; font-family: var(--font-mono, monospace); }
+.diff-row .diff-title { font-weight: 600; font-size: 14px; color: var(--text); }
+.diff-row .diff-detail { font-size: 12px; color: var(--text-muted); font-family: var(--font-mono, monospace); margin-top: 2px; }
+.diff-added   { border-left-color: #2F8C5E; }
+.diff-added   .diff-mark { color: #2F8C5E; }
+.diff-removed { border-left-color: #B33A3A; }
+.diff-removed .diff-mark, .diff-removed .diff-detail { color: #B33A3A; }
+.diff-changed { border-left-color: #C78A1A; }
+.diff-changed .diff-mark { color: #C78A1A; }
+.diff-changed .diff-from { color: #B33A3A; }
+.diff-changed .diff-to   { color: #2F8C5E; }
 .port-range-row input { width: 110px; }
 .port-range-sep { color: var(--text-muted); font-size: 13px; }
 

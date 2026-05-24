@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.3.3 — see [Status](#status) for the build line.
+> **Current release:** v0.3.4 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -160,6 +160,18 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.3.4** — fourth v0.4 item: **diff view, unsaved vs applied**. A
+new *Diff* button on the Rules tab (only enabled when there are
+unsaved changes) opens a modal listing every change *Save rules*
+would push: rules added (green `+`), removed (red `−`), changed
+(amber `~`, with the before/after summary), and default-policy
+flips. Each row carries a one-line semantic summary
+(`Allow tcp 22 from 192.168.1.0/24 [Host]`) so the user can spot a
+typo in seconds. Pure client-side: fetches the saved snapshot via
+`/api/rules` and compares against the in-memory `ruleSet` by rule
+id, treating new rules with empty `id` as additions. No new endpoint
+and no engine change.
 
 **v0.3.3** — third v0.4 item: **backup / restore rules.json**. Two
 new buttons on the Rules tab. *Backup* downloads the currently saved
