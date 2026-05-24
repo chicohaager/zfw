@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.4.2 — see [Status](#status) for the build line.
+> **Current release:** v0.4.3 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,33 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.4.3** — third v0.6 item: **time-window rules** — and the
+**first real use** of v0.3.8's rules.json migration plumbing. Each
+`Rule` gains an optional `Schedule { from, to, days }`. When set,
+the compiler emits `-m time --timestart HH:MM --timestop HH:MM
+--weekdays Mon,Tue,... --kerneltz` so the rule only matches during
+the configured wall-clock window (the `--kerneltz` flag uses the
+host's local time, not UTC). Empty `days` means every day; `from`
+> `to` wraps midnight (22:00 → 06:00 for an overnight window).
+**Schema bump v1 → v2** lands as a single switch-case in
+`migrate()` — a v1 rules.json on disk auto-migrates on Load with a
+`.bak.v1` preserved before the rewrite, exactly as v0.3.8's tests
+promised. The bump is field-additive: an old `rules.json` round-
+trips byte-equal except for the stamped `"version": 2`. UI: a new
+collapsible *Time-window rule* fieldset in the rule editor with two
+`<input type="time">` pickers and a 7-day checkbox row; a small
+`HH:MM–HH:MM` pill next to the rule name on the Rules table
+surfaces the schedule at a glance; the diff view + ruleSignature
+both pick up the new field so saving a schedule-only change shows
+up in the diff. Five new tests in `internal/rules` (validate
+accepts schedule, rejects bad HH:MM, rejects bad day, schedule
+round-trips through JSON omitempty, v1→v2 migrates with .bak.v1
+preserved); three new compiler tests (scheduled rule emits the
+`-m time …` clause, empty days omits `--weekdays`, unscheduled rule
+emits no time clause). OpenAPI Rule schema documents the new
+`schedule` field with HH:MM regex + weekday enum; the `version`
+field example bumps to 2.
 
 **v0.4.2** — second v0.6 item: **threat detection (port-scan +
 brute-force)**. New `events.Classify()` runs on every `/api/events`

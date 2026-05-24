@@ -249,3 +249,56 @@ func TestIPv4SourceStillRoutesToIPv4Chain(t *testing.T) {
 	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -j ACCEPT")
 	mustNotContain(t, out, "$IPT6 -A ZFW-IN6 -s 192.168.1.0/24")
 }
+
+// TestScheduledRuleEmitsTimeClause guards the v0.4.3 time-window
+// rules: a rule with a Schedule must compile to a line carrying
+// `-m time --timestart … --timestop … --weekdays … --kerneltz`
+// between the port match and the -j target.
+func TestScheduledRuleEmitsTimeClause(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			Order: 10, Enabled: true, Name: "SSH business hours", Action: "allow",
+			Source:   rules.Source{Type: "range", Value: "192.168.1.0/24"},
+			Ports:    rules.Ports{Type: "list", List: []int{22}},
+			Protocol: "tcp", Zone: "host",
+			Schedule: &rules.Schedule{From: "08:00", To: "18:00", Days: []string{"mon", "tue", "wed", "thu", "fri"}},
+		}},
+	}, nil, nil)
+	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -m time --timestart 08:00 --timestop 18:00 --kerneltz --weekdays Mon,Tue,Wed,Thu,Fri -j ACCEPT")
+}
+
+// TestScheduledRuleWithoutDaysOmitsWeekdays guards the every-day
+// default: an empty Days slice must produce a -m time clause without
+// the --weekdays flag, so the rule applies to all seven days.
+func TestScheduledRuleWithoutDaysOmitsWeekdays(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			Order: 10, Enabled: true, Name: "Allow always 22-06", Action: "allow",
+			Source:   rules.Source{Type: "range", Value: "192.168.1.0/24"},
+			Ports:    rules.Ports{Type: "list", List: []int{22}},
+			Protocol: "tcp", Zone: "host",
+			Schedule: &rules.Schedule{From: "22:00", To: "06:00"},
+		}},
+	}, nil, nil)
+	mustContain(t, out, "-m time --timestart 22:00 --timestop 06:00 --kerneltz -j ACCEPT")
+	mustNotContain(t, out, "--weekdays")
+}
+
+// TestRuleWithoutScheduleEmitsNoTimeClause guards that the time
+// machinery does not leak into rules without Schedule — existing
+// rules from a v1 rules.json must compile to identical iptables
+// lines before and after v0.4.3.
+func TestRuleWithoutScheduleEmitsNoTimeClause(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			Order: 10, Enabled: true, Name: "SSH", Action: "allow",
+			Source:   rules.Source{Type: "range", Value: "192.168.1.0/24"},
+			Ports:    rules.Ports{Type: "list", List: []int{22}},
+			Protocol: "tcp", Zone: "host",
+		}},
+	}, nil, nil)
+	mustNotContain(t, out, "-m time")
+}

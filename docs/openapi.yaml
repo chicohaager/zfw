@@ -12,7 +12,7 @@ info:
 
     Non-GET requests share a token-bucket rate-limit (burst 10, sustained
     1/s); excessive traffic is answered with `429 Too Many Requests`.
-  version: "0.4.2"
+  version: "0.4.3"
   license:
     name: See repository
 servers:
@@ -64,10 +64,21 @@ components:
         protocol: { type: string, enum: [tcp, udp, both] }
         zone:     { type: string, enum: [auto, host, docker] }
         notes:    { type: string, maxLength: 256, description: "Free-text rationale; metadata only, never reaches the compiler." }
+        schedule:
+          type: object
+          nullable: true
+          description: "Optional time-window restriction (schema v2+). When set, the compiler emits `-m time --timestart … --timestop … --weekdays … --kerneltz` so the rule only matches during the configured wall-clock window. From > To wraps midnight (e.g. 22:00 → 06:00). Empty `days` array means every day."
+          properties:
+            from: { type: string, pattern: '^[0-2][0-9]:[0-5][0-9]$', example: "08:00" }
+            to:   { type: string, pattern: '^[0-2][0-9]:[0-5][0-9]$', example: "18:00" }
+            days:
+              type: array
+              maxItems: 7
+              items: { type: string, enum: [mon, tue, wed, thu, fri, sat, sun] }
     RuleSet:
       type: object
       properties:
-        version:        { type: integer, example: 1, description: "On-disk schema version. Daemon-owned; clients should pass it through unchanged on POST. An older rules.json on disk is migrated transparently on Load (a .bak.v<old> file is preserved). A rules.json from a newer daemon is refused." }
+        version:        { type: integer, example: 2, description: "On-disk schema version (current = 2, v0.4.3+). Daemon-owned; clients should pass it through unchanged on POST. An older rules.json on disk is migrated transparently on Load (a .bak.v<old> file is preserved). A rules.json from a newer daemon is refused." }
         lan:            { type: string, example: "192.168.1.0/24" }
         host_ip:        { type: string, example: "192.168.50.37" }
         default_policy: { type: string, enum: [deny, allow] }

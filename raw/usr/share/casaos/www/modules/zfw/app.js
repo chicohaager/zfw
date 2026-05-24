@@ -132,9 +132,12 @@ function renderRules() {
     const noteBadge = r.notes
       ? ` <span class="note-pill" title="${esc(r.notes)}">note</span>`
       : '';
+    const schedBadge = r.schedule
+      ? ` <span class="sched-pill" title="Active ${esc(r.schedule.from)}–${esc(r.schedule.to)}${r.schedule.days && r.schedule.days.length ? ' on ' + r.schedule.days.join(',') : ' every day'}">${esc(r.schedule.from)}–${esc(r.schedule.to)}</span>`
+      : '';
     return `<tr class="${r.enabled ? '' : 'rule-off'}" data-id="${esc(r.id)}">
       <td class="mono">${i + 1}</td>
-      <td>${esc(r.name)}${noteBadge}</td>
+      <td>${esc(r.name)}${noteBadge}${schedBadge}</td>
       <td><span class="actbadge ${actCls}">${actLbl}</span></td>
       <td class="mono">${src}</td>
       <td class="mono">${ports} <span class="proto">${esc(r.protocol)}</span></td>
@@ -359,6 +362,7 @@ function ruleSignature(r) {
     protocol: r.protocol || '',
     zone: r.zone || '',
     notes: r.notes || '',
+    schedule: r.schedule || null,
   });
 }
 
@@ -374,7 +378,12 @@ function ruleSummary(r) {
   else if (r.ports.type === 'range') ports = `${r.ports.from}–${r.ports.to}`;
   else ports = (r.ports.list || []).join(',');
   const zone = { auto: 'Auto', host: 'Host', docker: 'Docker' }[r.zone] || r.zone;
-  return `${verb} ${r.protocol || '?'} ${ports} ${src} [${zone}]`;
+  let sched = '';
+  if (r.schedule) {
+    const days = (r.schedule.days && r.schedule.days.length) ? r.schedule.days.join(',') : 'every day';
+    sched = ` @ ${r.schedule.from}-${r.schedule.to} ${days}`;
+  }
+  return `${verb} ${r.protocol || '?'} ${ports} ${src} [${zone}]${sched}`;
 }
 
 // computeDiff compares the saved snapshot (server-side rules.json)
@@ -554,6 +563,16 @@ function openRuleEditor(rule) {
   $('#rm-zone').value = r.zone || 'auto';
   $('#rm-enabled').checked = r.enabled !== false;
   $('#rm-notes').value = r.notes || '';
+  // Schedule: load the optional time-window into the fieldset; an
+  // absent schedule means always-on (the checkbox stays unchecked
+  // and the fieldset stays collapsed).
+  const sch = r.schedule || null;
+  $('#rm-schedule-on').checked = !!sch;
+  $('#rm-schedule-fld').hidden = !sch;
+  $('#rm-schedule-from').value = (sch && sch.from) || '08:00';
+  $('#rm-schedule-to').value = (sch && sch.to) || '18:00';
+  const days = (sch && Array.isArray(sch.days)) ? sch.days : [];
+  $$('#rm-schedule-days input').forEach(cb => { cb.checked = days.indexOf(cb.value) !== -1; });
   $('#rm-error').hidden = true;
   updateModalFields();
   $('#rule-modal').hidden = false;
@@ -653,6 +672,19 @@ function saveRuleFromEditor() {
   if (porttype === 'range') { portsObj.from = portFrom; portsObj.to = portTo; }
   const notes = $('#rm-notes').value.trim();
   if (notes.length > 256) return modalError('Notes are capped at 256 characters.');
+  // Schedule: only attached when the checkbox is on, so existing
+  // rules without a window stay schedule-less on the wire (matches
+  // the backend's omitempty + nil-pointer contract).
+  let schedule = null;
+  if ($('#rm-schedule-on').checked) {
+    const from = $('#rm-schedule-from').value;
+    const to = $('#rm-schedule-to').value;
+    if (!/^\d{2}:\d{2}$/.test(from) || !/^\d{2}:\d{2}$/.test(to)) {
+      return modalError('Schedule: From and To must be HH:MM.');
+    }
+    const days = $$('#rm-schedule-days input').filter(cb => cb.checked).map(cb => cb.value);
+    schedule = { from, to, days };
+  }
   const rule = {
     id: editingRuleId || '',
     enabled: $('#rm-enabled').checked,
@@ -664,6 +696,7 @@ function saveRuleFromEditor() {
     zone: $('#rm-zone').value,
     notes,
   };
+  if (schedule) rule.schedule = schedule;
   if (editingRuleId) {
     const i = ruleIndex(editingRuleId);
     if (i >= 0) {
@@ -682,6 +715,9 @@ function saveRuleFromEditor() {
 $('#rm-cancel').addEventListener('click', closeRuleEditor);
 $('#rm-save').addEventListener('click', saveRuleFromEditor);
 $('#rm-srctype').addEventListener('change', updateModalFields);
+$('#rm-schedule-on').addEventListener('change', e => {
+  $('#rm-schedule-fld').hidden = !e.target.checked;
+});
 $('#rm-porttype').addEventListener('change', updateModalFields);
 $('#rule-modal').addEventListener('click', e => {
   if (e.target.id === 'rule-modal') closeRuleEditor();

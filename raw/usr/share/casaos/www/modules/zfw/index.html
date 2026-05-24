@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex">
   <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
   <title>ZFW Firewall</title>
-  <link rel="stylesheet" href="./styles.css?v=0.4.2">
+  <link rel="stylesheet" href="./styles.css?v=0.4.3">
 </head>
 <body>
   <header>
@@ -172,6 +172,23 @@
         <label class="fld">Notes <small>(optional, 256 chars max)</small>
           <textarea id="rm-notes" maxlength="256" rows="2" placeholder="Free-text — why does this rule exist? (e.g. temporary M.s_PC test, remove 2026-06-01)"></textarea>
         </label>
+        <label class="fld-check"><input id="rm-schedule-on" type="checkbox"> Time-window rule (active only during selected hours)</label>
+        <div class="fld" id="rm-schedule-fld" hidden>
+          <div class="schedule-row">
+            <label class="schedule-time">From <input id="rm-schedule-from" type="time" value="08:00"></label>
+            <label class="schedule-time">To <input id="rm-schedule-to" type="time" value="18:00"></label>
+          </div>
+          <div class="schedule-days" id="rm-schedule-days">
+            <label><input type="checkbox" value="mon"> Mon</label>
+            <label><input type="checkbox" value="tue"> Tue</label>
+            <label><input type="checkbox" value="wed"> Wed</label>
+            <label><input type="checkbox" value="thu"> Thu</label>
+            <label><input type="checkbox" value="fri"> Fri</label>
+            <label><input type="checkbox" value="sat"> Sat</label>
+            <label><input type="checkbox" value="sun"> Sun</label>
+          </div>
+          <p class="rm-hint">No day selected = every day. "From" may be greater than "To" for an overnight window (e.g. 22:00 → 06:00).</p>
+        </div>
         <p id="rm-error" class="rm-error" hidden></p>
       </div>
       <div class="modal-actions">
@@ -203,6 +220,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=0.4.2"></script>
+  <script src="./app.js?v=0.4.3"></script>
 </body>
 </html>

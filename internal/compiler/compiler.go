@@ -197,6 +197,36 @@ func Compile(rs rules.RuleSet, dockerPorts map[int]bool, geoFiles map[string]str
 	return b.String()
 }
 
+// scheduleArg returns the iptables -m time fragment for a rule's
+// schedule, or "" when the rule has no schedule. The kernel time-zone
+// is used (--kerneltz) so HH:MM strings represent the host's wall-clock
+// rather than UTC — what the user expects from "Allow SSH 08:00-18:00".
+// Day names are translated from the lowercase 3-letter form Validate
+// accepts (mon/tue/...) to the capitalised form iptables expects
+// (Mon/Tue/...). When Days is empty the fragment omits --weekdays
+// (every day matches).
+func scheduleArg(s *rules.Schedule) string {
+	if s == nil {
+		return ""
+	}
+	out := "-m time --timestart " + s.From + " --timestop " + s.To + " --kerneltz"
+	if len(s.Days) == 0 {
+		return out
+	}
+	caps := make([]string, 0, len(s.Days))
+	for _, d := range s.Days {
+		caps = append(caps, scheduleDayMap[strings.ToLower(d)])
+	}
+	return out + " --weekdays " + strings.Join(caps, ",")
+}
+
+// scheduleDayMap turns Validate's lowercase 3-letter day names into the
+// capitalised abbreviations iptables-legacy's -m time --weekdays expects.
+var scheduleDayMap = map[string]string{
+	"mon": "Mon", "tue": "Tue", "wed": "Wed", "thu": "Thu",
+	"fri": "Fri", "sat": "Sat", "sun": "Sun",
+}
+
 // hostLines6 is the IPv6 variant of hostLines. It returns iptables args
 // (after "-A ZFW-IN6") for a rule's host-targeted portion. Source filters
 // are applied only when the rule's source is an IPv6 CIDR/IP — IPv4
@@ -215,17 +245,18 @@ func hostLines6(r rules.Rule, dockerPorts map[int]bool) []string {
 	if src == "skip" {
 		return nil
 	}
+	sch := scheduleArg(r.Schedule)
 	var lines []string
 	if ps.All {
 		if r.Protocol == "both" {
-			lines = append(lines, joinArgs(src, "-j", target))
+			lines = append(lines, joinArgs(src, sch, "-j", target))
 		} else {
-			lines = append(lines, joinArgs(src, "-p", r.Protocol, "-j", target))
+			lines = append(lines, joinArgs(src, "-p", r.Protocol, sch, "-j", target))
 		}
 		return lines
 	}
 	for _, proto := range protoList(r.Protocol) {
-		lines = append(lines, joinArgs(src, "-p", proto, portArg(ps), "-j", target))
+		lines = append(lines, joinArgs(src, "-p", proto, portArg(ps), sch, "-j", target))
 	}
 	return lines
 }
@@ -287,18 +318,19 @@ func hostLines(r rules.Rule, dockerPorts map[int]bool) []string {
 	if r.Action == "deny" {
 		target = "DROP"
 	}
+	sch := scheduleArg(r.Schedule)
 	var lines []string
 	for _, src := range sourceArgs(r.Source) {
 		if ps.All {
 			if r.Protocol == "both" {
-				lines = append(lines, joinArgs(src, "-j", target))
+				lines = append(lines, joinArgs(src, sch, "-j", target))
 			} else {
-				lines = append(lines, joinArgs(src, "-p", r.Protocol, "-j", target))
+				lines = append(lines, joinArgs(src, "-p", r.Protocol, sch, "-j", target))
 			}
 			continue
 		}
 		for _, proto := range protoList(r.Protocol) {
-			lines = append(lines, joinArgs(src, "-p", proto, portArg(ps), "-j", target))
+			lines = append(lines, joinArgs(src, "-p", proto, portArg(ps), sch, "-j", target))
 		}
 	}
 	return lines
@@ -321,13 +353,14 @@ func dockerLines(r rules.Rule, dockerPorts map[int]bool) []string {
 	if r.Action == "deny" {
 		target = "DROP"
 	}
+	sch := scheduleArg(r.Schedule)
 	var lines []string
 	for _, src := range sourceArgs(r.Source) {
 		if ps.All {
 			if r.Protocol == "both" {
-				lines = append(lines, joinArgs(src, "-j", target))
+				lines = append(lines, joinArgs(src, sch, "-j", target))
 			} else {
-				lines = append(lines, joinArgs(src, "-p", r.Protocol, "-j", target))
+				lines = append(lines, joinArgs(src, "-p", r.Protocol, sch, "-j", target))
 			}
 			continue
 		}
@@ -339,12 +372,13 @@ func dockerLines(r rules.Rule, dockerPorts map[int]bool) []string {
 				lines = append(lines, joinArgs(src, "-p", proto,
 					"-m", "conntrack",
 					"--ctorigdstport", fmt.Sprintf("%d:%d", ps.From, ps.To),
-					"-j", target))
+					sch, "-j", target))
 				continue
 			}
 			for _, p := range ps.List {
 				lines = append(lines, joinArgs(src, "-p", proto,
-					"-m", "conntrack", "--ctorigdstport", strconv.Itoa(p), "-j", target))
+					"-m", "conntrack", "--ctorigdstport", strconv.Itoa(p),
+					sch, "-j", target))
 			}
 		}
 	}

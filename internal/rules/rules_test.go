@@ -2,6 +2,7 @@ package rules
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -92,10 +93,13 @@ func TestLoadMissingVersionMigratesAndBacksUp(t *testing.T) {
 
 // TestLoadCurrentVersionIsNoOp guards that a rules.json already at
 // CurrentSchema produces no .bak file and leaves the bytes untouched.
+// The seed version interpolates CurrentSchema so this test stays
+// honest across future schema bumps (the v1→v2 bump in v0.4.3 broke
+// the hard-coded version=1 seed).
 func TestLoadCurrentVersionIsNoOp(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rules.json")
-	original := []byte(`{"version":1,"lan":"192.168.1.0/24","default_policy":"deny","rules":[]}`)
+	original := []byte(fmt.Sprintf(`{"version":%d,"lan":"192.168.1.0/24","default_policy":"deny","rules":[]}`, CurrentSchema))
 	if err := os.WriteFile(path, original, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +110,8 @@ func TestLoadCurrentVersionIsNoOp(t *testing.T) {
 	if _, err := Load(path); err != nil {
 		t.Fatalf("Load failed: %v", err)
 	}
-	if _, err := os.Stat(path + ".bak.v1"); !os.IsNotExist(err) {
+	bak := fmt.Sprintf("%s.bak.v%d", path, CurrentSchema)
+	if _, err := os.Stat(bak); !os.IsNotExist(err) {
 		t.Errorf("unexpected backup file written for current-version rules.json")
 	}
 	after, err := os.ReadFile(path)
@@ -145,6 +150,120 @@ func TestLoadFutureVersionRefuses(t *testing.T) {
 	}
 	if _, err := os.Stat(path + ".bak.v99"); !os.IsNotExist(err) {
 		t.Errorf("unexpected backup file written for refused future-version rules.json")
+	}
+}
+
+// TestLoadV1MigratesToV2 guards the v0.4.3 schema bump — the first
+// real use of the v0.3.8 migrate() plumbing. A rules.json carrying
+// version: 1 (the schema before v0.4.3) must be upgraded to
+// CurrentSchema (=2) and the pre-migration bytes preserved as
+// .bak.v1, so a user always has a way back if a future migration
+// step turns out to be wrong.
+func TestLoadV1MigratesToV2(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rules.json")
+	original := []byte(`{"version":1,"lan":"192.168.1.0/24","default_policy":"deny","rules":[]}`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rs, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if rs.Version != CurrentSchema {
+		t.Errorf("post-migration Version = %d, want %d", rs.Version, CurrentSchema)
+	}
+	bak := path + ".bak.v1"
+	got, err := os.ReadFile(bak)
+	if err != nil {
+		t.Fatalf("expected backup at %s: %v", bak, err)
+	}
+	if string(got) != string(original) {
+		t.Errorf("backup bytes differ from original\n got: %s\nwant: %s", got, original)
+	}
+}
+
+// TestValidateAcceptsSchedule guards the v0.4.3 Schedule field: a
+// rule with a sane "Allow SSH 08:00-18:00, weekdays" Schedule must
+// pass Validate so the UI's editor works end-to-end.
+func TestValidateAcceptsSchedule(t *testing.T) {
+	r := minimalRule()
+	r.Schedule = &Schedule{From: "08:00", To: "18:00", Days: []string{"mon", "tue", "wed", "thu", "fri"}}
+	rs := RuleSet{DefaultPolicy: "deny", Rules: []Rule{r}}
+	if err := Validate(rs); err != nil {
+		t.Fatalf("Validate rejected a sane Schedule: %v", err)
+	}
+}
+
+// TestValidateRejectsBadScheduleTime guards that an HH:MM that does
+// not parse is refused with a clear error — a typo'd "8:00" must not
+// silently land in rules.json where it would crash the compiler's
+// iptables-line emit.
+func TestValidateRejectsBadScheduleTime(t *testing.T) {
+	r := minimalRule()
+	r.Schedule = &Schedule{From: "8:00", To: "18:00"}
+	rs := RuleSet{DefaultPolicy: "deny", Rules: []Rule{r}}
+	err := Validate(rs)
+	if err == nil {
+		t.Fatal("Validate accepted Schedule with bad From time")
+	}
+	if !strings.Contains(err.Error(), "from must be HH:MM") {
+		t.Errorf("error message did not flag the bad time: %v", err)
+	}
+}
+
+// TestValidateRejectsBadScheduleDay guards the day-name allow-list:
+// only mon/tue/wed/thu/fri/sat/sun pass. Anything else (typos,
+// crafted JSON, locale variants) must be refused.
+func TestValidateRejectsBadScheduleDay(t *testing.T) {
+	r := minimalRule()
+	r.Schedule = &Schedule{From: "08:00", To: "18:00", Days: []string{"funday"}}
+	rs := RuleSet{DefaultPolicy: "deny", Rules: []Rule{r}}
+	err := Validate(rs)
+	if err == nil {
+		t.Fatal("Validate accepted Schedule with bad day")
+	}
+	if !strings.Contains(err.Error(), "weekday") {
+		t.Errorf("error message did not flag the bad day: %v", err)
+	}
+}
+
+// TestScheduleRoundTripsThroughJSON guards that omitempty does the
+// right thing: a rule without a Schedule produces JSON without a
+// "schedule" key (so existing rules.json files stay compact); a rule
+// WITH a Schedule round-trips byte-perfect.
+func TestScheduleRoundTripsThroughJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "rules.json")
+	rs := RuleSet{
+		LAN:           "192.168.1.0/24",
+		DefaultPolicy: "deny",
+		Rules: []Rule{
+			minimalRule(),
+			func() Rule {
+				r := minimalRule()
+				r.ID = "rscheduled"
+				r.Schedule = &Schedule{From: "22:00", To: "06:00", Days: []string{"sat", "sun"}}
+				return r
+			}(),
+		},
+	}
+	if err := Save(path, rs); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if loaded.Rules[0].Schedule != nil {
+		t.Errorf("rule without schedule round-tripped with a non-nil Schedule: %+v", loaded.Rules[0].Schedule)
+	}
+	if loaded.Rules[1].Schedule == nil {
+		t.Fatalf("rule with schedule round-tripped with nil Schedule")
+	}
+	got := loaded.Rules[1].Schedule
+	if got.From != "22:00" || got.To != "06:00" || len(got.Days) != 2 {
+		t.Errorf("Schedule round-trip mismatch: %+v", got)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -51,6 +52,23 @@ type Rule struct {
 	// the compiler. Length-capped by Validate so an oversize note can't
 	// bloat rules.json or the embedded UI payload.
 	Notes string `json:"notes,omitempty"`
+	// Schedule restricts when the rule is active. Pointer + omitempty
+	// so an unscoped rule stays compact on the wire — nil means
+	// "always-on", which is the historical default. The compiler emits
+	// an `-m time --timestart … --timestop … --weekdays … --kerneltz`
+	// clause when a Schedule is present. Introduced in schema v2.
+	Schedule *Schedule `json:"schedule,omitempty"`
+}
+
+// Schedule restricts when a rule is active. From and To are wall-clock
+// HH:MM in the host's kernel time zone. Days lists the lowercase
+// 3-letter weekday names the rule fires on; an empty Days slice means
+// every day. From > To is allowed and wraps midnight (e.g. 22:00 → 06:00
+// for an overnight window).
+type Schedule struct {
+	From string   `json:"from"`           // HH:MM
+	To   string   `json:"to"`             // HH:MM
+	Days []string `json:"days,omitempty"` // mon, tue, wed, thu, fri, sat, sun
 }
 
 // RuleSet is the whole firewall configuration.
@@ -73,7 +91,12 @@ type RuleSet struct {
 }
 
 // CurrentSchema is the rules.json schema version this build emits.
-const CurrentSchema = 1
+//
+//	v1 — initial explicit-version schema (v0.3.8 — field-compatible
+//	     rename from the unversioned format).
+//	v2 — adds optional Rule.Schedule for time-window rules (v0.4.3 —
+//	     first real use of the migrate() plumbing).
+const CurrentSchema = 2
 
 // migrate brings an on-disk RuleSet up to CurrentSchema, one step at a time.
 // Returns (migrated, changed, err). A nil error with changed=false means the
@@ -95,6 +118,14 @@ func migrate(rs RuleSet) (RuleSet, bool, error) {
 			// v0.3.8). v0 → v1 is a field-compatible rename: no struct
 			// changes, just stamp the version so future bumps land cleanly.
 			rs.Version = 1
+		case 1:
+			// v1 → v2 (v0.4.3): adds optional Rule.Schedule for time-
+			// window rules. The new field is omitempty + pointer, so a
+			// v1 rules.json with no schedule field reads back identical
+			// — only the version stamp changes. The .bak.v1 file Load()
+			// preserves still loads cleanly in this build via the same
+			// migration path.
+			rs.Version = 2
 		default:
 			return rs, false, fmt.Errorf("no migration from rules.json schema v%d", rs.Version)
 		}
@@ -355,5 +386,49 @@ func validateRule(r Rule) error {
 	if r.Zone != "auto" && r.Zone != "host" && r.Zone != "docker" {
 		return fmt.Errorf("zone must be auto, host or docker")
 	}
+	if r.Schedule != nil {
+		if err := validateSchedule(*r.Schedule); err != nil {
+			return fmt.Errorf("schedule: %w", err)
+		}
+	}
 	return nil
+}
+
+// scheduleDays is the set of accepted lowercase weekday names. The
+// compiler maps these to iptables-legacy's Mon/Tue/… form before
+// emitting -m time --weekdays.
+var scheduleDays = map[string]bool{
+	"mon": true, "tue": true, "wed": true, "thu": true,
+	"fri": true, "sat": true, "sun": true,
+}
+
+func validateSchedule(s Schedule) error {
+	if !isHHMM(s.From) {
+		return fmt.Errorf("from must be HH:MM (got %q)", s.From)
+	}
+	if !isHHMM(s.To) {
+		return fmt.Errorf("to must be HH:MM (got %q)", s.To)
+	}
+	// Empty Days = every day (the compiler then emits no --weekdays).
+	// Duplicates are accepted but useless; we cap the count so a
+	// crafted rules.json cannot produce an oversized iptables line.
+	if len(s.Days) > 7 {
+		return fmt.Errorf("days: at most 7 entries")
+	}
+	for _, d := range s.Days {
+		if !scheduleDays[strings.ToLower(d)] {
+			return fmt.Errorf("days: %q is not a valid weekday (mon|tue|wed|thu|fri|sat|sun)", d)
+		}
+	}
+	return nil
+}
+
+// isHHMM reports whether s is a "HH:MM" string in 24-hour wall-clock form.
+func isHHMM(s string) bool {
+	if len(s) != 5 || s[2] != ':' {
+		return false
+	}
+	h, err1 := strconv.Atoi(s[:2])
+	m, err2 := strconv.Atoi(s[3:])
+	return err1 == nil && err2 == nil && h >= 0 && h <= 23 && m >= 0 && m <= 59
 }
