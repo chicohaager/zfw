@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.4.5 — see [Status](#status) for the build line.
+> **Current release:** v0.5.0 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,39 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.5.0** — the **v0.6 (*Intrusion detection & state*) phase is
+complete**. Final piece: **connection-state visibility** — a live
+view of the kernel's conntrack table on a new *Connections* tab.
+New `internal/conntrack` package reads `/proc/net/nf_conntrack` as
+the primary source (always available when the kernel module is
+loaded, which it is on every ZimaOS host because ZFW already
+depends on conntrack matches) and falls back to `conntrack -L -o
+extended` when /proc is unreadable. Parser handles both shapes
+transparently — the `ipv4 2` L3 prefix in /proc output is stripped
+so downstream indexing into the field list is identical either
+way. Each `Entry` carries protocol, state (omitempty for stateless
+protocols), original-direction src/dst IP + port, and the kernel's
+timeout countdown (bigger = more recent — TCP ESTABLISHED defaults
+to ~5 days, UDP to seconds). New endpoint `GET /api/conntrack`
+returns up to 500 entries; UI renders a table with a colour-coded
+state pill (`ESTABLISHED` green, `SYN_*` accent, `CLOSE_WAIT`
+amber, `TIME_WAIT` muted). On a host without conntrack support the
+endpoint returns `[]` and the UI shows a graceful "no active
+connections" message rather than erroring. Seven new unit tests in
+`internal/conntrack` lock in the parser: `/proc` shape (L3 prefix
+stripped), conntrack(8) shape, UDP stateless (state stays empty),
+malformed line without src/dst dropped, flag tokens never overwrite
+the state name, garbage lines in a stream are silently skipped, the
+limit cap is honoured. One new handler test asserts `/api/conntrack`
+returns a JSON array (never null). OpenAPI documents the endpoint
+and the `Connection` schema. With v0.5.0 in the can, the full v0.6
+line has shipped: events analytics (v0.4.1), threat detection
+(v0.4.2), time-window rules (v0.4.3), per-rule logging + rate-limit
+(v0.4.4), GeoIP source flags (v0.4.5), conntrack visibility (this
+release). Exit criterion ("firewall posture answers 'what
+happened' and 'what will happen at 2 AM,' not just 'what's the
+current ruleset'") is met.
 
 **v0.4.5** — sixth v0.6 item: **GeoIP source flags on the Events
 tab**. Reuses the cached per-country `.zone` files the
@@ -504,11 +537,11 @@ SSH, Samba shares and mDNS discovery (LAN auto-detected from the
 default route), and one additional allow-rule per Docker-published port
 discovered live on the host so running containers stay reachable.
 
-Phase in progress: **v0.6 — Intrusion detection & state**. v0.4.1
-shipped the Events tab analytics (top sources / top ports cards +
-24h sparkline). Remaining items: threat detection (port-scan +
-brute-force flagging), time-window rules (schema bump v1→v2 — first
-real use of v0.3.8's migration plumbing), per-rule logging toggle +
-rate-limit per source, GeoIP source flags, connection-state
-visibility (live conntrack). The v0.5 — *Distribution &
-multi-host* — phase shipped in full across v0.3.7 → v0.4.0.
+Next phase: **v1.0 — General Availability** (outbound rules,
+per-container rule binding, VPN-interface awareness, notification
+hooks, threat-model doc, external pen-test). The v0.6 — *Intrusion
+detection & state* — phase shipped in full across v0.4.1 → v0.5.0
+(events analytics, threat detection, time-window rules with first
+real schema bump v1→v2, per-rule logging + rate-limit, GeoIP source
+flags, live conntrack). The v0.5 — *Distribution & multi-host* —
+phase shipped across v0.3.7 → v0.4.0.

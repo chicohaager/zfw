@@ -831,6 +831,26 @@ func TestPeersReceiveHappyPath(t *testing.T) {
 	}
 }
 
+// TestConntrackReturnsArray guards /api/conntrack: in a test
+// environment the kernel module / /proc/net/nf_conntrack may be
+// absent (this is run inside `go test`, not on a ZimaOS host), so
+// the handler must respond 200 with [] rather than 500 — the UI's
+// "no connections" branch reads an array, never null.
+func TestConntrackReturnsArray(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodGet, "/api/conntrack", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if bytes.Equal(bytes.TrimSpace(w.Body.Bytes()), []byte("null")) {
+		t.Errorf("conntrack: returned null, want [] (UI iterates the slice)")
+	}
+	var got []any
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("response is not a JSON array: %v (body=%s)", err, w.Body.String())
+	}
+}
+
 // TestGeoLookupEmptyQueryReturnsEmptyMap guards the no-input branch:
 // a /api/geo/lookup with no ips parameter must respond 200 with {}
 // so the UI's batch fetch on a fresh refresh never sees a 400 or 404.

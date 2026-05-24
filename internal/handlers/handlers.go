@@ -17,6 +17,7 @@ import (
 	"github.com/chicohaager/zfw/internal/audit"
 	"github.com/chicohaager/zfw/internal/buildinfo"
 	"github.com/chicohaager/zfw/internal/compiler"
+	"github.com/chicohaager/zfw/internal/conntrack"
 	"github.com/chicohaager/zfw/internal/events"
 	"github.com/chicohaager/zfw/internal/firewall"
 	"github.com/chicohaager/zfw/internal/geo"
@@ -145,6 +146,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/peers/receive", s.peersReceive)
 	mux.HandleFunc("/api/geo/lookup", s.geoLookup)
 	mux.HandleFunc("/api/events", s.events)
+	mux.HandleFunc("/api/conntrack", s.conntrack)
 	mux.HandleFunc("/api/openapi.json", s.openapi)
 	mux.HandleFunc("/api/openapi.yaml", s.openapi)
 	return mux
@@ -501,6 +503,28 @@ func (s *Server) versions(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx()
 	defer cancel()
 	writeJSON(w, http.StatusOK, system.Versions(ctx))
+}
+
+// conntrack returns a snapshot of the kernel's live connection-
+// tracking table (v0.5.0). Cap at 500 entries — a busy host can hold
+// 100k+ active flows and the UI table doesn't render that many usefully
+// anyway. Returns 200 with an empty array when the kernel module is
+// absent or `/proc/net/nf_conntrack` is unreadable; the conntrack
+// package returns an error in that case, but the UI's "no
+// connections" branch already handles an empty array, so swallowing
+// the error keeps the tab quiet on hosts without conntrack support.
+func (s *Server) conntrack(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	ctx, cancel := reqCtx()
+	defer cancel()
+	entries, err := conntrack.Read(ctx, 500)
+	if err != nil || entries == nil {
+		entries = []conntrack.Entry{}
+	}
+	writeJSON(w, http.StatusOK, entries)
 }
 
 // peersList returns the configured peer list with tokens stripped so a

@@ -164,6 +164,17 @@ header h1 { font-size: 26px; font-weight: 600; letter-spacing: -.01em; }
   font-size: 11px; font-weight: 500;
   font-family: var(--font-mono); letter-spacing: 0.4px;
 }
+.ct-state {
+  display: inline-block; padding: 1px 7px; border-radius: 999px;
+  font-size: 11px; font-weight: 600;
+  background: var(--card-border); color: var(--text-muted);
+}
+.ct-state-est   { background: var(--success); color: #fff; }
+.ct-state-tw    { background: var(--card-border); color: var(--text-muted); }
+.ct-state-cw    { background: var(--warn); color: #fff; }
+.ct-state-syn   { background: var(--accent); color: #fff; }
+.ct-state-other { background: var(--card-border); color: var(--text); }
+.ct-state-none  { background: transparent; color: var(--text-muted); }
 .sched-pill {
   display: inline-block; margin-left: 6px;
   padding: 1px 7px; border-radius: 999px;

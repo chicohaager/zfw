@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex">
   <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
   <title>ZFW Firewall</title>
-  <link rel="stylesheet" href="./styles.css?v=0.4.5">
+  <link rel="stylesheet" href="./styles.css?v=0.5.0">
 </head>
 <body>
   <header>
@@ -36,6 +36,7 @@
     <button class="tab-btn" data-tab="rules" role="tab">Rules</button>
     <button class="tab-btn" data-tab="exposure" role="tab">Exposure</button>
     <button class="tab-btn" data-tab="events" role="tab">Events</button>
+    <button class="tab-btn" data-tab="conntrack" role="tab">Connections</button>
     <button class="tab-btn" data-tab="audit" role="tab">Audit</button>
     <button class="tab-btn" data-tab="versions" role="tab">Versions</button>
   </nav>
@@ -95,6 +96,17 @@
         </div>
       </div>
       <div id="events-list"><div class="loading">Loading&hellip;</div></div>
+    </section>
+
+    <section id="tab-conntrack" class="tab-panel" role="tabpanel">
+      <p class="panel-hint">
+        Live kernel connection-tracking table &mdash; what flows are
+        currently open on the host (TCP <b>ESTABLISHED</b>, UDP
+        replied, etc.). Original direction only (initiator → target),
+        capped at 500 entries per refresh. Empty on hosts where the
+        kernel conntrack module is unavailable.
+      </p>
+      <div id="conntrack-list"><div class="loading">Loading&hellip;</div></div>
     </section>
 
     <section id="tab-audit" class="tab-panel" role="tabpanel">
@@ -230,6 +242,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=0.4.5"></script>
+  <script src="./app.js?v=0.5.0"></script>
 </body>
 </html>

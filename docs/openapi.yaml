@@ -12,7 +12,7 @@ info:
 
     Non-GET requests share a token-bucket rate-limit (burst 10, sustained
     1/s); excessive traffic is answered with `429 Too Many Requests`.
-  version: "0.4.5"
+  version: "0.5.0"
   license:
     name: See repository
 servers:
@@ -170,6 +170,17 @@ components:
         ok:    { type: boolean }
         code:  { type: integer, description: "HTTP status returned by the peer; 0 if the request never completed." }
         error: { type: string, description: "Network/HTTP error from this peer; empty on success." }
+    Connection:
+      type: object
+      description: "One live kernel conntrack entry (original direction only). State is omitted for stateless protocols (UDP/ICMP)."
+      properties:
+        protocol: { type: string, example: tcp }
+        state:    { type: string, example: ESTABLISHED }
+        src_ip:   { type: string, example: "192.168.50.42" }
+        src_port: { type: integer, example: 33124 }
+        dst_ip:   { type: string, example: "192.168.50.37" }
+        dst_port: { type: integer, example: 22 }
+        age_sec:  { type: integer, description: "Kernel timeout countdown — seconds until the entry expires if no further traffic." }
     UpdateStatus:
       type: object
       description: "Cached self-update check. The daemon polls a configurable manifest URL (ZFW_UPDATE_URL, opt-in) once per week; the UI reads this endpoint and shows a non-blocking 'vX available' badge when Available is true. A nil-URL daemon still serves this endpoint — only Current is set."
@@ -348,6 +359,16 @@ paths:
         '400': { description: "Invalid JSON or validation error." }
         '401': { description: "Bearer missing or does not match ZFW_PEER_TOKEN." }
         '403': { description: "Peer-receive disabled (ZFW_PEER_TOKEN unset on this host)." }
+
+  /api/conntrack:
+    get:
+      summary: "Snapshot of the kernel's live connection-tracking table (original direction only, capped at 500 entries). Returns [] on hosts where /proc/net/nf_conntrack is unavailable — UI handles the empty case as 'no connections'."
+      responses:
+        '200':
+          description: Active connections (newest-kernel-order).
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/Connection' } }
 
   /api/geo/lookup:
     get:

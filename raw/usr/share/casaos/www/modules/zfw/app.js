@@ -1026,6 +1026,40 @@ async function loadEvents() {
     <tbody>${rows}</tbody></table>`;
 }
 
+/* ---------- conntrack ---------- */
+async function loadConntrack() {
+  const d = await api('/conntrack');
+  if (!d.length) {
+    $('#conntrack-list').innerHTML = '<div class="loading">No active connections, or the kernel conntrack module is not available on this host.</div>';
+    return;
+  }
+  const stateBadge = st => {
+    if (!st) return '<span class="ct-state ct-state-none">&mdash;</span>';
+    const cls = {
+      ESTABLISHED: 'ct-state-est',
+      TIME_WAIT:   'ct-state-tw',
+      CLOSE_WAIT:  'ct-state-cw',
+      SYN_SENT:    'ct-state-syn',
+      SYN_RECV:    'ct-state-syn',
+    }[st] || 'ct-state-other';
+    return `<span class="ct-state ${cls}">${esc(st)}</span>`;
+  };
+  const rows = d.map(c => {
+    const sport = c.src_port ? ':' + c.src_port : '';
+    const dport = c.dst_port ? ':' + c.dst_port : '';
+    return `<tr>
+      <td>${esc((c.protocol || '').toUpperCase())}</td>
+      <td>${stateBadge(c.state)}</td>
+      <td class="mono">${esc(c.src_ip)}${esc(sport)}</td>
+      <td class="mono">${esc(c.dst_ip)}${esc(dport)}</td>
+      <td class="mono">${c.age_sec || 0}s</td>
+    </tr>`;
+  }).join('');
+  $('#conntrack-list').innerHTML = `<table class="tbl">
+    <thead><tr><th>Proto</th><th>State</th><th>Source</th><th>Destination</th><th>Expires in</th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+}
+
 /* ---------- versions ---------- */
 async function loadVersions() {
   const d = await api('/versions');
@@ -1062,6 +1096,7 @@ async function refreshAll() {
     await loadRules();
     await loadExposure();
     await loadEvents();
+    await loadConntrack();
     await loadAudit();
     await loadVersions();
     setStatus('');
