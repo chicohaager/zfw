@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.3.2 — see [Status](#status) for the build line.
+> **Current release:** v0.3.3 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -160,6 +160,17 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.3.3** — third v0.4 item: **backup / restore rules.json**. Two
+new buttons on the Rules tab. *Backup* downloads the currently saved
+rule set as `zfw-rules-YYYY-MM-DD_HH-MM-SS.json` (the file is the raw
+RuleSet, so restoring is a single POST — no custom format to parse).
+*Restore* opens a file picker, parses the JSON, sanity-checks the
+shape (`default_policy` + `rules` array) client-side, asks the user
+to confirm the overwrite count, then POSTs to `/api/rules` where the
+existing Validate gate runs again. No new endpoint and no engine
+change; the firewall is NOT re-applied automatically — the user still
+has to Safe-Apply afterwards.
 
 **v0.3.2** — second v0.4 item: **per-rule notes / comments**. Each
 rule gets an optional free-text `notes` field (up to 256 chars). The

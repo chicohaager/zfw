@@ -158,6 +158,9 @@ function renderRules() {
       <button id="btn-new-rule" class="btn-primary">+ New rule</button>
       <button id="btn-templates" class="btn-secondary" title="Pick from a catalog of pre-built rules (block VNC, block NFS, allow common services)">Templates</button>
       <button id="btn-recommended-defaults" class="btn-secondary" title="Replace all rules with the recommended starter set (auto-detected LAN, deny default, 5 baseline allow rules)">Recommended defaults</button>
+      <button id="btn-backup-rules" class="btn-secondary" title="Download the currently saved rules.json as a timestamped JSON file">Backup</button>
+      <button id="btn-restore-rules" class="btn-secondary" title="Restore rules from a previously downloaded JSON file (replaces current rules)">Restore&hellip;</button>
+      <input type="file" id="restore-file" accept="application/json,.json" hidden>
       <button id="btn-save-rules" class="btn-secondary${rulesDirty ? ' dirty' : ''}">Save rules</button>
       <span class="save-hint"${rulesDirty ? '' : ' hidden'}>unsaved changes — save, then Safe-Apply on the Firewall tab</span>
     </div>
@@ -176,6 +179,9 @@ function wireRules() {
   $('#btn-new-rule').addEventListener('click', () => openRuleEditor(null));
   $('#btn-templates').addEventListener('click', openTemplatesPicker);
   $('#btn-recommended-defaults').addEventListener('click', applyRecommendedDefaults);
+  $('#btn-backup-rules').addEventListener('click', backupRules);
+  $('#btn-restore-rules').addEventListener('click', () => $('#restore-file').click());
+  $('#restore-file').addEventListener('change', restoreRulesFromFile);
   $('#btn-save-rules').addEventListener('click', saveRules);
   $$('#rules-panel tbody tr[data-id]').forEach(tr => {
     const id = tr.dataset.id;
@@ -257,6 +263,69 @@ function addTemplate(t) {
   });
   setStatus(`Added template "${t.name}" (${t.rules.length} rule${t.rules.length === 1 ? '' : 's'}). Review, then click Save rules.`, 'ok');
   markDirty();
+}
+
+// backupRules downloads the current SAVED rules (the server-side rules.json,
+// not the local dirty state) as a timestamped JSON file. The filename
+// carries the date so a folder of backups stays self-describing without
+// embedded metadata; the file content is the raw RuleSet exactly as the
+// daemon serves it, so restoring is a single POST /api/rules.
+async function backupRules() {
+  let snapshot;
+  try {
+    snapshot = await api('/rules');
+  } catch (e) {
+    setStatus('Backup failed: ' + e.message, 'err');
+    return;
+  }
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').replace(/T/, '_').slice(0, 19);
+  const filename = `zfw-rules-${ts}.json`;
+  const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  const count = (snapshot.rules || []).length;
+  setStatus(`Backup downloaded: ${filename} (${count} rule${count === 1 ? '' : 's'}).`, 'ok');
+}
+
+// restoreRulesFromFile reads a previously downloaded backup, validates
+// the shape client-side, asks the user to confirm the overwrite, then
+// POSTs to /api/rules. Server-side Validate runs again on the way in,
+// so a tampered file still gets rejected with a clear error.
+async function restoreRulesFromFile(ev) {
+  const f = ev.target.files && ev.target.files[0];
+  ev.target.value = ''; // clear the picker so the same file can be re-selected
+  if (!f) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(await f.text());
+  } catch (e) {
+    setStatus('Restore failed: file is not valid JSON.', 'err');
+    return;
+  }
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.rules) ||
+      (parsed.default_policy !== 'deny' && parsed.default_policy !== 'allow')) {
+    setStatus('Restore failed: file does not look like a zfw rules backup ' +
+              '(expecting { default_policy, rules: [...] }).', 'err');
+    return;
+  }
+  const incoming = parsed.rules.length;
+  const current = (ruleSet && ruleSet.rules) ? ruleSet.rules.length : 0;
+  if (!confirm(`Restore ${incoming} rule${incoming === 1 ? '' : 's'} from "${f.name}"?\n\n` +
+               `This replaces the current ${current} rule${current === 1 ? '' : 's'} ` +
+               `on the server. The firewall is NOT re-applied automatically — you still ` +
+               `have to Safe-Apply on the Firewall tab after the restore.`)) return;
+  setStatus('Restoring rules…');
+  try {
+    await api('/rules', { method: 'POST', body: JSON.stringify(parsed) });
+    setStatus(`Restored ${incoming} rule${incoming === 1 ? '' : 's'} — now Safe-Apply on the Firewall tab.`, 'ok');
+    await loadRules();
+  } catch (e) {
+    setStatus('Restore failed: ' + e.message, 'err');
+  }
 }
 
 // applyRecommendedDefaults replaces the current rules with the server's

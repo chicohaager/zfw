@@ -1,18 +1,18 @@
 # ZFW Roadmap
 
 > Author: Holger Kuehn (Lintux)
-> Status: **v0.3.2 — second v0.4 (*UX polish*) item shipped.** Each
-> rule now carries an optional free-text `notes` field (up to 256
-> chars), surfaced as a textarea in the rule editor and a "note" pill
-> with hover tooltip in the rule table. Compiler ignores it — metadata
-> only. v0.3.1 shipped the rule-templates library (three templates so
-> far). The v0.3 phase itself closed with v0.3.0 (netns integration
-> tests + every v0.3 roadmap item shipped across v0.2.15–v0.3.0).
-> v0.3.0 builds on v0.2.21's external sign-off — **Gelbuilding's
-> 2026-05-24 ZimaBoard validation of v0.2.20** — and on v0.2.20's
-> three-round security review. Next v0.4 items: backup/restore, diff
-> view, audit-history, Exposure-tab quick-action. (Frontend i18n was
-> dropped — ZFW stays English-only.)
+> Status: **v0.3.3 — third v0.4 (*UX polish*) item shipped.** Backup +
+> restore buttons on the Rules tab: download the saved rule set as a
+> timestamped JSON, or restore from a previously downloaded backup
+> (replaces current rules, server-side Validate runs again, firewall
+> is not auto-re-applied). v0.3.2 shipped per-rule notes; v0.3.1
+> shipped the rule-templates library. The v0.3 phase itself closed
+> with v0.3.0 (netns integration tests + every v0.3 roadmap item
+> shipped across v0.2.15–v0.3.0). v0.3.0 builds on v0.2.21's external
+> sign-off — **Gelbuilding's 2026-05-24 ZimaBoard validation of
+> v0.2.20** — and on v0.2.20's three-round security review. Next v0.4
+> items: diff view, audit-history, Exposure-tab quick-action.
+> (Frontend i18n was dropped — ZFW stays English-only.)
 > English UI, intelligent default-set with live Docker inventory, reboot-persistent,
 > with a working Events / IDS-MVP tab (host + host6 + docker zones),
 > Docker-bridge bypass, the Donezo-style light-theme UI, default-deny IPv6
@@ -28,7 +28,7 @@ quality bar it raises.
 
 ---
 
-## Delivered in v0.2.7 – v0.3.2
+## Delivered in v0.2.7 – v0.3.3
 
 The v0.2 line addressed every regression and gap surfaced by the first
 external test cycle (Gelbuilding / IceWhale forum). v0.3.0 closed the
@@ -59,6 +59,7 @@ changed when.
 | **v0.2.21** | **External tester sign-off baked into the release.** README + ROADMAP carry Gelbuilding's 2026-05-24 ZimaBoard validation of v0.2.20: install, dashboard tile, Safe-Apply, Confirm, custom-port rule-edit (SSH 22 → 2222 for ttydBridge) and full reboot-persistence cycle all confirmed by an external party. Binary code identical to v0.2.20; cache-buster bumped (`?v=0.2.21` on `styles.css` / `app.js`) so the UI doesn't serve stale assets after install; `openapi.yaml` info-version bumped to match. v0.2.20 is preserved as the canonical reproducibility anchor (its tarball SHA stays the reference for the security-reviewed binary). | The first external "works as advertised on hardware I don't control" sign-off since the tester-feedback cycle began. Putting it inside the release tarball — not just in a forum reply — turns word-of-mouth into an artifact a downstream user can inspect before installing. |
 | **v0.2.22** | **Per-rule IPv6 source support** — closes the second-to-last v0.3 item. Compiler dispatches by source family: an IPv6 CIDR or single IPv6 address (`source.type` of `range` or `ip`, value `2001:db8::/64` or `2001:db8::42`) now routes to `ZFW-IN6` only and is skipped on the IPv4 chain. Pre-fix `iptables-legacy -s 2001:db8::/64` returned `Bad argument` and `set -eu` aborted the whole engine apply — an IPv6 source rule was a silent show-stopper. New `system.DetectLAN6()` resolves the host's SLAAC prefix and global IPv6 the same way `DetectLAN()` resolves IPv4 (UDP-dial trick; empty return on no-IPv6 connectivity). Three new compiler tests: `TestIPv6SourceRoutesToIPv6Chain` (range), `TestIPv6SingleSourceRoutesToIPv6Chain` (single address), `TestIPv4SourceStillRoutesToIPv4Chain` (inverse guard so the IPv6 dispatch didn't break the v4 path). Comment in `Compile()` clarified — the previous "destination-port-only mirror" wording described behaviour that did not match the code. | ZimaOS hosts get a SLAAC global address the moment a router advertises a prefix, so any user trying to scope a rule to "from my LAN" on IPv6 hit a blank wall. Closing this gap turns the IPv6 default-deny chain (v0.2.15) into something the user can actually customise per rule. |
 | **v0.3.0** | **v0.3 phase closed — netns integration tests.** New `internal/compiler/integration_test.go` (build tag `netns_integration`) drives `Compile() → bash → live iptables-legacy` inside `unshare -U -r -n` (unprivileged user+network namespace, no sudo needed). Four tests: `TestEngineApplyAllowsExpectedHostPort` (compile a host allow rule, verify the ACCEPT line lands), `TestEngineApplyPortRangeEmitsContiguousRule` (VNC 5900-5999 is one `--dport 5900:5999` line, not 100 entries), `TestEngineApplyIPv6SourceDoesNotCrashIPv4` (live counterpart to v0.2.22's unit tests — IPv6 source under `set -eu` no longer aborts the apply), `TestEngineRevertClearsAllChains` (apply→revert cycle leaves no ZFW chain behind). `requireNetns(t)` skips cleanly when iptables-legacy / unshare / unprivileged userns are absent. With this, the v0.3 exit criterion ("every endpoint has at least one test; CI green on push; release tarball reproducible byte-for-byte") is fully met. | Pre-v0.3.0 the integration was "verified by hand" on a real ZimaCube — a class of regression no unit test could catch (e.g. iptables-legacy's actual syntax for port ranges on the host kernel). Locking these down means the next refactor across compiler / engine / handlers can be reviewed by reading the diff, not by reproducing a manual ZimaCube run. |
+| **v0.3.3** | **Backup / restore rules.json — third v0.4 item.** Two new buttons in the Rules-tab action row. *Backup* fetches `/api/rules` and offers it as a timestamped download (`zfw-rules-YYYY-MM-DD_HH-MM-SS.json`); the file is the raw `RuleSet` exactly as the daemon serves it, so a backup file is also a restore file with no transformation. *Restore* opens a file picker, parses the JSON, sanity-checks the shape (`default_policy` in {deny, allow}, `rules` is an array), asks the user to confirm the rule-count swap, then POSTs to `/api/rules` — the server-side Validate gate runs again, so a tampered file still gets rejected with a clear error. The firewall is **not** re-applied automatically: the user has to click Safe-Apply on the Firewall tab afterwards, keeping the 120-second dead-man as the last line of defence. No new endpoint, no engine change. | A user who breaks their rule set has no path back today other than "Recommended defaults" — which destroys hand-tuned configuration. Backup turns "I'll just try this rule" from a foot-gun into a reversible action. Restore also survives reinstalls without manual `/DATA/zfw/rules.json` archaeology. |
 | **v0.3.2** | **Per-rule notes / comments — second v0.4 item.** New optional `notes` string field on every `Rule` (up to 256 chars, capped by `Validate`). UI: a textarea in the rule editor modal and a "note" pill next to the rule's name in the table that surfaces the full text on hover (`title=` attribute, XSS-escaped via the existing `esc()` helper). Compiler does not read the field — metadata only. JSON tag is `omitempty` so existing rules.json files round-trip cleanly and the API output stays compact for rules without notes. New backend tests: `TestValidateAcceptsNotes` (a reasonable note passes) and `TestValidateRejectsOversizeNotes` (a note above the cap is refused with a clear error). OpenAPI Rule schema documents the new field with `maxLength: 256`. | Without notes, a user who comes back to their rule list two weeks later has no way to remember why rule 17 exists — and a temporary allow-rule that should have been removed turns into a permanent gap. Notes are the cheapest possible posture-hygiene primitive (no new endpoint, no engine change, no migration). |
 | **v0.3.1** | **Rule-templates library — first v0.4 (*UX polish*) item.** New curated catalog under `internal/rules/templates.go`: three templates in this release, *Block VNC consoles (5900-5999)* (security), *Block NFS / rpcbind* (security, TCP+UDP for 111/2049/20048), *Allow Plex Media Server* (service, 32400 from LAN). New endpoint `GET /api/rules/templates` returns the catalog with the host's LAN substituted into "from the LAN" rules — picked up from rules.json's `lan` field, falling back to live `system.DetectLAN()` so a fresh install still produces meaningful templates. Rules tab grows a `Templates` button next to *+ New rule*; the picker modal lists each template with name, category badge (security/service), description and rule count, and an *Add* button that appends the rules to the local set with fresh order numbers (the user still has to Save + Safe-Apply). New tests: three in `internal/rules` (`TestTemplatesAllValid`, `TestTemplatesFreshIDs`, `TestTemplatesSubstituteLAN`) and two in `internal/handlers` (`TestRulesTemplatesReturnsCatalog`, `TestRulesTemplatesSubstitutesPersistedLAN`). OpenAPI 3.0 spec documents the new endpoint. | The first v0.4 exit-criterion lever ("a new user can produce a clean rule set without reading docs"). Templates teach the threat model by example — clicking *Block VNC* once is faster than reading the audit catalogue and figuring out which deny rules to draft. Frontend i18n was deliberately dropped from v0.4 — ZFW stays English-only. |
 
@@ -102,7 +103,7 @@ Make the Rules tab feel like a tool that respects the user's time.
 |---|---|
 | **Rule templates library** *(shipped v0.3.1)* | Three templates so far — *Block VNC consoles* (5900-5999), *Block NFS / rpcbind* (111/2049/20048 TCP+UDP), *Allow Plex Media Server* (32400 from LAN). New endpoint `GET /api/rules/templates` with LAN-substitution; Rules-tab modal renders the catalogue. More templates can ship as future patches without endpoint churn. |
 | **Rule notes / comments field** *(shipped v0.3.2)* | Optional free-text `notes` per Rule (max 256 chars). Textarea in the editor, "note" pill with hover-tooltip in the rule table. Validate caps the length; OpenAPI Rule schema documents it. |
-| **Backup / restore rules.json** | UI button: download current rules.json as a timestamped JSON, drop one in to restore. Survives reinstalls and human error. |
+| **Backup / restore rules.json** *(shipped v0.3.3)* | Backup button downloads `zfw-rules-<ts>.json` (raw RuleSet, no custom wrapper); Restore reads a JSON file, sanity-checks the shape, confirms the overwrite count, then POSTs to `/api/rules` so server-side Validate runs again. Firewall not auto-re-applied — user still has to Safe-Apply. |
 | **Diff view: unsaved vs applied** | When `rulesDirty=true`, show side-by-side what will change. Currently the user just gets a "dirty" badge. |
 | **Audit findings: history** | "M2 dozzle: fixed 2026-05-22, regressed 2026-06-01." Persist the status timeline so the user sees their own posture drift. |
 | **Quick-action from Exposure tab** | Each listening port already has `+ Rule`. Add `→ Deny` next to it for one-click block. |
