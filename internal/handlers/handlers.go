@@ -21,6 +21,7 @@ import (
 	"github.com/chicohaager/zfw/internal/events"
 	"github.com/chicohaager/zfw/internal/firewall"
 	"github.com/chicohaager/zfw/internal/geo"
+	"github.com/chicohaager/zfw/internal/notify"
 	"github.com/chicohaager/zfw/internal/peers"
 	"github.com/chicohaager/zfw/internal/rules"
 	"github.com/chicohaager/zfw/internal/system"
@@ -57,6 +58,7 @@ type Server struct {
 	extraBypass  []string // v0.5.4 — extra inbound-bypass iface names appended to every chain
 	geo          *geo.Manager
 	upd          *update.Checker // nil = self-update polling disabled
+	hook         *notify.Hook    // v0.5.5 — nil = webhook disabled
 	httpClient   *http.Client    // reusable client for outbound peer pushes
 	mutateRL     *rateBucket     // shared by all non-GET endpoints
 }
@@ -68,7 +70,7 @@ type Server struct {
 // /api/peers list+push endpoints; peerToken may be "" to disable the
 // follower-side /api/peers/receive endpoint. The two are independent —
 // a host can be a leader, a follower, both, or neither.
-func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string, upd *update.Checker, peersPath, peerToken string, extraBypass []string) *Server {
+func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string, upd *update.Checker, peersPath, peerToken string, extraBypass []string, hook *notify.Hook) *Server {
 	return &Server{
 		fw:           fw,
 		rulesPath:    rulesPath,
@@ -79,11 +81,24 @@ func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string,
 		extraBypass:  extraBypass,
 		geo:          geo.New(geoDir),
 		upd:          upd,
+		hook:         hook,
 		httpClient:   peers.DefaultClient(),
 		// Burst 10, sustained 1/s — a user clicking Safe-Apply repeatedly
 		// passes the burst; a runaway script is throttled to one call/sec.
 		mutateRL: newRateBucket(1, 10),
 	}
+}
+
+// emitEvent fires a webhook with the given type + details. Fire-and-
+// forget — the daemon must not block on or fail because of webhook
+// delivery (config option, best-effort signal). v0.5.5.
+func (s *Server) emitEvent(typ string, details map[string]any) {
+	s.hook.SendAsync(notify.Event{
+		Type:      typ,
+		Version:   buildinfo.Version,
+		Timestamp: time.Now().UTC(),
+		Details:   details,
+	})
 }
 
 // Recompile loads the rule set, ensures geo data for any country rules,
@@ -266,6 +281,7 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 			fail(w, http.StatusInternalServerError, "compile: "+err.Error())
 			return
 		}
+		s.emitEvent("rules.saved", map[string]any{"rules": len(rs.Rules)})
 		writeJSON(w, http.StatusOK, map[string]string{"status": "saved"})
 	default:
 		fail(w, http.StatusMethodNotAllowed, "GET or POST")
@@ -351,6 +367,7 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, "apply: "+err.Error()+"\n"+out)
 		return
 	}
+	s.emitEvent("firewall.applied", map[string]any{"safe": body.Safe})
 	writeJSON(w, http.StatusOK, map[string]string{"status": "applied", "output": out})
 }
 
@@ -368,6 +385,7 @@ func (s *Server) commit(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, "commit: "+err.Error())
 		return
 	}
+	s.emitEvent("firewall.committed", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "committed", "output": out})
 }
 
@@ -385,6 +403,7 @@ func (s *Server) revert(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusInternalServerError, "revert: "+err.Error())
 		return
 	}
+	s.emitEvent("firewall.reverted", nil)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reverted", "output": out})
 }
 

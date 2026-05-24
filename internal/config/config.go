@@ -32,6 +32,10 @@ type Config struct {
 	// Invalid names are filtered out by the daemon before compile so a
 	// crafted env var cannot inject shell payload into compiled.sh.
 	ExtraBypassIfaces []string
+	// WebhookURL (v0.5.5) — opt-in outbound webhook fired on rule
+	// changes, applies, commits and reverts. Empty disables; daemon
+	// makes no outbound HTTP from a fresh install.
+	WebhookURL string
 }
 
 func env(k, def string) string {
@@ -61,6 +65,7 @@ func Load() Config {
 		PeersFile:         env("ZFW_PEERS", "/DATA/zfw/peers.json"),
 		PeerToken:         env("ZFW_PEER_TOKEN", ""),
 		ExtraBypassIfaces: parseIfaceList(env("ZFW_EXTRA_BYPASS_IFACES", "")),
+		WebhookURL:        env("ZFW_WEBHOOK_URL", ""),
 	}
 }
 

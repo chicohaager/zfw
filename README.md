@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.5.4 — see [Status](#status) for the build line.
+> **Current release:** v0.5.5 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,26 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.5.5** — second v1.0 item: **notification hooks (webhook)**. New
+`internal/notify` package: opt-in outbound webhook fired on every
+firewall lifecycle event. Config `ZFW_WEBHOOK_URL` (empty default,
+no outbound HTTP from a fresh install). Fire points: `rules.saved`
+(after a successful POST /api/rules + recompile), `firewall.applied`
+(after Safe-Apply/Apply succeeds, with `safe: true|false` detail),
+`firewall.committed` (after Confirm/Commit), `firewall.reverted`
+(after Revert — both explicit user revert and dead-man auto-revert
+look identical from the daemon's perspective). JSON body: `{type,
+version, timestamp, details}`. `Hook.SendAsync` fires the request in
+a goroutine with a detached 15s context so the firewall response
+goes out without waiting for webhook delivery — best-effort signal,
+must never block the firewall flow. A nil-receiver Send is a no-op,
+so `s.hook.SendAsync(...)` is safe even when the operator has not
+configured a URL. Four new tests cover the contract (disabled =
+noop, JSON body matches, HTTP error returns error, async fires
+without blocking). New `notify.Hook` field on Server, plumbed
+through NewServer (10th param now). v1.0 progress: 2 of 6 shipped
+(VPN-bypass v0.5.4, webhook v0.5.5).
 
 **v0.5.4** — first **v1.0 (*GA*)** item: **VPN-interface awareness**.
 WireGuard wildcard `wg+` joins the built-in default-bypass list
