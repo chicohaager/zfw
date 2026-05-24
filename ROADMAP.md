@@ -1,7 +1,24 @@
 # ZFW Roadmap
 
 > Author: Holger Kuehn (Lintux)
-> Status: **v1.0.0 — General Availability.** All six roadmap
+> Status: **v1.0.4 — GA + post-launch hardening & polish.** Shipped
+> across four point releases after v1.0.0:
+>
+>   v1.0.1  Round-4 security review hotfix — Critical RCE closed
+>           (R4-1: `Rule.ID` shell-injection), plus R4-2..R4-5
+>           hardening and three code-quality wins (CQ-2/4/8).
+>   v1.0.2  Round-4 residual closeout + code-quality batch — closes
+>           R4-6/R4-7/R4-8 plus R3-5/R3-8/R3-9 and ten CQ items;
+>           cumulative tally now 35/30/5.
+>   v1.0.3  Brand refresh — real ZFW wordmark in the header,
+>           forest-green shield favicon + dashboard tile.
+>   v1.0.4  Release-engineering polish — tarball doc bundle extended
+>           (THREAT-MODEL + BUG-BOUNTY + CODE-REVIEW now ship inside
+>           the .tar.gz so external testers get the full reading
+>           list without a GitHub round-trip); mod-store/zfw.yaml
+>           refreshed to v1.0.x with live sha256 anchors.
+>
+> All six roadmap
 > phases shipped: v0.2 (tester foundation, v0.2.7–v0.2.21), v0.3
 > (professionalization + IPv6, v0.2.15–v0.3.0), v0.4 (UX polish,
 > v0.3.1–v0.3.6), v0.5 (distribution + multi-host, v0.3.7–v0.4.0),

@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v1.0.3 — brand-refresh ship (real ZFW wordmark in the header, forest-green shield favicon + dashboard tile). See [Status](#status) for the build line.
+> **Current release:** v1.0.4 — release-engineering polish (full doc bundle now ships inside the tarball; mod-store manifest refreshed). See [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,18 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v1.0.4 — release-engineering polish for external-tester handoff.**
+The tarball now bundles **THREAT-MODEL.md**, **BUG-BOUNTY.md** and
+**CODE-REVIEW.md** alongside the pre-existing README,
+BEST-PRACTICES and SECURITY-REPORT — so an external tester
+(Gelbuilding & co.) gets the full reading-list inside the
+`.tar.gz` without needing a GitHub round-trip. `build.sh`
+required-files / cp list updated. `mod-store/zfw.yaml` refreshed
+to v1.0.4 with the live amd64/arm64 sha256 anchors filled in
+(was `sha256: TBD` from v0.4.0 prep). `ROADMAP.md` status header
+catches up across v1.0.1 → v1.0.4 with the per-release one-liners.
+No daemon code change, no UI change beyond the cache-buster bump.
 
 **v1.0.3 — brand refresh.** The real ZFW wordmark (shield + circuit
 motif + "ZFW Firewall" wordmark, forest-green on cream) replaces the

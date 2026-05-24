@@ -68,15 +68,14 @@ issues: "https://github.com/chicohaager/zfw/issues"
 # Version + per-arch artifact pointers. The release process (build.sh)
 # produces two reproducible tarballs per release; SHAs are appended here
 # during the cut so Mod-Store can verify before installing.
-version: 0.4.0
+version: 1.0.4
 artifacts:
   amd64:
     url: "https://github.com/chicohaager/zfw/releases/download/v{{version}}/zfw-{{version}}-amd64.tar.gz"
-    # sha256 is filled in at release-cut time; see MOD-STORE.md for the cut checklist.
-    sha256: TBD
+    sha256: c652b3e55c2d88a1f9ac0d9c525d7998bc621386b25674f222ab96b08f40d076
   arm64:
     url: "https://github.com/chicohaager/zfw/releases/download/v{{version}}/zfw-{{version}}-arm64.tar.gz"
-    sha256: TBD
+    sha256: 8629f36a7b72726d4b8675218a2db8813248c42dffbf0322993ecea1d14c96dc
 
 # UI-side metadata mirrors raw/usr/share/casaos/modules/zfw.json so the
 # Mod-Store listing renders identically to the installed module's
