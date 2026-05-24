@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v0.5.2 — see [Status](#status) for the build line.
+> **Current release:** v0.5.3 — see [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,17 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v0.5.3** — second template-catalog expansion (Maintainer pick #2).
+Catalog now **21 entries**. Added: *Paperless-NGX* (8000), *Mealie*
+(9000), *Dozzle* (8080), *n8n* (5678), *OpenWebUI* (3000). The
+existing `allow-arr-suite` renamed to `allow-arr-stack` and
+expanded to the full six-app *arr family: Sonarr 8989, Radarr 7878,
+**Lidarr 8686**, **Readarr 8787**, Bazarr 6767, Prowlarr 9696. Port-
+conflict notes refreshed: 8080 now collides on Nextcloud AIO /
+qBittorrent / Dozzle / OpenWebUI (latter normally maps host:3000 →
+container:8080), 9000 on Portainer + Mealie. Same `allow()`
+constructor pattern — each new template stays a one-liner.
 
 **v0.5.2** — pre-v1.0 template catalog expansion. Templates picker
 now ships **16 entries** (up from 3): the existing two security
