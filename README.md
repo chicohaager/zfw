@@ -5,6 +5,8 @@
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
 
+![ZFW Firewall dashboard on a live ZimaOS host — Rules tab showing 12 default rules (ZimaOS Web UI, SSH, Samba TCP/UDP, mDNS, Docker apps) plus the live status bar: firewall active, 18 exposed services, 24 blocked, 0 drops in the last hour, 10 open findings.](docs/screenshots/dashboard.png)
+
 ## Why ZimaOS needs a firewall
 
 ZimaOS ships with **no host firewall at all**. On a stock install every `iptables`
