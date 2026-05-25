@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/screenshots/wordmark.png" alt="ZFW Firewall — host firewall &amp; security dashboard for ZimaOS" />
+</p>
+
 # ZFW — a host firewall for ZimaOS
 
 > **Current release:** v1.0.10 — dashboard tile (appicon) refreshed to match the wordmark: brick-wall shield + central orange hub + three endpoint dots (replaces the older five-node circuit motif). See [Status](#status) for the build line.
