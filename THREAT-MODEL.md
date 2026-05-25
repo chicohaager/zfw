@@ -270,7 +270,6 @@ holds:
 - `SECURITY-REPORT.md` — three-round internal security review,
   27 findings, 22 remediated, 5 accepted residuals
 - `BEST-PRACTICES.md` — operator-facing safety guide
-- `ROADMAP.md` — phase history, accepted-risk tracking
 - `BUG-BOUNTY.md` — contact + scope for external researchers
   (v1.0.0)
 - `docs/openapi.yaml` — every endpoint, every parameter, every

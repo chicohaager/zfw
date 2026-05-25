@@ -220,9 +220,8 @@ BEST-PRACTICES and SECURITY-REPORT — so an external tester
 `.tar.gz` without needing a GitHub round-trip. `build.sh`
 required-files / cp list updated. `mod-store/zfw.yaml` refreshed
 to v1.0.4 with the live amd64/arm64 sha256 anchors filled in
-(was `sha256: TBD` from v0.4.0 prep). `ROADMAP.md` status header
-catches up across v1.0.1 → v1.0.4 with the per-release one-liners.
-No daemon code change, no UI change beyond the cache-buster bump.
+(was `sha256: TBD` from v0.4.0 prep). No daemon code change, no UI
+change beyond the cache-buster bump.
 
 **v1.0.3 — brand refresh.** The real ZFW wordmark (shield + circuit
 motif + "ZFW Firewall" wordmark, forest-green on cream) replaces the

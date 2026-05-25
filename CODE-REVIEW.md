@@ -213,9 +213,6 @@ publication):
 - **README §Configuration** documents only the legacy `allowlist.conf`
   keys. The actual v0.2+ source of truth is `rules.json`, edited from
   the UI. The legacy file is migration-only.
-- **ROADMAP.md is enormous** (~70KB) — stream-of-consciousness append-log
-  rather than a roadmap. The phase-recap table in README is much more
-  useful. Consider promoting it to ROADMAP as the canonical reference.
 - **No user-facing mention of the `maxGeoCountries = 40` cap.** A user
   who pastes a 50-country list gets a confusing save error.
 - **OpenAPI spec** (`docs/openapi.yaml`) — not reviewed file-by-file

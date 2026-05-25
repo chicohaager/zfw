@@ -48,7 +48,7 @@ manifest URL on every host so v0.3.9's update banner starts firing.
      dist/zfw-${VERSION}-arm64.tar.gz.sha256 \
      dist/sbom.json \
      --title "ZFW v${VERSION}" \
-     --notes-file ROADMAP.md
+     --notes "$(awk '/^## Status$/,/^## /{ if(/^## / && !/Status/) exit; print }' README.md)"
    ```
 
 3. **Fill in `mod-store/zfw.yaml`.** Replace the two `sha256: TBD`
@@ -171,7 +171,6 @@ Before pushing a release tag:
 - [ ] `docs/openapi.yaml` `info.version` bumped
 - [ ] `README.md` "Current release" badge bumped
 - [ ] `README.md` `## Status` block has a new entry for the release
-- [ ] `ROADMAP.md` "Status" header updated, new row in "Delivered" table
 - [ ] `mod-store/zfw.yaml` `version` bumped + new SHAs filled in
 - [ ] `go test ./...` green
 - [ ] `bash build.sh` produces both arches reproducibly (re-run +
