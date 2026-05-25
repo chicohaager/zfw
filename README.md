@@ -1,6 +1,6 @@
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v1.0.9 — logo polish iteration complete (transparent backdrop, 2x size, version pill aligned to wordmark baseline). See [Status](#status) for the build line.
+> **Current release:** v1.0.10 — dashboard tile (appicon) refreshed to match the wordmark: brick-wall shield + central orange hub + three endpoint dots (replaces the older five-node circuit motif). See [Status](#status) for the build line.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -162,6 +162,19 @@ For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
 
 ## Status
+
+**v1.0.10 — dashboard tile (appicon) brought in line with the
+wordmark.** The ZimaOS dashboard tile was still on the v1.0.3
+appicon (five-node circuit motif) while the v1.0.5 wordmark in the
+header had moved to a hub-and-spoke layout: a single central orange
+node with three lines fanning out to small endpoint dots, on a
+brick-wall shield. v1.0.10 redraws `appicon.svg` in that same
+language — same shield silhouette and gradient, denser brick
+courses on the left half, central orange hub plus three warm
+off-white endpoint dots on the right. The tile and the wordmark
+now read as one mark at a glance.
+
+No daemon code change — single SVG edit plus cache-buster bump.
 
 **v1.0.5..v1.0.9 — logo polish iteration.** Five point-releases of
 visual fine-tuning on top of the v1.0.3 brand introduction, driven

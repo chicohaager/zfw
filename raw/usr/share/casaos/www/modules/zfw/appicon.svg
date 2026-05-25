@@ -1,7 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <!-- v1.0.3 brand refresh: forest-green shield with circuit-node motif,
-       matching the wordmark in logo.png. Kept square + viewBox=64 so the
-       ZimaOS dashboard tile and the favicon both render at native size. -->
+  <!-- Brand mark: matches the wordmark in logo.png — brick-wall shield with
+       a single central orange hub radiating to three endpoint dots. Kept
+       square + viewBox=64 so the ZimaOS dashboard tile and the favicon
+       both render at native size. -->
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="#2a5c40"/>
@@ -11,34 +12,41 @@
   <!-- Shield outline -->
   <path d="M32 3 L57 13 V31 C57 47 46 58 32 61 C18 58 7 47 7 31 V13 Z"
         fill="url(#g)"/>
-  <!-- Subtle brick courses on the left half (matches the wordmark's
-       wall-pattern) -->
-  <g stroke="#1a3d2a" stroke-width="0.7" opacity="0.55">
-    <line x1="11" y1="20" x2="32" y2="20"/>
-    <line x1="11" y1="28" x2="32" y2="28"/>
-    <line x1="11" y1="36" x2="32" y2="36"/>
-    <line x1="11" y1="44" x2="32" y2="44"/>
-    <line x1="11" y1="52" x2="32" y2="52"/>
-    <line x1="21" y1="16" x2="21" y2="24"/>
-    <line x1="17" y1="24" x2="17" y2="32"/>
-    <line x1="25" y1="24" x2="25" y2="32"/>
-    <line x1="21" y1="32" x2="21" y2="40"/>
-    <line x1="17" y1="40" x2="17" y2="48"/>
-    <line x1="25" y1="40" x2="25" y2="48"/>
+  <!-- Brick courses on the left half, mirroring the wordmark's wall pattern -->
+  <g stroke="#0f2a1c" stroke-width="0.8" opacity="0.7">
+    <line x1="10" y1="16" x2="32" y2="16"/>
+    <line x1="10" y1="24" x2="32" y2="24"/>
+    <line x1="10" y1="32" x2="32" y2="32"/>
+    <line x1="10" y1="40" x2="32" y2="40"/>
+    <line x1="10" y1="48" x2="32" y2="48"/>
+    <line x1="18" y1="10" x2="18" y2="16"/>
+    <line x1="26" y1="10" x2="26" y2="16"/>
+    <line x1="14" y1="16" x2="14" y2="24"/>
+    <line x1="22" y1="16" x2="22" y2="24"/>
+    <line x1="30" y1="16" x2="30" y2="24"/>
+    <line x1="18" y1="24" x2="18" y2="32"/>
+    <line x1="26" y1="24" x2="26" y2="32"/>
+    <line x1="14" y1="32" x2="14" y2="40"/>
+    <line x1="22" y1="32" x2="22" y2="40"/>
+    <line x1="30" y1="32" x2="30" y2="40"/>
+    <line x1="18" y1="40" x2="18" y2="48"/>
+    <line x1="26" y1="40" x2="26" y2="48"/>
+    <line x1="14" y1="48" x2="14" y2="54"/>
+    <line x1="22" y1="48" x2="22" y2="54"/>
+    <line x1="30" y1="48" x2="30" y2="54"/>
   </g>
-  <!-- Circuit lines across the shield, picking out the network/firewall motif -->
+  <!-- Connection lines from central hub to three endpoints -->
   <g stroke="#e89a3a" stroke-width="1.8" fill="none" stroke-linecap="round">
-    <path d="M22 42 L36 28"/>
-    <path d="M36 28 L46 18"/>
-    <path d="M36 28 L44 38"/>
-    <path d="M22 42 L28 50"/>
+    <path d="M34 32 L48 18"/>
+    <path d="M34 32 L50 32"/>
+    <path d="M34 32 L48 46"/>
   </g>
-  <!-- Circuit nodes (orange) — the visual anchor of the brand -->
-  <g fill="#e89a3a">
-    <circle cx="22" cy="42" r="2.6"/>
-    <circle cx="36" cy="28" r="2.6"/>
-    <circle cx="46" cy="18" r="2.2"/>
-    <circle cx="44" cy="38" r="2.2"/>
-    <circle cx="28" cy="50" r="2.2"/>
+  <!-- Endpoint dots (warm off-white, matches wordmark) -->
+  <g fill="#f4ead5">
+    <circle cx="48" cy="18" r="2.2"/>
+    <circle cx="50" cy="32" r="2.2"/>
+    <circle cx="48" cy="46" r="2.2"/>
   </g>
+  <!-- Central orange hub — the visual anchor of the brand -->
+  <circle cx="34" cy="32" r="4" fill="#e89a3a"/>
 </svg>

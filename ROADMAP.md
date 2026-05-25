@@ -1,10 +1,10 @@
 # ZFW Roadmap
 
 > Author: Holger Kuehn (Lintux)
-> Status: **v1.0.9 — GA + post-launch hardening, polish, brand,
-> logo-iteration. Tested + approved live on lan-host (HolgisNAS);
-> next step is the external-tester handoff to Gelbuilding.**
-> Shipped across nine point releases after v1.0.0:
+> Status: **v1.0.10 — GA + post-launch hardening, polish, brand,
+> logo-iteration, appicon alignment. Tested + approved live on lan-host
+> (HolgisNAS); next step is the external-tester handoff to
+> Gelbuilding.** Shipped across ten point releases after v1.0.0:
 >
 >   v1.0.1  Round-4 security review hotfix — Critical RCE closed
 >           (R4-1: `Rule.ID` shell-injection), plus R4-2..R4-5
@@ -30,6 +30,12 @@
 >           24px so it sits on the "Firewall" baseline, not the
 >           container floor. Final state: 96px logo with
 >           transparent backdrop; v-pill flex-end + 24px margin.
+>   v1.0.10 Appicon alignment — the ZimaOS dashboard tile redrawn
+>           in the wordmark's language: brick-wall shield with a
+>           single central orange hub radiating three lines to
+>           warm off-white endpoint dots (was: five-node circuit
+>           motif from v1.0.3). Tile + wordmark now read as one
+>           mark.
 >
 > All six roadmap
 > phases shipped: v0.2 (tester foundation, v0.2.7–v0.2.21), v0.3
