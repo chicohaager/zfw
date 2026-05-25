@@ -141,7 +141,7 @@ $RAW/usr/bin/zfwd
   ( cd "$DIST/$PKG" && sha256sum "$NAME.raw" > "$NAME.raw.sha256" )
   cp "$ROOT/engine/zfw" "$ROOT/install.sh" \
      "$ROOT/README.md" "$ROOT/BEST-PRACTICES.md" "$ROOT/SECURITY-REPORT.md" \
-     "$ROOT/THREAT-MODEL.md" "$ROOT/BUG-BOUNTY.md" "$ROOT/CODE-REVIEW.md" \
+     "$ROOT/THREAT-MODEL.md" "$ROOT/BUG-BOUNTY.md" \
      "$DIST/$PKG/"
   [ -f "$DIST/sbom.json" ] && cp "$DIST/sbom.json" "$DIST/$PKG/sbom.json"
   chmod 0755 "$DIST/$PKG/install.sh" "$DIST/$PKG/zfw"
