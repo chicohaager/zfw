@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -266,7 +267,31 @@ func (s *Server) recompileLocked(containers []system.DockerContainer, dockerPort
 	}
 	script := compiler.Compile(rs, dockerPorts, geoFiles, s.extraBypass...)
 	// 0600: the compiled script is executed as root — keep it owner-only.
-	return os.WriteFile(s.compiledPath, []byte(script), 0o600)
+	if err := os.WriteFile(s.compiledPath, []byte(script), 0o600); err != nil {
+		return err
+	}
+	// Also write the atomic-apply variant (B4) alongside compiled.sh so
+	// switching the engine to ZFW_APPLY_MODE=restore needs no recompile.
+	// Dormant until the engine opts in; a write failure here must not
+	// fail the apply since the default bash path already succeeded.
+	restoreScript := compiler.CompileRestoreScript(rs, dockerPorts, geoFiles, s.extraBypass...)
+	if err := os.WriteFile(restorePathFor(s.compiledPath), []byte(restoreScript), 0o600); err != nil {
+		slog.Warn("write compiled.restore.sh (non-fatal — bash path is default)", "err", err)
+	}
+	return nil
+}
+
+// restorePathFor derives the atomic-apply script path that sits next to
+// compiled.sh (e.g. /DATA/zfw/compiled.sh -> /DATA/zfw/compiled.restore.sh).
+func restorePathFor(compiledPath string) string {
+	dir := filepath.Dir(compiledPath)
+	base := filepath.Base(compiledPath)
+	if ext := filepath.Ext(base); ext != "" {
+		base = strings.TrimSuffix(base, ext) + ".restore" + ext
+	} else {
+		base += ".restore"
+	}
+	return filepath.Join(dir, base)
 }
 
 // Routes returns the API mux.

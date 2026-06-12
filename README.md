@@ -4,7 +4,7 @@
 
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v1.0.13 — quality + features: internal refactor of the three highest-complexity functions (compiler output verified byte-identical), a Docker-events watcher that keeps container-bound rules in sync with the live inventory (recompile-only, never auto-applies), GeoIP source flags on the Connections tab, and a runtime verbose-logging toggle on the Events tab. No security-surface change from v1.0.12.
+> **Current release:** v1.0.14 — opt-in atomic apply (B4, experimental). The daemon now also writes a `compiled.restore.sh` variant that swaps the ZFW chains via `iptables-restore` (pre-validated with `--test`, atomic per table). Enable with `ZFW_APPLY_MODE=restore` on the engine; the default stays the proven line-by-line path. No change to default behaviour.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.

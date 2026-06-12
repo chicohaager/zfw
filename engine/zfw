@@ -14,6 +14,13 @@ export PATH="/usr/sbin:/usr/bin:/sbin:/bin:${PATH:-}"
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPILED="${ZFW_COMPILED:-$SELF_DIR/compiled.sh}"
+# B4 (v1.1): atomic-apply variant. The daemon writes compiled.restore.sh
+# next to compiled.sh on every recompile. ZFW_APPLY_MODE=restore makes
+# apply/commit use it (chains swapped via iptables-restore, pre-validated
+# with --test, atomic per table). Default "bash" keeps the proven
+# line-by-line path. Selection happens in pick_compiled below.
+COMPILED_RESTORE="${ZFW_COMPILED_RESTORE:-$SELF_DIR/compiled.restore.sh}"
+APPLY_MODE="${ZFW_APPLY_MODE:-bash}"
 DEADMAN="zfw-deadman"
 # Boot-persistence unit installed by `commit` and removed by `revert`. The
 # unit replays the committed compiled.sh at boot after docker.service is up
@@ -24,6 +31,20 @@ IPT="$(command -v iptables-legacy 2>/dev/null || command -v iptables)"
 IPT6="$(command -v ip6tables-legacy 2>/dev/null || command -v ip6tables 2>/dev/null || true)"
 
 log(){ echo "[zfw] $*"; }
+
+# pick_compiled echoes the path of the script to run for the active
+# apply mode. restore mode falls back to the bash script (with a warning)
+# if the daemon has not written compiled.restore.sh yet, so an
+# out-of-order upgrade never leaves apply with nothing to run.
+pick_compiled(){
+  if [ "$APPLY_MODE" = "restore" ]; then
+    if [ -r "$COMPILED_RESTORE" ]; then
+      echo "$COMPILED_RESTORE"; return 0
+    fi
+    echo "[zfw] WARN: ZFW_APPLY_MODE=restore but $COMPILED_RESTORE missing — falling back to bash path" >&2
+  fi
+  echo "$COMPILED"
+}
 
 # apply_or_die runs a command and aborts the engine if it fails. Used to
 # wrap the commit-side chain (write_persist_unit + daemon-reload +
@@ -90,7 +111,12 @@ write_persist_unit(){
   # set the mode while still hidden, then rename — rename(2) is atomic within
   # one fs so the unit either exists in full or not at all.
   local tmp="${PERSIST_UNIT}.tmp"
-  cat > "$tmp" <<'UNIT'
+  # Bake the active apply mode into the unit so a reboot replays exactly
+  # what was committed — committing in restore mode must not silently
+  # boot in bash mode (and vice versa).
+  local env_line=""
+  [ "$APPLY_MODE" = "restore" ] && env_line='Environment=ZFW_APPLY_MODE=restore'
+  cat > "$tmp" <<UNIT
 [Unit]
 Description=ZFW Host Firewall — restore committed rules at boot
 After=docker.service network-online.target
@@ -101,6 +127,7 @@ ConditionPathExists=/DATA/zfw/compiled.sh
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+${env_line}
 ExecStart=/DATA/zfw/zfw apply
 
 [Install]
@@ -120,16 +147,19 @@ arm_deadman(){
 
 case "${1:-}" in
   apply)
-    [ -r "$COMPILED" ] || { echo "[zfw] ERROR: compiled ruleset missing: $COMPILED" >&2; exit 1; }
-    secure_file "$COMPILED" || exit 1
+    SCRIPT="$(pick_compiled)"
+    [ -r "$SCRIPT" ] || { echo "[zfw] ERROR: compiled ruleset missing: $SCRIPT" >&2; exit 1; }
+    secure_file "$SCRIPT" || exit 1
+    [ "$APPLY_MODE" = "restore" ] && log "apply mode: restore (atomic, $SCRIPT)"
     safe=""
     [ "${2:-}" = "--safe" ] && safe=1
-    # Arm the dead-man BEFORE touching iptables (ZFW-8): compiled.sh runs
-    # under `set -e`, so a bad rule aborts it half-applied. The 120s
-    # auto-revert has to be the active safety net at that moment — arming it
-    # afterwards never runs once the apply has already died.
+    # Arm the dead-man BEFORE touching iptables (ZFW-8): the compiled
+    # script runs under `set -e`, so a bad rule aborts it (the restore
+    # path additionally --tests each table first, but the dead-man stays
+    # the active safety net at apply time). Arming it afterwards never
+    # runs once the apply has already died.
     if [ -n "$safe" ]; then arm_deadman; fi
-    if ! bash "$COMPILED"; then
+    if ! bash "$SCRIPT"; then
       echo "[zfw] ERROR: applying compiled ruleset failed — reverting partial state" >&2
       revert
       if [ -n "$safe" ]; then
@@ -145,10 +175,12 @@ case "${1:-}" in
   commit)
     # Re-verify the compiled ruleset before promoting it to boot-persistence.
     # The boot-time `apply` will check again, but this catches a tampered
-    # compiled.sh at commit time so the operator sees the failure
-    # immediately instead of on the next reboot (security-review v0.2.20 M1).
-    [ -r "$COMPILED" ] || { echo "[zfw] ERROR: compiled ruleset missing: $COMPILED" >&2; exit 1; }
-    secure_file "$COMPILED" || exit 1
+    # script at commit time so the operator sees the failure immediately
+    # instead of on the next reboot (security-review v0.2.20 M1). Verify
+    # the same script the active mode will run at boot.
+    SCRIPT="$(pick_compiled)"
+    [ -r "$SCRIPT" ] || { echo "[zfw] ERROR: compiled ruleset missing: $SCRIPT" >&2; exit 1; }
+    secure_file "$SCRIPT" || exit 1
     # Dead-man teardown stays best-effort — the timer may simply not be
     # running on a host where commit is called outside an apply --safe
     # sequence, and that is fine.

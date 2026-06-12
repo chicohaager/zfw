@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"os/exec"
 	"reflect"
 	"regexp"
 	"strings"
@@ -143,5 +144,67 @@ func TestRestoreDocumentShape(t *testing.T) {
 	}
 	if !strings.Contains(rest.V6, ":ZFW-IN6 - [0:0]") {
 		t.Error("V6 missing ZFW-IN6 chain declaration")
+	}
+}
+
+// TestCompileRestoreScriptShape pins the engine-facing restore script:
+// it must be valid bash (checked via `bash -n`), pre-validate each table
+// with --test before applying, embed the V4/V6 docs from CompileRestore,
+// and emit the idempotent jump hooks.
+func TestCompileRestoreScriptShape(t *testing.T) {
+	rs := comprehensiveRuleSet()
+	dp := map[int]bool{8080: true}
+	gf := map[string]string{"cn": "/DATA/zfw/geo/cn.ipset", "ru": "/DATA/zfw/geo/ru.ipset"}
+	script := CompileRestoreScript(rs, dp, gf, "wg+")
+
+	for _, want := range []string{
+		"#!/bin/bash",
+		"set -eu",
+		`"$IPTR" --test --noflush "$T4"`, // pre-validate v4 before apply
+		`"$IPTR" --noflush "$T4"`,
+		`"$IPT6R" --test --noflush "$T6"`,
+		"<<'ZFW_RESTORE_V4'",
+		"<<'ZFW_RESTORE_V6'",
+		"$IPT -C INPUT -j ZFW-IN 2>/dev/null || $IPT -I INPUT 1 -j ZFW-IN",
+		"$IPT -C OUTPUT -j ZFW-OUT ",      // outbound host hook present
+		"$IPT -C FORWARD -j ZFW-FWD-OUT ", // outbound docker hook present
+		"ipset restore -exist",            // geo preamble
+	} {
+		if !strings.Contains(script, want) {
+			t.Errorf("restore script missing: %q", want)
+		}
+	}
+
+	// The embedded V4/V6 docs must be exactly what CompileRestore emits.
+	docs := CompileRestore(rs, dp, "wg+")
+	if !strings.Contains(script, docs.V4) {
+		t.Error("restore script does not embed the CompileRestore V4 document verbatim")
+	}
+	if !strings.Contains(script, docs.V6) {
+		t.Error("restore script does not embed the CompileRestore V6 document verbatim")
+	}
+
+	// Must be syntactically valid bash.
+	cmd := exec.Command("bash", "-n")
+	cmd.Stdin = strings.NewReader(script)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generated restore script failed `bash -n`: %v\n%s", err, out)
+	}
+}
+
+// TestCompileRestoreScriptOmitsAbsentOutboundHooks pins that an
+// inbound-only rule set produces no ZFW-OUT / ZFW-FWD-OUT jump hooks.
+func TestCompileRestoreScriptOmitsAbsentOutboundHooks(t *testing.T) {
+	rs := rules.RuleSet{
+		DefaultPolicy: "deny", LAN: "192.168.1.0/24",
+		Rules: []rules.Rule{{
+			ID: "a", Order: 10, Enabled: true, Name: "ssh", Action: "allow",
+			Source: rules.Source{Type: "range", Value: "192.168.1.0/24"},
+			Ports:  rules.Ports{Type: "list", List: []int{22}}, Protocol: "tcp", Zone: "host",
+		}},
+	}
+	script := CompileRestoreScript(rs, nil, nil)
+	if strings.Contains(script, "ZFW-OUT") || strings.Contains(script, "ZFW-FWD-OUT") {
+		t.Error("inbound-only rule set emitted outbound chains/hooks")
 	}
 }
