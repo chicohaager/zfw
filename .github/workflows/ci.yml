@@ -2,10 +2,11 @@
 #
 # Phases:
 #   1. lint     — gofmt + go vet, fast feedback if formatting is wrong
-#   2. test     — go test ./..., the 17 unit tests must stay green
-#   3. build    — build.sh produces dist/zfw-<v>.tar.gz (the release artifact)
-#   4. arm64    — smoke build for arm64 so we catch portability regressions
-#                 before the (future) Mod-Store multi-arch release lands
+#   2. vuln     — govulncheck against the Go vulnerability database
+#   3. test     — go test ./... -race, the unit suite must stay green
+#   4. build    — build.sh produces dist/zfw-<v>.tar.gz (the release artifact)
+#   5. arm64    — smoke build for arm64 so we catch portability regressions
+#                 before the Mod-Store multi-arch release lands
 #
 # Notes:
 #   - reproducible-build verification: build.sh respects SOURCE_DATE_EPOCH
@@ -13,7 +14,7 @@
 #     twice and asserts the tarball SHA256 matches.
 #   - signing (cosign) is intentionally not wired up yet — adding it
 #     requires committing the public verification key + a strategy for the
-#     private key (GitHub OIDC or KMS); revisit when v0.5 ships to Mod-Store.
+#     private key (GitHub OIDC or KMS); revisit at the Mod-Store submission.
 
 name: CI
 
@@ -33,6 +34,26 @@ jobs:
         with: { go-version: '1.22' }
       - run: gofmt -l . | tee /tmp/fmt && [ ! -s /tmp/fmt ]
       - run: go vet ./...
+
+  # Advisory, not gating. govulncheck against the standard library tracks
+  # the toolchain's patch level, so there is almost always a "fixed in the
+  # next patch" stdlib finding — gating on that would turn every release
+  # tag red on the day a stdlib CVE lands. continue-on-error keeps the
+  # signal visible (a red ✗ in the checks list = time to bump Go or a
+  # dependency) without blocking the release. 'stable' minimises the
+  # stdlib noise by always scanning with the latest patch.
+  vuln:
+    runs-on: ubuntu-latest
+    needs: lint
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: 'stable' }
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
 
   test:
     runs-on: ubuntu-latest

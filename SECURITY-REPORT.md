@@ -421,4 +421,42 @@ that the single-admin model had previously made acceptable.
 
 ---
 
+## Round-5 residual close-out (v1.0.12)
+
+Two of the scheduled items from the Round-5 conclusion are closed in
+**v1.0.12**:
+
+- **JWT claim scoping** (Round-5 open recommendation) — `auth.Verify`
+  now pins the access-token issuer (`iss == "casaos"`, confirmed
+  against a live ZimaOS login). The refresh token and any other token
+  the user-service mints with the same ES256 key carry a different
+  `iss` and are rejected, so only a genuine web-session token
+  authorises the control API. Regression-locked by
+  `TestVerifyRejectsNonSessionIssuer`.
+- **R3-6 per-IP rate-limit** (accepted residual since Round 3) — the
+  mutate and read limiters are now per-client (`keyedLimiter`, keyed on
+  the gateway-set `X-Forwarded-For` first hop, falling back to
+  `RemoteAddr`) with a global aggregate ceiling retained as the
+  evasion-proof backstop: a single noisy client no longer 429s others,
+  while a key-rotating flood still cannot exceed the aggregate. The map
+  is bounded (LRU eviction at 4096 keys). On-host `X-Forwarded-For`
+  spoofing is an accepted residual (on-host code already has
+  root-adjacent reach; the aggregate ceiling caps any evasion).
+
+This leaves **one** scheduled item — apply atomicity via
+`iptables-restore` (the structural fix for the R5-1/R5-2 class) —
+tracked for v1.1. Test coverage gained two previously untested
+packages (`internal/firewall`, `internal/gateway`) and a CI
+`govulncheck` advisory job in the same cut.
+
+Cumulative tally after the v1.0.12 close-out: **50 findings, 46
+remediated, 4 accepted residuals** — R3-6 moves from residual to
+remediated, and the separately-tracked Round-5 JWT recommendation is
+now implemented. The remaining accepted residuals are R3-7 (hardcoded
+boot-persistence unit path), R3-10 (info-grade injection re-test),
+on-host `X-Forwarded-For` spoofing (new, bounded by the aggregate
+ceiling), and the v1.1-tracked apply-atomicity item.
+
+---
+
 *© 2026 Virtual Services*

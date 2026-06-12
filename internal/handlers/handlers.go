@@ -62,15 +62,16 @@ type Server struct {
 	upd          *update.Checker // nil = self-update polling disabled
 	hook         *notify.Hook    // v0.5.5 — nil = webhook disabled
 	httpClient   *http.Client    // reusable client for outbound peer pushes
-	mutateRL     *rateBucket     // shared by all non-GET endpoints
+	mutateRL     *keyedLimiter   // shared by all non-GET endpoints
 	// readRL caps expensive GET endpoints (exposure, events, conntrack,
 	// versions) that shell out to ss / journalctl / docker / sshd. An
 	// authenticated user could otherwise flood them and CPU-pin the
 	// daemon (R3-5). Burst 60 / sustained 5/s comfortably covers
 	// normal browser refresh + dashboard polling on a multi-tab UI
 	// session while capping abusive flooding. /api/health stays
-	// uncapped (liveness probe).
-	readRL *rateBucket
+	// uncapped (liveness probe). Both limiters key per client (R3-6)
+	// with a global aggregate ceiling as the evasion-proof backstop.
+	readRL *keyedLimiter
 }
 
 // NewServer returns a Server. fw may be *firewall.Manager in production or
@@ -93,11 +94,15 @@ func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string,
 		upd:          upd,
 		hook:         hook,
 		httpClient:   peers.DefaultClient(),
-		// Burst 10, sustained 1/s — a user clicking Safe-Apply repeatedly
-		// passes the burst; a runaway script is throttled to one call/sec.
-		mutateRL: newRateBucket(1, 10),
-		// Burst 60, sustained 5/s — see Server.readRL field doc above.
-		readRL: newRateBucket(5, 60),
+		// Per client: burst 10, sustained 1/s — a user clicking
+		// Safe-Apply repeatedly passes the burst; a runaway script is
+		// throttled to one call/sec. Aggregate ceiling burst 30, 3/s
+		// covers a few simultaneous clients but caps total throughput
+		// so a key-rotating flood cannot evade the limit.
+		mutateRL: newKeyedLimiter(1, 10, 3, 30),
+		// Per client burst 60 / 5/s (see readRL field doc); aggregate
+		// burst 180 / 15/s as the shared ceiling.
+		readRL: newKeyedLimiter(5, 60, 15, 180),
 	}
 }
 

@@ -34,6 +34,16 @@ const jwksMaxStale = 1 * time.Hour
 // clockSkew is the tolerance applied when checking the nbf claim.
 const clockSkew = 60 * time.Second
 
+// sessionIssuer is the `iss` claim a ZimaOS *access* token carries
+// ("casaos"). The user-service mints other tokens with the SAME signing
+// key — notably the long-lived refresh token (iss "refresh", ~7-day
+// expiry). Without an issuer check, a refresh token (or any future
+// same-key token type) would be accepted as a fully-privileged firewall
+// session. We pin the access-token issuer so only a genuine web-session
+// token authorises the control API. Verified against a live nas-main login
+// 2026-06-12: access iss="casaos", refresh iss="refresh".
+const sessionIssuer = "casaos"
+
 // b64 is the base64url encoding (no padding) used throughout JWT/JWK.
 var b64 = base64.RawURLEncoding
 
@@ -216,11 +226,19 @@ func (v *Verifier) Verify(token string) error {
 		return errors.New("payload not decodable")
 	}
 	var claims struct {
-		Exp int64 `json:"exp"`
-		Nbf int64 `json:"nbf"`
+		Iss string `json:"iss"`
+		Exp int64  `json:"exp"`
+		Nbf int64  `json:"nbf"`
 	}
 	if err := json.Unmarshal(plRaw, &claims); err != nil {
 		return errors.New("payload not readable")
+	}
+	// Scope the token to a ZimaOS web session: the refresh token and any
+	// other token type the user-service mints with the same signing key
+	// carry a different `iss`, and must not authorise the control API
+	// (R5 open recommendation).
+	if claims.Iss != sessionIssuer {
+		return fmt.Errorf("token issuer %q not accepted (want %q)", claims.Iss, sessionIssuer)
 	}
 	// A ZimaOS session token must carry an expiry — a token without exp is
 	// rejected rather than trusted forever (ZFW-S2).
