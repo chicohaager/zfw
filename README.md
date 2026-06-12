@@ -4,7 +4,7 @@
 
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v1.0.14 — opt-in atomic apply (B4, experimental). The daemon now also writes a `compiled.restore.sh` variant that swaps the ZFW chains via `iptables-restore` (pre-validated with `--test`, atomic per table). Enable with `ZFW_APPLY_MODE=restore` on the engine; the default stays the proven line-by-line path. No change to default behaviour.
+> **Current release:** v1.0.14 — opt-in atomic apply (B4). The daemon now also writes a `compiled.restore.sh` variant that swaps the ZFW chains via `iptables-restore` (pre-validated with `--test`, atomic per table — each table lands whole or not at all). The restore document is equivalence-tested byte-for-byte against the proven line-by-line path, and the path has been validated through staged testing up to a live ZimaOS host. Enable with `ZFW_APPLY_MODE=restore` on the engine; the default stays the line-by-line path. No change to default behaviour.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
