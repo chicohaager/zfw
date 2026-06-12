@@ -500,58 +500,11 @@ func validateRule(r Rule) error {
 	if len(r.Notes) > maxNoteLen {
 		return fmt.Errorf("notes too long: %d chars (max %d)", len(r.Notes), maxNoteLen)
 	}
-	switch r.Source.Type {
-	case "any":
-	case "ip":
-		if net.ParseIP(r.Source.Value) == nil {
-			return fmt.Errorf("source IP is invalid")
-		}
-	case "range":
-		if _, _, err := net.ParseCIDR(r.Source.Value); err != nil {
-			return fmt.Errorf("source range must be a CIDR")
-		}
-	case "country":
-		codes := SplitCountries(r.Source.Value)
-		if len(codes) == 0 {
-			return fmt.Errorf("no country specified")
-		}
-		if len(codes) > maxRuleCountries {
-			return fmt.Errorf("too many countries: %d (max %d)", len(codes), maxRuleCountries)
-		}
-		for _, c := range codes {
-			if len(c) != 2 || !isAlpha(c) {
-				return fmt.Errorf("country code %q is invalid (ISO-3166 alpha-2, e.g. DE)", c)
-			}
-		}
-	default:
-		return fmt.Errorf("source.type is invalid")
+	if err := validateSource(r.Source); err != nil {
+		return err
 	}
-	switch r.Ports.Type {
-	case "all":
-	case "list":
-		if len(r.Ports.List) == 0 {
-			return fmt.Errorf("ports list is empty")
-		}
-		if len(r.Ports.List) > maxPortsPerRule {
-			return fmt.Errorf("too many ports: %d (max %d)", len(r.Ports.List), maxPortsPerRule)
-		}
-		for _, p := range r.Ports.List {
-			if p < 1 || p > 65535 {
-				return fmt.Errorf("invalid port %d", p)
-			}
-		}
-	case "range":
-		if r.Ports.From < 1 || r.Ports.From > 65535 {
-			return fmt.Errorf("port range: from %d out of 1-65535", r.Ports.From)
-		}
-		if r.Ports.To < 1 || r.Ports.To > 65535 {
-			return fmt.Errorf("port range: to %d out of 1-65535", r.Ports.To)
-		}
-		if r.Ports.From > r.Ports.To {
-			return fmt.Errorf("port range: from (%d) > to (%d)", r.Ports.From, r.Ports.To)
-		}
-	default:
-		return fmt.Errorf("ports.type is invalid")
+	if err := validatePorts(r.Ports); err != nil {
+		return err
 	}
 	if r.Protocol != "tcp" && r.Protocol != "udp" && r.Protocol != "both" {
 		return fmt.Errorf("protocol must be tcp, udp or both")
@@ -571,6 +524,73 @@ func validateRule(r Rule) error {
 	}
 	if r.Direction != "" && r.Direction != "inbound" && r.Direction != "outbound" {
 		return fmt.Errorf("direction must be inbound, outbound or empty (got %q)", r.Direction)
+	}
+	return nil
+}
+
+// validateSource checks a rule's source selector: an IP/CIDR literal
+// must parse, a country list must be non-empty, within the per-rule cap
+// and made of ISO-3166 alpha-2 codes.
+func validateSource(s Source) error {
+	switch s.Type {
+	case "any":
+	case "ip":
+		if net.ParseIP(s.Value) == nil {
+			return fmt.Errorf("source IP is invalid")
+		}
+	case "range":
+		if _, _, err := net.ParseCIDR(s.Value); err != nil {
+			return fmt.Errorf("source range must be a CIDR")
+		}
+	case "country":
+		codes := SplitCountries(s.Value)
+		if len(codes) == 0 {
+			return fmt.Errorf("no country specified")
+		}
+		if len(codes) > maxRuleCountries {
+			return fmt.Errorf("too many countries: %d (max %d)", len(codes), maxRuleCountries)
+		}
+		for _, c := range codes {
+			if len(c) != 2 || !isAlpha(c) {
+				return fmt.Errorf("country code %q is invalid (ISO-3166 alpha-2, e.g. DE)", c)
+			}
+		}
+	default:
+		return fmt.Errorf("source.type is invalid")
+	}
+	return nil
+}
+
+// validatePorts checks a rule's port selector: a list must be non-empty,
+// within the per-rule cap and every entry in range; a range must have
+// both ends in range and from ≤ to.
+func validatePorts(p Ports) error {
+	switch p.Type {
+	case "all":
+	case "list":
+		if len(p.List) == 0 {
+			return fmt.Errorf("ports list is empty")
+		}
+		if len(p.List) > maxPortsPerRule {
+			return fmt.Errorf("too many ports: %d (max %d)", len(p.List), maxPortsPerRule)
+		}
+		for _, port := range p.List {
+			if port < 1 || port > 65535 {
+				return fmt.Errorf("invalid port %d", port)
+			}
+		}
+	case "range":
+		if p.From < 1 || p.From > 65535 {
+			return fmt.Errorf("port range: from %d out of 1-65535", p.From)
+		}
+		if p.To < 1 || p.To > 65535 {
+			return fmt.Errorf("port range: to %d out of 1-65535", p.To)
+		}
+		if p.From > p.To {
+			return fmt.Errorf("port range: from (%d) > to (%d)", p.From, p.To)
+		}
+	default:
+		return fmt.Errorf("ports.type is invalid")
 	}
 	return nil
 }

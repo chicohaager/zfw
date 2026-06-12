@@ -69,40 +69,7 @@ func main() {
 	hook := notify.New(cfg.WebhookURL)
 	srv := handlers.NewServer(fw, cfg.RulesFile, cfg.CompiledFile, cfg.GeoDir, cfg.HistoryFile, upd, cfg.PeersFile, cfg.PeerToken, cfg.ExtraBypassIfaces, hook)
 
-	// v0.2 rule model: migrate the legacy allowlist.conf on first run; on a
-	// truly fresh host (no allowlist either) seed a recommended starter
-	// rule set so the UI opens onto something usable instead of an empty
-	// page that locks the user out the moment they hit Safe-Apply.
-	if _, err := os.Stat(cfg.RulesFile); os.IsNotExist(err) {
-		if tier, lerr := fw.LoadConfig(); lerr == nil {
-			mctx, mcancel := context.WithTimeout(context.Background(), 20*time.Second)
-			dp := system.DockerPorts(mctx)
-			mcancel()
-			ports := make([]int, 0, len(dp))
-			for p := range dp {
-				ports = append(ports, p)
-			}
-			rs := rules.FromTiers(tier, ports)
-			if serr := rules.Save(cfg.RulesFile, rs); serr != nil {
-				slog.Warn("rule migration (non-fatal)", "err", serr)
-			} else {
-				slog.Info("migrated allowlist.conf -> rules.json", "rules", len(rs.Rules))
-			}
-		} else {
-			lan, hostIP := system.DetectLAN()
-			dctx, dcancel := context.WithTimeout(context.Background(), 10*time.Second)
-			dp := system.DockerPorts(dctx)
-			dcancel()
-			rs := rules.Defaults(lan, hostIP, dp)
-			if serr := rules.Save(cfg.RulesFile, rs); serr != nil {
-				slog.Warn("default rule seed (non-fatal)", "err", serr)
-			} else {
-				slog.Info("seeded default rules.json — not applied; user must Safe-Apply",
-					"lan", lan, "host", hostIP,
-					"rules", len(rs.Rules), "docker_ports", len(dp))
-			}
-		}
-	}
+	seedRulesIfMissing(cfg, fw)
 	{
 		rctx, rcancel := context.WithTimeout(context.Background(), 20*time.Second)
 		if err := srv.Recompile(rctx); err != nil {
@@ -114,33 +81,7 @@ func main() {
 	// The gateway client: the UI reaches this daemon through its /v2/zfw route.
 	gw := gateway.New(cfg.GatewayURLFile, cfg.RoutePath, "http://127.0.0.1:"+cfg.Port)
 
-	// The ZimaOS gateway proxies /v2/zfw LAN-wide without authenticating it,
-	// so the daemon verifies the ZimaOS session token itself. Discover the
-	// JWKS endpoint via the gateway (port-agnostic); fall back to the default.
-	jwksURL := cfg.JWKSURL
-	{
-		dctx, dcancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if target, err := gw.LookupTarget(dctx, "/.well-known/jwks.json"); err == nil {
-			cand := strings.TrimRight(target, "/") + "/.well-known/jwks.json"
-			// The gateway routes table is mutable, so the discovered JWKS
-			// target is trusted only when it points at loopback — otherwise
-			// the auth trust anchor could be redirected off-host (ZFW-S1).
-			if isLoopbackURL(cand) {
-				jwksURL = cand
-			} else {
-				slog.Warn("discovered JWKS target not loopback — keeping pinned default",
-					"target", target, "default", jwksURL)
-			}
-		} else {
-			slog.Warn("JWKS discovery failed, using default",
-				"default", jwksURL, "err", err)
-		}
-		dcancel()
-	}
-	if !isLoopbackURL(jwksURL) {
-		slog.Warn("JWKS URL is not loopback — session-auth trust anchor is off-host",
-			"jwks_url", jwksURL)
-	}
+	jwksURL := resolveJWKSURL(cfg, gw)
 	verifier := auth.NewVerifier(jwksURL)
 	{
 		wctx, wcancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -151,52 +92,7 @@ func main() {
 	}
 	slog.Info("session auth enabled", "jwks_url", jwksURL)
 
-	mux := http.NewServeMux()
-	// Every API call needs a valid ZimaOS session token; /api/health stays
-	// open so liveness probes still work, and /api/peers/receive uses its
-	// own shared-token auth (it's invoked by a leader host, not a
-	// browser session) so it bypasses the JWT middleware.
-	mux.Handle("/api/", verifier.Middleware(srv.Routes(), func(p string) bool {
-		return p == "/api/health" || p == "/api/peers/receive"
-	}))
-
-	// Static UI fallback for direct localhost access. The gateway also serves
-	// these files directly under /modules/zfw/.
-	fs := http.FileServer(http.Dir(cfg.StaticDir))
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "..") {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		fs.ServeHTTP(w, r)
-	})
-
-	// The gateway proxies the registered route prefix verbatim
-	// (e.g. /v2/zfw/api/status). Strip it so internal routing stays
-	// prefix-agnostic and direct localhost access (/api/...) keeps working.
-	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-		// CSRF: a state-changing request must prove it is same-origin.
-		// Browsers always attach Origin to POST/PUT/DELETE fetches; a request
-		// with neither Origin nor a matching Referer is a non-browser or a
-		// forged caller, so it is rejected rather than waved through (ZFW-4).
-		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
-			if !sameOrigin(r) {
-				http.Error(w, "cross-origin request rejected", http.StatusForbidden)
-				return
-			}
-		}
-
-		if cfg.RoutePath != "" {
-			if r.URL.Path == cfg.RoutePath {
-				r.URL.Path = "/"
-			} else if strings.HasPrefix(r.URL.Path, cfg.RoutePath+"/") {
-				r.URL.Path = r.URL.Path[len(cfg.RoutePath):]
-			}
-		}
-		mux.ServeHTTP(w, r)
-	})
+	root := buildHandler(cfg, srv, verifier)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -243,6 +139,126 @@ func main() {
 	if err := httpSrv.Shutdown(shutCtx); err != nil {
 		slog.Warn("graceful shutdown error", "err", err)
 	}
+}
+
+// seedRulesIfMissing migrates the legacy allowlist.conf into rules.json on
+// first run; on a truly fresh host (no allowlist either) it seeds a
+// recommended starter rule set so the UI opens onto something usable
+// instead of an empty page that locks the user out the moment they hit
+// Safe-Apply. No-op once rules.json exists.
+func seedRulesIfMissing(cfg config.Config, fw *firewall.Manager) {
+	if _, err := os.Stat(cfg.RulesFile); !os.IsNotExist(err) {
+		return
+	}
+	if tier, lerr := fw.LoadConfig(); lerr == nil {
+		mctx, mcancel := context.WithTimeout(context.Background(), 20*time.Second)
+		dp := system.DockerPorts(mctx)
+		mcancel()
+		ports := make([]int, 0, len(dp))
+		for p := range dp {
+			ports = append(ports, p)
+		}
+		rs := rules.FromTiers(tier, ports)
+		if serr := rules.Save(cfg.RulesFile, rs); serr != nil {
+			slog.Warn("rule migration (non-fatal)", "err", serr)
+		} else {
+			slog.Info("migrated allowlist.conf -> rules.json", "rules", len(rs.Rules))
+		}
+		return
+	}
+	lan, hostIP := system.DetectLAN()
+	dctx, dcancel := context.WithTimeout(context.Background(), 10*time.Second)
+	dp := system.DockerPorts(dctx)
+	dcancel()
+	rs := rules.Defaults(lan, hostIP, dp)
+	if serr := rules.Save(cfg.RulesFile, rs); serr != nil {
+		slog.Warn("default rule seed (non-fatal)", "err", serr)
+	} else {
+		slog.Info("seeded default rules.json — not applied; user must Safe-Apply",
+			"lan", lan, "host", hostIP,
+			"rules", len(rs.Rules), "docker_ports", len(dp))
+	}
+}
+
+// resolveJWKSURL discovers the JWKS endpoint via the gateway routes table
+// (port-agnostic), falling back to the pinned default. A discovered target
+// is trusted only when it resolves to loopback — the gateway routes table
+// is mutable, so an off-host target could redirect the auth trust anchor
+// (ZFW-S1).
+func resolveJWKSURL(cfg config.Config, gw *gateway.Manager) string {
+	jwksURL := cfg.JWKSURL
+	dctx, dcancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer dcancel()
+	if target, err := gw.LookupTarget(dctx, "/.well-known/jwks.json"); err == nil {
+		cand := strings.TrimRight(target, "/") + "/.well-known/jwks.json"
+		if isLoopbackURL(cand) {
+			jwksURL = cand
+		} else {
+			slog.Warn("discovered JWKS target not loopback — keeping pinned default",
+				"target", target, "default", jwksURL)
+		}
+	} else {
+		slog.Warn("JWKS discovery failed, using default",
+			"default", jwksURL, "err", err)
+	}
+	if !isLoopbackURL(jwksURL) {
+		slog.Warn("JWKS URL is not loopback — session-auth trust anchor is off-host",
+			"jwks_url", jwksURL)
+	}
+	return jwksURL
+}
+
+// buildHandler assembles the daemon's HTTP handler: the JWT-guarded /api
+// mux, a static-file fallback, and the outer wrapper that enforces the
+// 1 MB body cap, the same-origin CSRF check on state-changing requests,
+// and gateway route-prefix stripping.
+func buildHandler(cfg config.Config, srv *handlers.Server, verifier *auth.Verifier) http.Handler {
+	mux := http.NewServeMux()
+	// Every API call needs a valid ZimaOS session token; /api/health stays
+	// open so liveness probes still work, and /api/peers/receive uses its
+	// own shared-token auth (it's invoked by a leader host, not a
+	// browser session) so it bypasses the JWT middleware.
+	mux.Handle("/api/", verifier.Middleware(srv.Routes(), func(p string) bool {
+		return p == "/api/health" || p == "/api/peers/receive"
+	}))
+
+	// Static UI fallback for direct localhost access. The gateway also serves
+	// these files directly under /modules/zfw/.
+	fs := http.FileServer(http.Dir(cfg.StaticDir))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "..") {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		fs.ServeHTTP(w, r)
+	})
+
+	// The gateway proxies the registered route prefix verbatim
+	// (e.g. /v2/zfw/api/status). Strip it so internal routing stays
+	// prefix-agnostic and direct localhost access (/api/...) keeps working.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
+		// CSRF: a state-changing request must prove it is same-origin.
+		// Browsers always attach Origin to POST/PUT/DELETE fetches; a request
+		// with neither Origin nor a matching Referer is a non-browser or a
+		// forged caller, so it is rejected rather than waved through (ZFW-4).
+		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
+			if !sameOrigin(r) {
+				http.Error(w, "cross-origin request rejected", http.StatusForbidden)
+				return
+			}
+		}
+
+		if cfg.RoutePath != "" {
+			if r.URL.Path == cfg.RoutePath {
+				r.URL.Path = "/"
+			} else if strings.HasPrefix(r.URL.Path, cfg.RoutePath+"/") {
+				r.URL.Path = r.URL.Path[len(cfg.RoutePath):]
+			}
+		}
+		mux.ServeHTTP(w, r)
+	})
 }
 
 // sameOrigin reports whether a state-changing request carries proof that it
