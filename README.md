@@ -4,7 +4,7 @@
 
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v1.0.12 — security follow-up to the Round-5 batch: JWT access-token issuer pinning (refresh/other same-key tokens no longer authorise the API), per-client rate limiting with a global aggregate ceiling, new test coverage for the firewall + gateway packages, and a CI `govulncheck` job. Details in `SECURITY-REPORT.md`, Round-5 close-out.
+> **Current release:** v1.0.13 — quality + features: internal refactor of the three highest-complexity functions (compiler output verified byte-identical), a Docker-events watcher that keeps container-bound rules in sync with the live inventory (recompile-only, never auto-applies), GeoIP source flags on the Connections tab, and a runtime verbose-logging toggle on the Events tab. No security-surface change from v1.0.12.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.

@@ -394,6 +394,40 @@ paths:
                       type: array
                       items: { type: integer }
 
+  /api/debug:
+    get:
+      summary: "Runtime log level (v1.0.13). Reports whether the daemon is in debug logging mode."
+      responses:
+        '200':
+          description: Current debug state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  debug: { type: boolean }
+        '503':
+          description: Runtime log-level control not wired (older binary).
+    post:
+      summary: "Toggle debug logging at runtime — surfaces slog.Debug diagnostics (e.g. journalctl failures in the events pipeline) without a daemon restart."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled: { type: boolean }
+      responses:
+        '200':
+          description: New debug state.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  debug: { type: boolean }
+
   /api/conntrack:
     get:
       summary: "Snapshot of the kernel's live connection-tracking table (original direction only, capped at 500 entries). Returns [] on hosts where /proc/net/nf_conntrack is unavailable — UI handles the empty case as 'no connections'."

@@ -281,6 +281,12 @@ h1 { line-height: 0; margin: 0; }  /* let the img drive the header height */
   box-shadow: var(--card-shadow);
 }
 .panel-hint b { color: var(--text); font-weight: 600; }
+.debug-toggle {
+  display: inline-flex; align-items: center; gap: 7px;
+  margin: -8px 0 16px; font-size: 12px; color: var(--text-muted);
+  cursor: pointer; user-select: none;
+}
+.debug-toggle input { cursor: pointer; }
 
 /* ---------- buttons ---------- */
 button, .btn-primary, .btn-secondary, .btn-danger {

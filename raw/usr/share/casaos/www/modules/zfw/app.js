@@ -1120,6 +1120,20 @@ async function loadConntrack() {
     $('#conntrack-list').innerHTML = '<div class="loading">No active connections, or the kernel conntrack module is not available on this host.</div>';
     return;
   }
+  // GeoIP source-flag enrichment (v1.0.13). Same batch lookup the Events
+  // tab uses: resolve every unique source IP through /api/geo/lookup and
+  // prefix the Source cell with a country flag. Degrades silently — a
+  // broken /api/geo never breaks the connections table.
+  let countryByIP = {};
+  {
+    const uniq = [...new Set(d.map(c => c.src_ip).filter(Boolean))];
+    if (uniq.length > 0) {
+      try {
+        const got = await api('/geo/lookup?ips=' + uniq.map(encodeURIComponent).join(','));
+        if (got && typeof got === 'object' && !Array.isArray(got)) countryByIP = got;
+      } catch (_) { /* silent — flags are best-effort */ }
+    }
+  }
   const stateBadge = st => {
     if (!st) return '<span class="ct-state ct-state-none">&mdash;</span>';
     const cls = {
@@ -1134,10 +1148,12 @@ async function loadConntrack() {
   const rows = d.map(c => {
     const sport = c.src_port ? ':' + c.src_port : '';
     const dport = c.dst_port ? ':' + c.dst_port : '';
+    const cc = countryByIP[c.src_ip];
+    const flag = cc ? flagFor(cc) + ' ' : '';
     return `<tr>
       <td>${esc((c.protocol || '').toUpperCase())}</td>
       <td>${stateBadge(c.state)}</td>
-      <td class="mono">${esc(c.src_ip)}${esc(sport)}</td>
+      <td class="mono">${flag}${esc(c.src_ip)}${esc(sport)}</td>
       <td class="mono">${esc(c.dst_ip)}${esc(dport)}</td>
       <td class="mono">${c.age_sec || 0}s</td>
     </tr>`;
@@ -1205,6 +1221,23 @@ async function refreshAll() {
   await runTab('audit',     loadAudit);
   await runTab('versions',  loadVersions);
   if (($('#status').textContent || '') === 'Loading…') setStatus('');
+}
+
+// Verbose-logging toggle (v1.0.13): flips the daemon's slog level at
+// runtime via /api/debug so an operator can surface the diagnostic logs
+// (e.g. why the Events tab is empty) without restarting the service.
+const debugToggle = $('#debug-toggle');
+if (debugToggle) {
+  api('/debug').then(d => { debugToggle.checked = !!(d && d.debug); }).catch(() => {});
+  debugToggle.addEventListener('change', async () => {
+    try {
+      await api('/debug', { method: 'POST', body: JSON.stringify({ enabled: debugToggle.checked }) });
+      setStatus('Verbose logging ' + (debugToggle.checked ? 'on' : 'off'), 'ok');
+    } catch (e) {
+      debugToggle.checked = !debugToggle.checked; // revert on failure
+      setStatus('Debug toggle failed: ' + e.message, 'err');
+    }
+  });
 }
 
 $('#refresh-btn').addEventListener('click', refreshAll);

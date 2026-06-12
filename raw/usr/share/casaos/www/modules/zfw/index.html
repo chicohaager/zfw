@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex">
   <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
   <title>ZFW Firewall</title>
-  <link rel="stylesheet" href="./styles.css?v=1.0.12">
+  <link rel="stylesheet" href="./styles.css?v=1.0.13">
 </head>
 <body>
   <header>
@@ -85,6 +85,9 @@
         your journal. Older events are kept by journald with the system's
         usual retention.
       </p>
+      <label class="debug-toggle" title="Switch the daemon to debug logging at runtime (journalctl -u zfw-ui) — useful when the Events tab is empty and you want to see why. No restart needed.">
+        <input type="checkbox" id="debug-toggle"> Verbose daemon logging
+      </label>
       <div id="events-analytics" class="events-analytics" hidden>
         <div class="ev-card">
           <h3 class="ev-card-title">Top sources (last hour)</h3>
@@ -254,6 +257,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=1.0.12"></script>
+  <script src="./app.js?v=1.0.13"></script>
 </body>
 </html>

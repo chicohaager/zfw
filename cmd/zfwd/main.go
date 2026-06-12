@@ -24,6 +24,7 @@ import (
 	"github.com/chicohaager/zfw/internal/auth"
 	"github.com/chicohaager/zfw/internal/buildinfo"
 	"github.com/chicohaager/zfw/internal/config"
+	"github.com/chicohaager/zfw/internal/dockerwatch"
 	"github.com/chicohaager/zfw/internal/firewall"
 	"github.com/chicohaager/zfw/internal/gateway"
 	"github.com/chicohaager/zfw/internal/handlers"
@@ -37,9 +38,11 @@ import (
 func main() {
 	// Use the text handler — key=value lines stay readable in journalctl
 	// without a JSON pipeline, and slog adds source location automatically
-	// when AddSource is enabled.
+	// when AddSource is enabled. The level is held in a LevelVar so
+	// /api/debug can flip it at runtime (see srv.SetLogLevel below).
+	logLevel := new(slog.LevelVar) // defaults to LevelInfo
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr,
-		&slog.HandlerOptions{AddSource: true})))
+		&slog.HandlerOptions{AddSource: true, Level: logLevel})))
 
 	cfg := config.Load()
 	slog.Info("zfwd starting",
@@ -68,6 +71,7 @@ func main() {
 	upd := update.New(buildinfo.Version, cfg.UpdateURL)
 	hook := notify.New(cfg.WebhookURL)
 	srv := handlers.NewServer(fw, cfg.RulesFile, cfg.CompiledFile, cfg.GeoDir, cfg.HistoryFile, upd, cfg.PeersFile, cfg.PeerToken, cfg.ExtraBypassIfaces, hook)
+	srv.SetLogLevel(logLevel) // enable runtime debug toggle via /api/debug
 
 	seedRulesIfMissing(cfg, fw)
 	{
@@ -106,6 +110,14 @@ func main() {
 	// (empty ZFW_UPDATE_URL) returns immediately without starting the
 	// goroutine, so no outbound calls happen on a fresh install.
 	upd.Run(ctx, 7*24*time.Hour)
+
+	// Keep the compiled ruleset in sync with the live container inventory:
+	// a container-bound rule (v0.5.7) follows its container's published
+	// ports, so a start/restart with different ports would otherwise leave
+	// compiled.sh stale until the next rules POST. The watcher recompiles
+	// (debounced) but never auto-applies — changing the live firewall
+	// stays an explicit operator action. No-op on hosts without docker.
+	go dockerwatch.New(srv.Recompile, slog.Default()).Run(ctx)
 
 	// Install the boot watchdog on the persistent root (ZimaOS sysext units
 	// can lose the multi-user.target race — see KB §18.9).

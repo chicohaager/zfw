@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -975,5 +976,46 @@ func TestEventsReturnsArray(t *testing.T) {
 	var got []any
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("response is not a JSON array: %v (body=%s)", err, w.Body.String())
+	}
+}
+
+// TestDebugEndpoint pins the runtime log-level toggle (v1.0.13): without
+// a wired LevelVar the endpoint reports unavailable; once wired, GET
+// reflects the current level and POST flips it.
+func TestDebugEndpoint(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+
+	// Not wired yet — the endpoint must report 503, not pretend to work.
+	if w := do(s, http.MethodGet, "/api/debug", nil); w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unwired GET /api/debug: HTTP %d, want 503", w.Code)
+	}
+
+	lv := new(slog.LevelVar) // defaults to Info
+	s.SetLogLevel(lv)
+
+	w := do(s, http.MethodGet, "/api/debug", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /api/debug: HTTP %d, want 200", w.Code)
+	}
+	var got struct {
+		Debug bool `json:"debug"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &got)
+	if got.Debug {
+		t.Fatal("fresh server reports debug=true, want false")
+	}
+
+	if w := do(s, http.MethodPost, "/api/debug", map[string]bool{"enabled": true}); w.Code != http.StatusOK {
+		t.Fatalf("POST /api/debug enable: HTTP %d, want 200", w.Code)
+	}
+	if lv.Level() != slog.LevelDebug {
+		t.Fatalf("after enable, level is %v, want Debug", lv.Level())
+	}
+
+	if w := do(s, http.MethodPost, "/api/debug", map[string]bool{"enabled": false}); w.Code != http.StatusOK {
+		t.Fatalf("POST /api/debug disable: HTTP %d, want 200", w.Code)
+	}
+	if lv.Level() != slog.LevelInfo {
+		t.Fatalf("after disable, level is %v, want Info", lv.Level())
 	}
 }

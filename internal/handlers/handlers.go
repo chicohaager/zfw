@@ -72,7 +72,18 @@ type Server struct {
 	// uncapped (liveness probe). Both limiters key per client (R3-6)
 	// with a global aggregate ceiling as the evasion-proof backstop.
 	readRL *keyedLimiter
+	// logLevel, when set via SetLogLevel, lets /api/debug flip the
+	// daemon's slog level at runtime so an operator can surface the
+	// slog.Debug diagnostics (e.g. journalctl failures in events.Read)
+	// without restarting the daemon. nil = the endpoint reports the
+	// feature unavailable. v1.0.13.
+	logLevel *slog.LevelVar
 }
+
+// SetLogLevel wires the daemon's runtime log-level control into the
+// /api/debug endpoint. Call once after NewServer with the same
+// *slog.LevelVar the slog handler was built with.
+func (s *Server) SetLogLevel(lv *slog.LevelVar) { s.logLevel = lv }
 
 // NewServer returns a Server. fw may be *firewall.Manager in production or
 // any Firewall implementation in tests. historyPath may be "" to disable
@@ -291,6 +302,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/geo/lookup", s.rateLimitedGet(s.geoLookup))
 	mux.HandleFunc("/api/events", s.rateLimitedGet(s.events))
 	mux.HandleFunc("/api/conntrack", s.rateLimitedGet(s.conntrack))
+	mux.HandleFunc("/api/debug", s.rateLimited(s.debugLevel))
 	mux.HandleFunc("/api/system/containers", s.systemContainers)
 	mux.HandleFunc("/api/openapi.json", s.openapi)
 	mux.HandleFunc("/api/openapi.yaml", s.openapi)
@@ -939,6 +951,38 @@ func (s *Server) updateStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.upd.Snapshot())
+}
+
+// debugLevel reports (GET) or sets (POST {"enabled":bool}) the daemon's
+// runtime log level. POST true switches slog to Debug so an operator can
+// surface the diagnostic logs without a restart; false returns to Info.
+func (s *Server) debugLevel(w http.ResponseWriter, r *http.Request) {
+	if s.logLevel == nil {
+		fail(w, http.StatusServiceUnavailable, "runtime log-level control not wired")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]bool{"debug": s.logLevel.Level() == slog.LevelDebug})
+	case http.MethodPost:
+		var body struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			fail(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+		if body.Enabled {
+			s.logLevel.Set(slog.LevelDebug)
+		} else {
+			s.logLevel.Set(slog.LevelInfo)
+		}
+		s.emitEvent("debug.toggled", map[string]any{"enabled": body.Enabled})
+		slog.Info("runtime log level changed", "debug", body.Enabled)
+		writeJSON(w, http.StatusOK, map[string]bool{"debug": body.Enabled})
+	default:
+		fail(w, http.StatusMethodNotAllowed, "GET or POST")
+	}
 }
 
 func toSet(xs []string) map[string]bool {
