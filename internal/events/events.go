@@ -92,6 +92,14 @@ func Read(ctx context.Context, since time.Time, limit int) ([]Event, error) {
 	sc := bufio.NewScanner(stdout)
 	sc.Buffer(make([]byte, 0, 1<<14), 1<<20)
 
+	// maxRawEvents bounds the in-memory accumulation: a LOG-flooded
+	// journal (or a wide `since` window) could otherwise balloon `out`
+	// far beyond what `limit` returns. When the cap is hit, the oldest
+	// half is dropped — journalctl emits oldest-first, so the newest
+	// events (the ones the UI shows) always survive. Classification
+	// near the cut boundary may lose some window context; acceptable
+	// for a memory bound.
+	const maxRawEvents = 50000
 	var out []Event
 	for sc.Scan() {
 		var entry struct {
@@ -104,6 +112,9 @@ func Read(ctx context.Context, since time.Time, limit int) ([]Event, error) {
 		ev, ok := parseDropLine(entry.Msg, entry.Ts)
 		if !ok {
 			continue
+		}
+		if len(out) >= maxRawEvents {
+			out = append(out[:0], out[maxRawEvents/2:]...)
 		}
 		out = append(out, ev)
 	}

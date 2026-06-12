@@ -409,8 +409,10 @@ func emitOutboundPortLines(r rules.Rule, baseMatch, target string) []string {
 		}
 	default: // "list"
 		for _, proto := range protoList(r.Protocol) {
-			lines = append(lines, wrapEmit(joinArgs(baseMatch, "-p", proto,
-				multiport(r.Ports.List)), r, target)...)
+			for _, pa := range multiport(r.Ports.List) {
+				lines = append(lines, wrapEmit(joinArgs(baseMatch, "-p", proto,
+					pa), r, target)...)
+			}
 		}
 	}
 	return lines
@@ -519,7 +521,9 @@ func hostLines6(r rules.Rule, dockerPorts map[int]bool) []string {
 		return lines
 	}
 	for _, proto := range protoList(r.Protocol) {
-		lines = append(lines, wrapEmit(joinArgs(src, "-p", proto, portArg(ps), sch), r, target)...)
+		for _, pa := range portArgs(ps) {
+			lines = append(lines, wrapEmit(joinArgs(src, "-p", proto, pa, sch), r, target)...)
+		}
 	}
 	return lines
 }
@@ -598,7 +602,9 @@ func hostLines(r rules.Rule, dockerPorts map[int]bool) []string {
 			continue
 		}
 		for _, proto := range protoList(r.Protocol) {
-			lines = append(lines, wrapEmit(joinArgs(src, "-p", proto, portArg(ps), sch), r, target)...)
+			for _, pa := range portArgs(ps) {
+				lines = append(lines, wrapEmit(joinArgs(src, "-p", proto, pa, sch), r, target)...)
+			}
 		}
 	}
 	return lines
@@ -656,11 +662,13 @@ func dockerLines(r rules.Rule, dockerPorts map[int]bool) []string {
 	return lines
 }
 
-// portArg renders a portSpec into the iptables --dport / multiport fragment.
-// Caller must not pass an All spec — that case is handled earlier.
-func portArg(ps portSpec) string {
+// portArgs renders a portSpec into one or more iptables --dport /
+// multiport fragments (multiple when the list exceeds xt_multiport's
+// 15-port cap). Caller must not pass an All spec — that case is handled
+// earlier.
+func portArgs(ps portSpec) []string {
 	if ps.isRange() {
-		return fmt.Sprintf("--dport %d:%d", ps.From, ps.To)
+		return []string{fmt.Sprintf("--dport %d:%d", ps.From, ps.To)}
 	}
 	return multiport(ps.List)
 }
@@ -763,15 +771,33 @@ func protoList(p string) []string {
 	return []string{p}
 }
 
-func multiport(ports []int) string {
-	if len(ports) == 1 {
-		return "--dport " + strconv.Itoa(ports[0])
+// maxMultiportPorts is the kernel xt_multiport limit (XT_MULTI_PORTS):
+// at most 15 ports per match. rules.Validate allows up to 128 ports and
+// container-binding substitution is uncapped, so longer lists must be
+// chunked into one emit per 15 ports — a single over-long line would be
+// rejected by iptables and, under the script's set -eu, abort the whole
+// apply mid-stream with the chains half-built.
+const maxMultiportPorts = 15
+
+func multiport(ports []int) []string {
+	var out []string
+	for start := 0; start < len(ports); start += maxMultiportPorts {
+		end := start + maxMultiportPorts
+		if end > len(ports) {
+			end = len(ports)
+		}
+		chunk := ports[start:end]
+		if len(chunk) == 1 {
+			out = append(out, "--dport "+strconv.Itoa(chunk[0]))
+			continue
+		}
+		ss := make([]string, len(chunk))
+		for i, p := range chunk {
+			ss[i] = strconv.Itoa(p)
+		}
+		out = append(out, "-m multiport --dports "+strings.Join(ss, ","))
 	}
-	ss := make([]string, len(ports))
-	for i, p := range ports {
-		ss[i] = strconv.Itoa(p)
-	}
-	return "-m multiport --dports " + strings.Join(ss, ",")
+	return out
 }
 
 func joinArgs(parts ...string) string {

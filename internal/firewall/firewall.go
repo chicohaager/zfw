@@ -171,11 +171,14 @@ func (m *Manager) SaveConfig(c Config) error {
 
 // validate rejects anything that could corrupt the conf or the iptables rules.
 func validate(c Config) error {
-	if _, _, err := net.ParseCIDR(c.LAN); err != nil {
-		return fmt.Errorf("LAN must be a CIDR (e.g. 192.168.1.0/24)")
+	// Both values land in IPv4-only iptables chains — an IPv6 value
+	// would abort the apply mid-script (set -eu). Require IPv4.
+	_, ipnet, err := net.ParseCIDR(c.LAN)
+	if err != nil || ipnet.IP.To4() == nil {
+		return fmt.Errorf("LAN must be an IPv4 CIDR (e.g. 192.168.1.0/24)")
 	}
-	if net.ParseIP(c.HostIP) == nil {
-		return fmt.Errorf("HOST_IP must be an IP address")
+	if ip := net.ParseIP(c.HostIP); ip == nil || ip.To4() == nil {
+		return fmt.Errorf("HOST_IP must be an IPv4 address")
 	}
 	for _, set := range [][]string{c.HostTCPLAN, c.HostUDPLAN, c.DockerDropLAN, c.V6Drop} {
 		for _, p := range set {

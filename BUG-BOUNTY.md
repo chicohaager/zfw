@@ -141,9 +141,9 @@ The researcher commits to:
 
 Researchers credited in `SECURITY-REPORT.md`:
 
-- Three rounds of internal review by Holger Kuehn / Claude — see
-  `SECURITY-REPORT.md` Rounds 1 / 2 / 3 (27 findings, 22
-  remediated, 5 accepted residuals).
+- Five rounds of internal review by Holger Kuehn / Claude — see
+  `SECURITY-REPORT.md` Rounds 1–5 (50 findings, 45 remediated,
+  5 accepted residuals).
 - External validation: **Gelbuilding (IceWhale forum)** — v0.2.20
   / v0.2.21 ZimaBoard validation (install, dashboard tile, Safe-
   Apply, Confirm, custom-port rule-edit for SSH → ttydBridge,

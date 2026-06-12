@@ -258,17 +258,18 @@ holds:
   Versions tab flags known-CVE versions; remediation is upstream.
 - **Not a guarantee against operator misconfiguration.** The
   Safe-Apply / dead-man machinery is designed to make
-  lock-yourself-out impossible *for the firewall itself*; an
-  operator who configures `ZFW_EXTRA_BYPASS_IFACES=*` (a wildcard
-  that matches every interface) bypasses ZFW entirely. Validate
-  catches the obvious cases; the operator owns intent.
+  lock-yourself-out impossible *for the firewall itself*. Validate
+  catches the obvious cases — a bare `+` (iptables'
+  match-every-interface wildcard) is rejected as a bypass iface —
+  but a broad trailing wildcard like `eth+` still bypasses ZFW on
+  every matching interface; the operator owns intent.
 
 ---
 
 ## 9. Reading further
 
-- `SECURITY-REPORT.md` — three-round internal security review,
-  27 findings, 22 remediated, 5 accepted residuals
+- `SECURITY-REPORT.md` — five-round internal security review,
+  50 findings, 45 remediated, 5 accepted residuals
 - `BEST-PRACTICES.md` — operator-facing safety guide
 - `BUG-BOUNTY.md` — contact + scope for external researchers
   (v1.0.0)

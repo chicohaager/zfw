@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/chicohaager/zfw/internal/httputil"
 )
 
 // ipdeny publishes free aggregated per-country zone files (one CIDR per line).
@@ -54,12 +56,32 @@ type indexEntry struct {
 }
 
 // New returns a Manager storing data under dir (e.g. /DATA/zfw/geo).
+// The client gets the same redirect hardening as update.Checker and
+// notify.Hook — a compromised or redirecting zone source must not be
+// able to bounce the root daemon at a private/loopback endpoint.
 func New(dir string) *Manager {
-	return &Manager{dir: dir, cli: &http.Client{Timeout: 30 * time.Second}}
+	return &Manager{dir: dir, cli: &http.Client{
+		Timeout:       30 * time.Second,
+		CheckRedirect: httputil.SafeCheckRedirect(5),
+	}}
 }
 
 // SetName is the ipset name for a country code.
 func SetName(cc string) string { return "zfw-cc-" + strings.ToLower(strings.TrimSpace(cc)) }
+
+// isValidCC reports whether cc (already lowercased/trimmed) is a
+// plausible ISO-3166 alpha-2 code: exactly two ASCII letters.
+func isValidCC(cc string) bool {
+	if len(cc) != 2 {
+		return false
+	}
+	for _, r := range cc {
+		if r < 'a' || r > 'z' {
+			return false
+		}
+	}
+	return true
+}
 
 func (m *Manager) zonePath(cc string) string {
 	return filepath.Join(m.dir, strings.ToLower(cc)+".zone")
@@ -81,6 +103,13 @@ func (m *Manager) Ensure(ctx context.Context, codes []string, logf func(string, 
 		cc := strings.ToLower(strings.TrimSpace(raw))
 		if cc == "" {
 			continue
+		}
+		// Defence in depth: every caller already validates country codes
+		// (rules.Validate), but cc lands in a filepath and the download
+		// URL — keep the package safe on its own so a future caller
+		// cannot reintroduce a path-traversal/SSRF vector.
+		if !isValidCC(cc) {
+			return fmt.Errorf("country %q: not a 2-letter ISO code", raw)
 		}
 		zone := m.zonePath(cc)
 		fresh := false

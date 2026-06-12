@@ -37,20 +37,13 @@ type Entry struct {
 // 0 for "no cap" (use sparingly — a busy host can have 100k+ entries).
 // Errors only on I/O failure; an empty table is (nil, nil).
 func Read(ctx context.Context, limit int) ([]Entry, error) {
-	if entries, err := readProc(ctx); err == nil {
-		return cap(entries, limit), nil
-	} else if entries, err := readCmd(ctx); err == nil {
-		return cap(entries, limit), nil
+	if entries, err := readProc(ctx, limit); err == nil {
+		return entries, nil
+	} else if entries, err := readCmd(ctx, limit); err == nil {
+		return entries, nil
 	} else {
 		return nil, err
 	}
-}
-
-func cap(entries []Entry, limit int) []Entry {
-	if limit > 0 && len(entries) > limit {
-		return entries[:limit]
-	}
-	return entries
 }
 
 // readProc parses /proc/net/nf_conntrack. The file's line format is
@@ -58,19 +51,19 @@ func cap(entries []Entry, limit int) []Entry {
 // [<state>] src=… dst=… sport=… dport=… [src=… …] [ASSURED] [UNREPLIED]
 // mark=… secctx=… zone=… use=…". We take the first src/dst pair (the
 // original direction) and skip the reply pair that follows.
-func readProc(ctx context.Context) ([]Entry, error) {
+func readProc(ctx context.Context, limit int) ([]Entry, error) {
 	f, err := os.Open("/proc/net/nf_conntrack")
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	return parseStream(ctx, f)
+	return parseStream(ctx, f, limit)
 }
 
 // readCmd falls back to `conntrack -L -o extended` when /proc reading
 // is not available (containerised tests, hosts with conntrack disabled
 // in the kernel build but the userland tool present, etc.).
-func readCmd(ctx context.Context) ([]Entry, error) {
+func readCmd(ctx context.Context, limit int) ([]Entry, error) {
 	cmd := exec.CommandContext(ctx, "conntrack", "-L", "-o", "extended")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -79,15 +72,21 @@ func readCmd(ctx context.Context) ([]Entry, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	out, perr := parseStream(ctx, stdout)
+	out, perr := parseStream(ctx, stdout, limit)
+	// parseStream may stop early at `limit` — kill so Wait can't block
+	// on a conntrack process stuck writing into the abandoned pipe.
+	_ = cmd.Process.Kill()
 	_ = cmd.Wait() // conntrack exit code isn't load-bearing here
 	return out, perr
 }
 
 // parseStream consumes a conntrack stream line-by-line and emits one
-// Entry per line. Lines that don't parse are silently skipped — a stray
-// kernel-only entry type must not abort the whole read.
-func parseStream(ctx context.Context, r interface{ Read(p []byte) (int, error) }) ([]Entry, error) {
+// Entry per line, stopping as soon as `limit` entries are collected
+// (limit 0 = no cap) — a busy host can have 100k+ entries and parsing
+// them all just to slice the first 500 defeats the cap's purpose.
+// Lines that don't parse are silently skipped — a stray kernel-only
+// entry type must not abort the whole read.
+func parseStream(ctx context.Context, r interface{ Read(p []byte) (int, error) }, limit int) ([]Entry, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 1<<14), 1<<20)
 	var out []Entry
@@ -102,6 +101,9 @@ func parseStream(ctx context.Context, r interface{ Read(p []byte) (int, error) }
 			continue
 		}
 		out = append(out, ev)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
 	}
 	return out, nil
 }

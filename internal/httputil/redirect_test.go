@@ -141,3 +141,18 @@ func TestIsLoopbackURL(t *testing.T) {
 		}
 	}
 }
+
+// TestSafeCheckRedirectRefusesPublicToUnresolvable guards the
+// fail-closed contract: when the original URL is public and the next
+// hop's host cannot be resolved, the redirect must be refused — a
+// DNS-rebinding answer that NXDOMAINs at check time and flips to a
+// private A record at dial time would otherwise walk past the guard.
+// The .invalid TLD is reserved (RFC 2606) and never resolves.
+func TestSafeCheckRedirectRefusesPublicToUnresolvable(t *testing.T) {
+	cb := SafeCheckRedirect(5)
+	orig, _ := http.NewRequest("GET", "https://203.0.113.5/", nil)
+	next, _ := http.NewRequest("GET", "https://does-not-exist.invalid/", nil)
+	if err := cb(next, []*http.Request{orig}); err == nil {
+		t.Fatalf("expected public→unresolvable redirect to be refused")
+	}
+}

@@ -4,7 +4,7 @@
 
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v1.0.10 — dashboard tile (appicon) refreshed to match the wordmark: brick-wall shield + central orange hub + three endpoint dots (replaces the older five-node circuit motif).
+> **Current release:** v1.0.11 — security/QA hardening round 5: 15 findings fixed (multiport chunking, IPv4-only `lan`/`host_ip`, rate-limiter coverage on status/audit/geo-lookup/peers-receive, events window floor, redirect fail-closed, frontend XSS/UX batch). Details in `SECURITY-REPORT.md`, Round 5.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.

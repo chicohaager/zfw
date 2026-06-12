@@ -96,6 +96,13 @@ func isSafeIfaceName(s string) bool {
 	if s == "" || len(s) > 15 {
 		return false // IFNAMSIZ - 1
 	}
+	// A bare "+" is iptables' match-ALL-interfaces wildcard — as a
+	// bypass iface it would silently neuter input filtering on every
+	// interface. Require at least one real character before a trailing
+	// wildcard.
+	if s == "+" {
+		return false
+	}
 	for i, r := range s {
 		switch {
 		case r >= 'a' && r <= 'z',

@@ -1,6 +1,7 @@
 package geo
 
 import (
+	"context"
 	"net"
 	"os"
 	"path/filepath"
@@ -93,5 +94,22 @@ func TestLookupRebuildsOnNewZone(t *testing.T) {
 	writeZone(t, dir, "ru", []string{"198.51.100.0/24"})
 	if got := m.Lookup(net.ParseIP("198.51.100.42")); got != "ru" {
 		t.Errorf("post-add lookup = %q, want ru — index did not rebuild", got)
+	}
+}
+
+// TestEnsureRejectsMalformedCountryCode guards the package-local
+// defence-in-depth check: a code that is not two ASCII letters must be
+// refused before it reaches a filepath or the download URL — even
+// though rules.Validate already gates every API caller.
+func TestEnsureRejectsMalformedCountryCode(t *testing.T) {
+	m := New(t.TempDir())
+	for _, cc := range []string{"../etc", "d", "deu", "d3", "d.", "ä?"} {
+		if err := m.Ensure(context.Background(), []string{cc}, nil); err == nil {
+			t.Errorf("Ensure accepted malformed country code %q", cc)
+		}
+	}
+	// Empty entries are skipped, not an error.
+	if err := m.Ensure(context.Background(), []string{""}, nil); err != nil {
+		t.Errorf("Ensure errored on empty code: %v", err)
 	}
 }

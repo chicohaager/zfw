@@ -16,6 +16,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -115,8 +116,11 @@ func (c *Checker) CheckOnce(ctx context.Context) {
 		c.set(s)
 		return
 	}
+	// A real manifest is a few hundred bytes; 1 MB bounds what a
+	// malicious or MITM'd manifest server can make the daemon allocate
+	// (geo.fetch caps its body the same way).
 	var m Manifest
-	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&m); err != nil {
 		s.Error = "manifest parse: " + err.Error()
 		c.set(s)
 		return

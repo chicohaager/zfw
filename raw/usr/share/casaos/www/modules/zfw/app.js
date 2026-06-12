@@ -84,9 +84,16 @@ async function doFw(path, body, msg) {
     out.hidden = false;
     out.textContent = String(d.output || d.status || '').trim() || '(no output)';
     setStatus(d.status || 'OK', 'ok');
-    await loadFirewall();
-    await loadExposure();
-    await loadAudit();
+    // Refresh failures must not clobber the action's success status —
+    // during a Safe-Apply that would read as "apply failed" and could
+    // stop the user from clicking Confirm before the dead-man reverts.
+    try {
+      await loadFirewall();
+      await loadExposure();
+      await loadAudit();
+    } catch (e) {
+      setStatus((d.status || 'OK') + ' — stats refresh failed: ' + e.message, 'ok');
+    }
   } catch (e) {
     setStatus('Error: ' + e.message, 'err');
   } finally {
@@ -253,14 +260,14 @@ async function openTemplatesPicker() {
   try {
     templates = await api('/rules/templates');
   } catch (e) {
-    list.innerHTML = `<p class="rm-error">Failed to load templates: ${e.message}</p>`;
+    list.innerHTML = `<p class="rm-error">Failed to load templates: ${esc(e.message)}</p>`;
     return;
   }
   list.innerHTML = templates.map((t, i) => `
     <div class="tmpl-card" data-idx="${i}">
-      <div class="tmpl-head">${t.name}<span class="tmpl-cat ${t.category}">${t.category}</span></div>
+      <div class="tmpl-head">${esc(t.name)}<span class="tmpl-cat ${esc(t.category)}">${esc(t.category)}</span></div>
       <button class="btn-primary tmpl-add" data-idx="${i}">Add</button>
-      <div class="tmpl-desc">${t.description}</div>
+      <div class="tmpl-desc">${esc(t.description)}</div>
       <div class="tmpl-meta">${t.rules.length} rule${t.rules.length === 1 ? '' : 's'}</div>
     </div>`).join('');
   $$('#tmpl-list .tmpl-add').forEach(btn => {
@@ -383,19 +390,36 @@ function ruleSignature(r) {
 // degrades to "no containers detected".
 async function loadContainerOptions(selected) {
   const sel = $('#rm-container');
-  // Reset to just the "none" option while we fetch.
+  // Reset to just the "none" option while we fetch. The currently-bound
+  // container is inserted synchronously and pre-selected so the binding
+  // survives a Save before the fetch resolves, a fetch error, and a
+  // container that is stopped (absent from the live inventory) — all
+  // three would otherwise silently strip container_id from the rule.
   sel.innerHTML = '<option value="">— none (use the ports above) —</option>';
+  if (selected) {
+    const opt = document.createElement('option');
+    opt.value = selected;
+    opt.textContent = `${selected} (currently bound)`;
+    sel.appendChild(opt);
+    sel.value = selected;
+  }
   let cs = [];
   try { cs = await api('/system/containers'); } catch (_) { /* silent */ }
   if (!Array.isArray(cs) || cs.length === 0) return;
   for (const c of cs) {
+    const val = c.name || c.id;
+    if (val === selected) {
+      // Live entry replaces the synthetic placeholder's label.
+      const ports = (c.ports && c.ports.length) ? ` [${c.ports.join(', ')}]` : '';
+      sel.options[1].textContent = `${val} — ${c.image}${ports}`;
+      continue;
+    }
     const opt = document.createElement('option');
-    opt.value = c.name || c.id;
+    opt.value = val;
     const ports = (c.ports && c.ports.length) ? ` [${c.ports.join(', ')}]` : '';
-    opt.textContent = `${c.name || c.id} — ${c.image}${ports}`;
+    opt.textContent = `${val} — ${c.image}${ports}`;
     sel.appendChild(opt);
   }
-  if (selected) sel.value = selected;
 }
 
 // ruleSummary returns a one-line human description of a rule —
@@ -1171,7 +1195,10 @@ async function runTab(name, fn) {
 async function refreshAll() {
   setStatus('Loading…');
   await runTab('firewall',  loadFirewall);
-  await runTab('rules',     loadRules);
+  // Don't reload rules over unsaved edits — loadRules replaces the
+  // local rule set with the server copy and clears the dirty flag,
+  // silently wiping pending changes on a Refresh click.
+  if (!rulesDirty) await runTab('rules', loadRules);
   await runTab('exposure',  loadExposure);
   await runTab('events',    loadEvents);
   await runTab('conntrack', loadConntrack);

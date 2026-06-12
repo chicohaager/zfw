@@ -432,3 +432,23 @@ func TestSaveInitialisesV6DropToEmpty(t *testing.T) {
 		t.Errorf("v6_drop must never marshal as null:\n%s", b)
 	}
 }
+
+// TestValidateRejectsIPv6LANAndHostIP guards the IPv4-only contract
+// for the two top-level fields the compiler interpolates into the
+// IPv4-only DOCKER-USER chain: an IPv6 value passes ParseCIDR/ParseIP
+// but would be rejected by iptables at apply time and — under the
+// script's set -eu — abort the apply with the chains half-built.
+func TestValidateRejectsIPv6LANAndHostIP(t *testing.T) {
+	rs := RuleSet{DefaultPolicy: "deny", LAN: "2001:db8::/64"}
+	if err := Validate(rs); err == nil {
+		t.Error("Validate accepted an IPv6 LAN CIDR")
+	}
+	rs = RuleSet{DefaultPolicy: "deny", HostIP: "::1"}
+	if err := Validate(rs); err == nil {
+		t.Error("Validate accepted an IPv6 host_ip")
+	}
+	rs = RuleSet{DefaultPolicy: "deny", LAN: "192.168.1.0/24", HostIP: "192.168.50.23"}
+	if err := Validate(rs); err != nil {
+		t.Errorf("Validate rejected valid IPv4 LAN/host_ip: %v", err)
+	}
+}

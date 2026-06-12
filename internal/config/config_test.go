@@ -40,10 +40,11 @@ func TestIsSafeIfaceName(t *testing.T) {
 		{"eth0\n", false},
 		{"eth0 spc", false},
 
-		// Wildcard placement: only allowed at the very end. A bare "+"
-		// passes the regex but matches every iface — the iptables-level
-		// behaviour, documented here as the current contract.
-		{"+", true},     // bare wildcard = "any iface" (iptables semantic)
+		// Wildcard placement: only allowed at the very end, and never
+		// alone — a bare "+" is iptables' match-ALL wildcard, which as
+		// a bypass iface would silently neuter input filtering on every
+		// interface.
+		{"+", false},    // bare wildcard = "any iface" — rejected
 		{"e+0", false},  // wildcard in the middle — rejected
 		{"+wg", false},  // wildcard at the start — rejected
 		{"wg++", false}, // double wildcard — rejected

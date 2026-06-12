@@ -55,7 +55,16 @@ func SafeCheckRedirect(maxHops int) func(req *http.Request, via []*http.Request)
 		// 127.0.0.1) is already on-host so the asymmetry is fine — it
 		// can only "redirect into itself".
 		if origIsPublic, err := hostIsPublic(orig.Hostname()); err == nil && origIsPublic {
-			if nextIsPublic, err := hostIsPublic(next.Hostname()); err == nil && !nextIsPublic {
+			// Fail closed when the next hop cannot be resolved: a
+			// DNS-rebinding answer that NXDOMAINs at check time and
+			// flips to a private A record at dial time would otherwise
+			// walk straight past this guard.
+			nextIsPublic, err := hostIsPublic(next.Hostname())
+			if err != nil {
+				return fmt.Errorf("refusing redirect from public %s to unresolvable %s: %w",
+					orig.Host, next.Host, err)
+			}
+			if !nextIsPublic {
 				return fmt.Errorf("refusing redirect from public %s to private %s",
 					orig.Host, next.Host)
 			}
@@ -67,8 +76,8 @@ func SafeCheckRedirect(maxHops int) func(req *http.Request, via []*http.Request)
 // hostIsPublic reports whether host (a literal IP or a DNS name)
 // resolves to a non-private, non-loopback, non-link-local IP. Returns
 // (false, err) on resolution failure so the caller can decide to allow
-// or refuse — SafeCheckRedirect treats resolution failure as "skip the
-// public→private check" (the request will fail anyway on Dial).
+// or refuse — SafeCheckRedirect fails closed: a public original may
+// only redirect to a hop that provably resolves to public addresses.
 func hostIsPublic(host string) (bool, error) {
 	if host == "" {
 		return false, fmt.Errorf("empty host")

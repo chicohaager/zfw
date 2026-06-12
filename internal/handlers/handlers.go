@@ -257,28 +257,33 @@ func (s *Server) recompileLocked(containers []system.DockerContainer, dockerPort
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.health)
-	mux.HandleFunc("/api/status", s.status)
-	mux.HandleFunc("/api/config", s.config)
+	// status and audit both call fw.Status, which forks iptables /
+	// ip6tables / systemctl subprocesses per call — same flood surface
+	// as the R3-5 endpoints below, so they share the read limiter.
+	mux.HandleFunc("/api/status", s.rateLimitedGet(s.status))
+	mux.HandleFunc("/api/config", s.rateLimited(s.config))
 	mux.HandleFunc("/api/rules", s.rateLimited(s.rules))
 	mux.HandleFunc("/api/rules/defaults", s.rateLimited(s.rulesDefaults))
 	mux.HandleFunc("/api/rules/templates", s.rulesTemplates)
 	mux.HandleFunc("/api/apply", s.rateLimited(s.apply))
 	mux.HandleFunc("/api/commit", s.rateLimited(s.commit))
 	mux.HandleFunc("/api/revert", s.rateLimited(s.revert))
-	// R3-5 (closed v1.0.2): the four endpoints that shell out to ss /
-	// journalctl / docker / sshd are wrapped in the read-side rate
-	// limiter so an authenticated user cannot flood them and CPU-pin
-	// the daemon. Cheaper reads (status, config, audit, peers list,
-	// geo lookup, openapi, system/containers, update, rules GET, etc.)
-	// stay uncapped — they hit memory + a small JSON encode at worst.
+	// R3-5 (closed v1.0.2): endpoints that shell out to ss / journalctl /
+	// docker / sshd / iptables, or do per-request linear scans, are
+	// wrapped in the read-side rate limiter so an authenticated user
+	// cannot flood them and CPU-pin the daemon. Cheap reads (peers
+	// list, openapi, update snapshot, rules GET, templates) stay
+	// uncapped — they hit memory + a small JSON encode at worst.
 	mux.HandleFunc("/api/exposure", s.rateLimitedGet(s.exposure))
-	mux.HandleFunc("/api/audit", s.auditHandler)
+	mux.HandleFunc("/api/audit", s.rateLimitedGet(s.auditHandler))
 	mux.HandleFunc("/api/versions", s.rateLimitedGet(s.versions))
 	mux.HandleFunc("/api/update", s.updateStatus)
 	mux.HandleFunc("/api/peers", s.peersList)
 	mux.HandleFunc("/api/peers/push", s.rateLimited(s.peersPush))
-	mux.HandleFunc("/api/peers/receive", s.peersReceive)
-	mux.HandleFunc("/api/geo/lookup", s.geoLookup)
+	// peers/receive is JWT-exempt (peer-token auth) — the mutate
+	// limiter also throttles online brute-forcing of ZFW_PEER_TOKEN.
+	mux.HandleFunc("/api/peers/receive", s.rateLimited(s.peersReceive))
+	mux.HandleFunc("/api/geo/lookup", s.rateLimitedGet(s.geoLookup))
 	mux.HandleFunc("/api/events", s.rateLimitedGet(s.events))
 	mux.HandleFunc("/api/conntrack", s.rateLimitedGet(s.conntrack))
 	mux.HandleFunc("/api/system/containers", s.systemContainers)
@@ -594,6 +599,11 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 		if ts, err := strconv.ParseInt(v, 10, 64); err == nil {
 			since = time.Unix(ts, 0)
 		}
+	}
+	// Floor the window: ?since=0 would otherwise make events.Read parse
+	// the entire retained kernel journal into RAM before `limit` applies.
+	if floor := time.Now().Add(-7 * 24 * time.Hour); since.Before(floor) {
+		since = floor
 	}
 	limit := 200
 	if v := r.URL.Query().Get("limit"); v != "" {

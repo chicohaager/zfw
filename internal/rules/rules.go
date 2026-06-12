@@ -362,13 +362,21 @@ func Validate(rs RuleSet) error {
 	if len(rs.V6Drop) > maxV6DropPorts {
 		return fmt.Errorf("too many v6_drop ports: %d (max %d)", len(rs.V6Drop), maxV6DropPorts)
 	}
+	// LAN and HostIP are emitted unconditionally into the IPv4-only
+	// DOCKER-USER chain — an IPv6 value passes ParseCIDR/ParseIP but is
+	// rejected by iptables at apply time, and under the script's set -eu
+	// that aborts the apply with ZFW-IN already hooked (default-deny)
+	// while DOCKER-USER is left half-built. Require IPv4.
 	if rs.LAN != "" {
-		if _, _, err := net.ParseCIDR(rs.LAN); err != nil {
-			return fmt.Errorf("lan must be a CIDR (e.g. 192.168.1.0/24)")
+		_, ipnet, err := net.ParseCIDR(rs.LAN)
+		if err != nil || ipnet.IP.To4() == nil {
+			return fmt.Errorf("lan must be an IPv4 CIDR (e.g. 192.168.1.0/24)")
 		}
 	}
-	if rs.HostIP != "" && net.ParseIP(rs.HostIP) == nil {
-		return fmt.Errorf("host_ip must be an IP address")
+	if rs.HostIP != "" {
+		if ip := net.ParseIP(rs.HostIP); ip == nil || ip.To4() == nil {
+			return fmt.Errorf("host_ip must be an IPv4 address")
+		}
 	}
 	for _, p := range rs.V6Drop {
 		if p < 1 || p > 65535 {

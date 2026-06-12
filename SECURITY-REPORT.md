@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | **Module** | ZFW — host firewall for ZimaOS |
-| **Version reviewed** | 0.2.6 (round 1+2) + 0.2.7–0.2.19 (round 3) |
-| **Latest review date** | 2026-05-23 (round 3 incremental) |
+| **Version reviewed** | 0.2.6 (round 1+2) + 0.2.7–0.2.19 (round 3) + 1.0.0 (round 4) + 1.0.10 (round 5) |
+| **Latest review date** | 2026-06-12 (round 5 QA + bug-hunt) |
 | **Author** | Holger Kuehn aka Lintuxer |
 
 ---
@@ -22,23 +22,26 @@ defaults seeding, reboot-persistence, the Events tab, IPv6 protection, and
 the v0.3-foundation work (handler tests, slog, rate-limit, OpenAPI,
 reproducible builds).
 
-**Cumulative result across four rounds: 35 findings, 30 remediated,
+**Cumulative result across five rounds: 50 findings, 45 remediated,
 5 accepted residuals.** v1.0.2 closed the three Round-4 Info-grade
 residuals (R4-6 / R4-7 / R4-8) plus three older Round-3 residuals
-(R3-5 / R3-8 / R3-9). No Critical or High issue is open. The
-injection class is closed across every caller-controlled path
-(Round-1 `rules.Validate` chokepoint extended in Round-4 via
-`isSafeRuleID` and `isSafeContainerID` for the daemon-supplied
-fields that turned out to be attacker-controlled on the wire).
+(R3-5 / R3-8 / R3-9). **Round 5** (v1.0.10 full-codebase QA pass,
+fixed in v1.0.11) added 15 findings — no Critical/High; the Mediums
+cluster around apply atomicity and resource exhaustion, see the
+Round-5 section. No Critical or High issue is open. The injection
+class is closed across every caller-controlled path (Round-1
+`rules.Validate` chokepoint extended in Round-4 via `isSafeRuleID`
+and `isSafeContainerID` for the daemon-supplied fields that turned
+out to be attacker-controlled on the wire).
 
 | Severity | Found | Remediated | Accepted residual |
 |----------|-------|------------|---|
 | Critical | 1 | 1 | 0 |
 | High | 1 | 1 | 0 |
-| Medium | 14 | 12 | 2 |
-| Low | 16 | 14 | 2 |
-| Info | 3 | 3 | 0 |
-| **Total** | **35** | **30** | **5** |
+| Medium | 19 | 17 | 2 |
+| Low | 25 | 23 | 2 |
+| Info | 4 | 4 | 0 |
+| **Total** | **50** | **45** | **5** |
 
 ---
 
@@ -351,6 +354,63 @@ The remaining accepted residuals — R3-6 (per-IP rate-limit), R3-7
 (boot-persistence unit path hardcoded), and R3-10 (info-grade
 injection re-test, not exploitable) — are architectural / product-
 policy items deferred to v1.1 with explicit tracking.
+
+---
+
+## Findings — Round 5 (R5-1 … R5-15, v1.0.10 QA + bug-hunt review)
+
+Round 5 is a full-codebase QA pass over v1.0.10: four parallel
+adversarial review agents (API/auth, rule compiler, backend services,
+frontend), every candidate finding re-verified by hand against the
+source before being accepted. Scanner-grade complexity metrics were
+excluded; everything below demonstrably misbehaves.
+
+| ID | Severity | Where | Status |
+|---|---|---|---|
+| **R5-1** | **Medium** | `compiler.multiport` emitted every port of a list rule into a single `-m multiport --dports` clause. The kernel `xt_multiport` match caps at 15 ports — a 16+-port rule compiled into a line iptables rejects, and under the script's `set -eu` that aborts the whole apply mid-stream with `ZFW-IN` already hooked default-deny and `DOCKER-USER` half-built. Reachable by hand (`Validate` allows 128 ports) and via container-binding substitution (uncapped, see R5-12). | **Fixed in v1.0.11:** `multiport` chunks into ≤15-port emits, one iptables line per chunk. Boundary case (chunk of one → plain `--dport`) covered. Tests `TestMultiportChunksAt15Ports`, `TestMultiportChunkOfOneFallsBackToDport`. |
+| **R5-2** | **Medium** | Top-level `lan` / `host_ip` accepted any `net.ParseCIDR`/`ParseIP` value, including IPv6, but are emitted unconditionally into the IPv4-only `DOCKER-USER` chain — same mid-script abort class as R5-1 (host hardened, containers left without their DROP). Rule *sources* had this guard since v0.2.22; the top-level fields did not. Same gap in `firewall.validate` for the legacy conf. | **Fixed in v1.0.11:** both validators require IPv4 (`To4() != nil`). Test `TestValidateRejectsIPv6LANAndHostIP`. |
+| **R5-3** | Medium | `/api/status` and `/api/audit` were exempt from the R3-5 read limiter on the premise they "hit memory at worst" — factually wrong: both call `fw.Status`, which forks six subprocesses (`iptables-legacy -S` ×3, `ip6tables-legacy -S`, `systemctl` ×2) per request. An authenticated session could fork-bomb the host through the exact vector R3-5 was meant to close. | **Fixed in v1.0.11:** both wrapped in `rateLimitedGet`; route comment corrected. |
+| **R5-4** | Medium | `/api/peers/receive` (JWT-exempt, shared-token auth) had no rate limiter — constant-time compare prevents timing leakage but not full-speed online brute-forcing of `ZFW_PEER_TOKEN` against a root-privileged, rule-overwriting endpoint. | **Fixed in v1.0.11:** wrapped in the mutate limiter (burst 10, 1/s sustained). |
+| **R5-5** | Low | `/api/config` (disk-writing POST) and `/api/geo/lookup` (O(ips × CIDRs) linear scan, tens of millions of `Contains` calls with large country zones) were unthrottled. | **Fixed in v1.0.11:** `config` → mutate limiter, `geo/lookup` → read limiter. |
+| **R5-6** | Medium | `/api/events?since=0` made the daemon run `journalctl -k --since 1970…` and accumulate the entire retained kernel journal in RAM before `limit` was applied — `limit` bounded the response, not the work. | **Fixed in v1.0.11:** handler floors the window at 7 days; `events.Read` additionally ring-caps raw accumulation at 50k events (oldest half dropped, newest always survive). |
+| **R5-7** | Low | `update.CheckOnce` decoded the manifest body with no size limit — a malicious/MITM'd manifest server could stream hundreds of MB into one allocation (URL is operator-set and not forced to HTTPS). Inconsistent with `geo.fetch`'s 16 MB cap. | **Fixed in v1.0.11:** `io.LimitReader(body, 1 MB)`. |
+| **R5-8** | Low | The geo HTTP client lacked the `SafeCheckRedirect` hardening that update/notify got in R4-7 — a compromised or redirecting zone source could bounce the root daemon at a private/loopback endpoint. | **Fixed in v1.0.11:** same `httputil.SafeCheckRedirect(5)` wired in. |
+| **R5-9** | Low | `SafeCheckRedirect` failed **open** when the redirect target's host didn't resolve: a DNS-rebinding answer that NXDOMAINs at check time and flips to a private A record at dial time walked straight past the public→private guard. | **Fixed in v1.0.11:** fails closed — a public original may only redirect to a hop that provably resolves public. Test `TestSafeCheckRedirectRefusesPublicToUnresolvable`. |
+| **R5-10** | Low | `isSafeIfaceName` accepted a bare `+` — iptables' match-ALL-interfaces wildcard. As a `ZFW_EXTRA_BYPASS_IFACES` entry it would silently neuter input filtering on every interface (single-character footgun, operator-controlled). | **Fixed in v1.0.11:** bare `+` rejected; trailing wildcards (`wg+`) still allowed. THREAT-MODEL §8 updated. |
+| **R5-11** | Low | `conntrack.Read` parsed the full table (100k+ entries on a busy host) into memory before applying the 500-entry cap. | **Fixed in v1.0.11:** `parseStream` stops at `limit`; the `conntrack -L` fallback kills the subprocess on early stop. |
+| **R5-12** | Low | Container-binding port substitution in `recompileLocked` ran *after* `rules.Validate` with no re-validation — a container publishing 16+ host ports bypassed `maxPortsPerRule` and triggered R5-1 even though the stored rule was valid. | **Fixed in v1.0.11:** subsumed by the R5-1 chunking (port values are Docker-sourced integers; only the count was the issue). |
+| **R5-13** | Low | The templates-modal renderer was the **only** `innerHTML` sink in `app.js` bypassing `esc()` — name/category/description plus an attribute context, and the error path interpolated `e.message` raw. Not attacker-reachable today (catalog is compile-time constant) but exactly the class R1–R4 closed everywhere else; any future template field sourced from rules.json or a remote catalog would have become stored XSS with no further code change. | **Fixed in v1.0.11:** all five interpolations escaped. |
+| **R5-14** | Low | Frontend correctness batch: (a) editing any field of a container-bound rule silently stripped `container_id` when the inventory fetch was slow, failed, or the container was stopped — permanently changing firewall semantics; (b) the Refresh button wiped unsaved rule edits without confirmation; (c) a failed stats refresh after apply/commit/revert overrode the success status with "Error", which during Safe-Apply could stop the user from confirming before the 120 s dead-man reverts. | **Fixed in v1.0.11:** bound container inserted synchronously as a pre-selected option; rules reload skipped while dirty; post-action refresh failures reported separately from the action result. |
+| **R5-15** | Info | `geo.Ensure` trusted its callers for country-code shape; `cc` lands in a filepath and the download URL. All current callers validate upstream (`rules.Validate`), so not exploitable — flagged so a future caller can't reintroduce a traversal/SSRF vector. | **Fixed in v1.0.11:** package-local `isValidCC` guard (two ASCII letters). Test `TestEnsureRejectsMalformedCountryCode`. |
+
+### Open recommendation (tracked, not fixed in v1.0.11)
+
+- **JWT claim scoping** — `auth.Verify` validates signature, `exp` and
+  `nbf` only. Any ES256 token signed by a key in the ZimaOS JWKS is
+  accepted as a firewall-admin session regardless of its type or
+  audience. Fixing this requires inspecting the claims real ZimaOS
+  session tokens carry (blind pinning would break auth); scheduled for
+  v1.0.12 together with the R3-6 per-IP rate-limit residual.
+
+---
+
+## Conclusion of Round 5
+
+Round 5 found **no Critical** and **no High**: the injection class
+stayed closed (every candidate was refuted against `rules.Validate` /
+`isSafeRuleID` / `isSafeIfaceName`), and the JWT/CSRF perimeter held.
+The five Medium findings cluster around two themes the earlier rounds
+under-weighted: **apply atomicity** (R5-1/R5-2 — validation gaps whose
+blast radius is a half-built ruleset, because the compiled script is
+line-by-line `set -eu` rather than an atomic restore) and **resource
+exhaustion on authenticated endpoints** (R5-3/R5-4/R5-6 — the R3-5
+limiter premise was not re-checked as endpoints grew costlier).
+
+Cumulative tally across five rounds: **50 findings, 45 remediated, 5
+accepted residuals** from earlier rounds, plus one newly tracked
+recommendation (JWT claim scoping). Scheduled: JWT claim scoping and
+the R3-6 per-IP rate-limit → v1.0.12; apply atomicity via
+`iptables-restore` → v1.1.
 
 **ZFW v1.0.2 is assessed as fit for the v1.0 General-Availability
 release** — the same Round-3 single-admin-appliance threat-model

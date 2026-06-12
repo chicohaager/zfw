@@ -517,3 +517,60 @@ func TestNoLogNoRateLimitNoExtraLines(t *testing.T) {
 	mustNotContain(t, out, "ZFW-RULE-rplain")
 	mustNotContain(t, out, "--name zrplain")
 }
+
+// TestMultiportChunksAt15Ports guards the xt_multiport kernel limit:
+// a list rule with more than 15 ports must be chunked into multiple
+// multiport emits — a single over-long --dports line is rejected by
+// iptables at apply time and, under set -eu, aborts the whole apply
+// with the chains half-built. Reachable both via a hand-entered list
+// (Validate allows up to 128) and via container-binding substitution
+// (uncapped).
+func TestMultiportChunksAt15Ports(t *testing.T) {
+	ports := make([]int, 20)
+	for i := range ports {
+		ports[i] = 1000 + i
+	}
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			ID: "rmany", Order: 10, Enabled: true,
+			Name: "many ports", Action: "allow",
+			Source:   rules.Source{Type: "range", Value: "192.168.1.0/24"},
+			Ports:    rules.Ports{Type: "list", List: ports},
+			Protocol: "tcp", Zone: "host",
+		}},
+	}, nil, nil)
+	// First chunk: ports 1000-1014 (15), second chunk: 1015-1019 (5).
+	mustContain(t, out, "--dports 1000,1001,1002,1003,1004,1005,1006,1007,1008,1009,1010,1011,1012,1013,1014 ")
+	mustContain(t, out, "--dports 1015,1016,1017,1018,1019 ")
+	for _, line := range strings.Split(out, "\n") {
+		if i := strings.Index(line, "--dports "); i >= 0 {
+			spec := strings.Fields(line[i+len("--dports "):])[0]
+			if n := len(strings.Split(spec, ",")); n > 15 {
+				t.Errorf("multiport emit with %d ports (max 15): %s", n, line)
+			}
+		}
+	}
+}
+
+// TestMultiportChunkOfOneFallsBackToDport guards the chunk boundary:
+// 16 ports must compile to one 15-port multiport plus a plain --dport
+// for the lone remainder (multiport requires at least two ports).
+func TestMultiportChunkOfOneFallsBackToDport(t *testing.T) {
+	ports := make([]int, 16)
+	for i := range ports {
+		ports[i] = 2000 + i
+	}
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			ID: "rfence", Order: 10, Enabled: true,
+			Name: "16 ports", Action: "allow",
+			Source:   rules.Source{Type: "range", Value: "192.168.1.0/24"},
+			Ports:    rules.Ports{Type: "list", List: ports},
+			Protocol: "tcp", Zone: "host",
+		}},
+	}, nil, nil)
+	mustContain(t, out, "--dport 2015 ")
+	mustNotContain(t, out, "--dports 2015")
+}

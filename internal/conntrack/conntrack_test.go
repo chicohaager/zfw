@@ -107,7 +107,7 @@ func TestParseStreamSkipsGarbageLines(t *testing.T) {
 this line is not a conntrack record
 udp      17 29 src=10.0.0.1 dst=10.0.0.2 sport=5353 dport=5353 mark=0
 `)
-	out, err := parseStream(context.Background(), stream)
+	out, err := parseStream(context.Background(), stream, 0)
 	if err != nil {
 		t.Fatalf("parseStream: %v", err)
 	}
@@ -119,18 +119,31 @@ udp      17 29 src=10.0.0.1 dst=10.0.0.2 sport=5353 dport=5353 mark=0
 	}
 }
 
-// TestReadCapTrimsResult guards the bounded-output contract: a
-// limit < len(entries) must trim to limit, limit==0 must return
-// everything unchanged.
-func TestReadCapTrimsResult(t *testing.T) {
-	in := []Entry{{Protocol: "a"}, {Protocol: "b"}, {Protocol: "c"}}
-	if got := cap(in, 2); len(got) != 2 || got[0].Protocol != "a" {
-		t.Errorf("cap(2) = %+v, want first 2 entries", got)
+// TestParseStreamHonoursLimit guards the bounded-output contract: a
+// limit < the entry count must stop the scan at limit, limit==0 must
+// return everything.
+func TestParseStreamHonoursLimit(t *testing.T) {
+	const line = "tcp      6 431999 ESTABLISHED src=1.2.3.4 dst=5.6.7.8 sport=11111 dport=80 src=5.6.7.8 dst=1.2.3.4 sport=80 dport=11111 mark=0\n"
+	input := strings.Repeat(line, 5)
+	got, err := parseStream(context.Background(), strings.NewReader(input), 2)
+	if err != nil {
+		t.Fatalf("parseStream: %v", err)
 	}
-	if got := cap(in, 0); len(got) != 3 {
-		t.Errorf("cap(0) trimmed when it shouldn't: %+v", got)
+	if len(got) != 2 {
+		t.Errorf("limit=2 returned %d entries, want 2", len(got))
 	}
-	if got := cap(in, 100); len(got) != 3 {
-		t.Errorf("cap(>len) trimmed when it shouldn't: %+v", got)
+	got, err = parseStream(context.Background(), strings.NewReader(input), 0)
+	if err != nil {
+		t.Fatalf("parseStream: %v", err)
+	}
+	if len(got) != 5 {
+		t.Errorf("limit=0 returned %d entries, want all 5", len(got))
+	}
+	got, err = parseStream(context.Background(), strings.NewReader(input), 100)
+	if err != nil {
+		t.Fatalf("parseStream: %v", err)
+	}
+	if len(got) != 5 {
+		t.Errorf("limit=100 returned %d entries, want all 5", len(got))
 	}
 }
