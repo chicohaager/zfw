@@ -445,9 +445,10 @@ Two of the scheduled items from the Round-5 conclusion are closed in
 
 This leaves **one** scheduled item — apply atomicity via
 `iptables-restore` (the structural fix for the R5-1/R5-2 class) —
-tracked for v1.1. Test coverage gained two previously untested
-packages (`internal/firewall`, `internal/gateway`) and a CI
-`govulncheck` advisory job in the same cut.
+tracked for v1.1, now delivered opt-in in **v1.0.14** (see the next
+section). Test coverage gained two previously untested packages
+(`internal/firewall`, `internal/gateway`) and a CI `govulncheck`
+advisory job in the same cut.
 
 Cumulative tally after the v1.0.12 close-out: **50 findings, 46
 remediated, 4 accepted residuals** — R3-6 moves from residual to
@@ -455,7 +456,69 @@ remediated, and the separately-tracked Round-5 JWT recommendation is
 now implemented. The remaining accepted residuals are R3-7 (hardcoded
 boot-persistence unit path), R3-10 (info-grade injection re-test),
 on-host `X-Forwarded-For` spoofing (new, bounded by the aggregate
-ceiling), and the v1.1-tracked apply-atomicity item.
+ceiling), and the apply-atomicity item (closed below).
+
+---
+
+## Apply-atomicity close-out (B4, v1.0.14)
+
+The last scheduled item — the structural fix for the R5-1/R5-2 class,
+where a validation gap's blast radius was a half-built ruleset because
+the compiled script applied line-by-line under `set -eu` — is
+delivered in **v1.0.14** as an **opt-in** apply path:
+
+- **Atomic swap.** The daemon now also compiles a `compiled.restore.sh`
+  variant alongside `compiled.sh` on every recompile. It swaps only the
+  ZFW-owned chains (`:CHAIN - [0:0]`) via `iptables-restore --noflush`,
+  so each table either lands whole or not at all — there is no
+  intermediate state in which the firewall is partially built. The full
+  `*filter` replace is deliberately avoided: it would wipe Docker's own
+  chains. `--noflush` per-chain is the only restore form compatible with
+  a live Docker host.
+- **Pre-validation.** Each table is checked with `iptables-restore
+  --test --noflush` before the real apply. A malformed document is
+  rejected with the running tables untouched, instead of failing
+  mid-apply.
+- **Equivalence-locked.** `TestRestoreMatchesBashRules` (and its
+  allow-policy twin) prove the restore document's per-chain rule
+  sequence is byte-for-byte identical to the proven bash path's, so the
+  two apply modes cannot drift. `bash -n` and document-shape tests pin
+  the engine-facing script.
+- **Selection & default.** The engine's `pick_compiled` chooses the
+  restore script only when `ZFW_APPLY_MODE=restore`; the default stays
+  the line-by-line bash path. Restore mode falls back to bash (with a
+  warning) if the daemon has not yet written `compiled.restore.sh`, so
+  an out-of-order upgrade never leaves apply with nothing to run. A
+  commit in restore mode bakes `Environment=ZFW_APPLY_MODE=restore` into
+  the boot unit so a reboot replays exactly what was committed.
+- **Safety net unchanged.** The 120-second dead-man still arms before
+  any table is touched; `--test` is an added gate, not a replacement for
+  it.
+
+**Staged validation.** The path was proven in four stages: (0) an
+offline generator with the equivalence test; (1) wired into the engine
+behind the flag; (2) a full apply/atomicity cycle in an isolated
+container (own netns) — a foreign chain survives the `--noflush` swap
+and a deliberately broken document leaves `ZFW-IN` unchanged; (3) live
+on a production ZimaOS host, where the dead-man fired on schedule, the
+restore apply+commit ran through the daemon path, and an atomicity
+proof on the real tables showed a broken document rejected with the
+`ZFW-IN` chain byte-identical (sha256) before and after.
+
+This is **defence-in-depth, not a patch for an open hole**: R5-1/R5-2
+were already double-guarded (the engine reverts partial state on any
+failure, and `rules.Validate` runs before compilation), so the
+line-by-line path was never an exposure. The restore path eliminates
+the partial-state *class* structurally for operators who opt in. The
+global default flip (making restore the path for all installs) is held
+pending a soak period on the live host.
+
+Cumulative tally after the B4 close-out: **50 findings, 47 remediated,
+3 accepted residuals** — the apply-atomicity item, previously carried in
+the residual list as the one v1.1-tracked hardening item, moves to
+remediated. The remaining accepted residuals are R3-7 (hardcoded
+boot-persistence unit path), R3-10 (info-grade injection re-test), and
+on-host `X-Forwarded-For` spoofing (bounded by the aggregate ceiling).
 
 ---
 
