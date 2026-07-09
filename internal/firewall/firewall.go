@@ -45,20 +45,39 @@ type Manager struct {
 	ipt6   string
 }
 
-// New returns a Manager, preferring the iptables-legacy backend if present
-// (Docker/libvirt/Tailscale all use legacy on ZimaOS).
+// New returns a Manager whose iptables backend matches whichever backend
+// Docker actually uses — legacy on ZimaOS<=1.6.1, nft on >=1.6.2. Picking a
+// fixed backend silently writes to an unused table after the 1.6.2 nft switch,
+// so probe which backend owns Docker's FORWARD jumps and match it.
 func New(bin, conf string) *Manager {
-	pick := func(legacy, std string) string {
-		if _, err := exec.LookPath(legacy); err == nil {
-			return legacy
+	pick := func(primary, fallback string) string {
+		if _, err := exec.LookPath(primary); err == nil {
+			return primary
 		}
-		return std
+		return fallback
+	}
+	dockerBackend := func() string {
+		for _, c := range []string{"iptables-nft", "iptables-legacy"} {
+			if _, err := exec.LookPath(c); err != nil {
+				continue
+			}
+			out, _ := exec.Command(c, "-S", "FORWARD").CombinedOutput()
+			if strings.Contains(string(out), "DOCKER-USER") || strings.Contains(string(out), "DOCKER-FORWARD") {
+				return c
+			}
+		}
+		return pick("iptables", "iptables-legacy")
+	}
+	iptBin := dockerBackend()
+	ipt6 := pick("ip6tables-legacy", "ip6tables")
+	if strings.Contains(iptBin, "nft") {
+		ipt6 = pick("ip6tables-nft", "ip6tables")
 	}
 	return &Manager{
 		Bin:    bin,
 		Conf:   conf,
-		iptBin: pick("iptables-legacy", "iptables"),
-		ipt6:   pick("ip6tables-legacy", "ip6tables"),
+		iptBin: iptBin,
+		ipt6:   ipt6,
 	}
 }
 

@@ -27,8 +27,12 @@ DEADMAN="zfw-deadman"
 # (so DOCKER-USER exists before we add rules to it).
 PERSIST_UNIT="/etc/systemd/system/zfw.service"
 
-IPT="$(command -v iptables-legacy 2>/dev/null || command -v iptables)"
-IPT6="$(command -v ip6tables-legacy 2>/dev/null || command -v ip6tables 2>/dev/null || true)"
+# Backend: match whichever iptables backend Docker actually uses (legacy on
+# ZimaOS<=1.6.1, nft on >=1.6.2). Hardcoding legacy silently no-ops after the
+# 1.6.2 nft switch — rules land in an unused table. Probe Docker's FORWARD jumps.
+_zfw_pick_ipt(){ for c in iptables-nft iptables-legacy; do command -v "$c" >/dev/null 2>&1 || continue; if "$c" -S FORWARD 2>/dev/null | grep -qE "DOCKER-USER|DOCKER-FORWARD"; then command -v "$c"; return 0; fi; done; command -v iptables 2>/dev/null || command -v iptables-legacy; }
+IPT="$(_zfw_pick_ipt)"
+case "$IPT" in *nft*) IPT6="$(command -v ip6tables-nft 2>/dev/null || command -v ip6tables 2>/dev/null || true)";; *) IPT6="$(command -v ip6tables-legacy 2>/dev/null || command -v ip6tables 2>/dev/null || true)";; esac
 
 log(){ echo "[zfw] $*"; }
 
@@ -120,6 +124,11 @@ write_persist_unit(){
 [Unit]
 Description=ZFW Host Firewall — restore committed rules at boot
 After=docker.service network-online.target
+# PartOf: docker flushes DOCKER-USER on every restart, so re-apply ZFW whenever
+# docker restarts — not just at boot. Without this the firewall silently loses
+# its published-port rules the first time dockerd bounces.
+PartOf=docker.service
+Wants=docker.service
 Wants=network-online.target
 ConditionPathExists=/DATA/zfw/zfw
 ConditionPathExists=/DATA/zfw/compiled.sh

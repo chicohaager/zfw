@@ -29,7 +29,44 @@ func TestEmptyDefaultDeny(t *testing.T) {
 	mustContain(t, out, "$IPT -A ZFW-IN -j DROP")
 	mustContain(t, out, "$IPT -C INPUT -j ZFW-IN")
 	mustContain(t, out, "$IPT -A DOCKER-USER -s 192.168.1.143 -j RETURN")
-	mustContain(t, out, "$IPT -A DOCKER-USER -s 192.168.1.0/24 -j DROP")
+	// Default-deny is now scoped to published ports, not to the LAN source.
+	// With no published ports there is nothing to drop, but container-egress
+	// bridge RETURNs are still emitted, and the old source-scoped drop is gone.
+	mustContain(t, out, "$IPT -A DOCKER-USER -i docker0 -j RETURN")
+	mustNotContain(t, out, "$IPT -A DOCKER-USER -s 192.168.1.0/24 -j DROP")
+}
+
+// TestDockerPublishedPortDefaultDeny: a published port with no matching allow
+// rule is dropped for NEW inbound regardless of source (closes the multi-homed
+// trust-inversion where a non-LAN origin reached every container).
+func TestDockerPublishedPortDefaultDeny(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", HostIP: "192.168.1.143", DefaultPolicy: "deny",
+	}, map[int]bool{3050: true}, nil)
+	mustContain(t, out, `$IPT -A DOCKER-USER -p tcp -m conntrack --ctorigdstport 3050 --ctstate NEW -j DROP`)
+	mustContain(t, out, "$IPT -A DOCKER-USER -i docker0 -j RETURN")
+	mustContain(t, out, "$IPT -A DOCKER-USER -i br-+ -j RETURN")
+	mustNotContain(t, out, "-s 192.168.1.0/24 -j DROP")
+}
+
+// TestDockerAllowPrecedesPortDrop: a declared LAN allow for a published port
+// must appear before that port's default-deny DROP, so legitimate LAN access
+// (and any source SNATed into the LAN) still returns.
+func TestDockerAllowPrecedesPortDrop(t *testing.T) {
+	out := Compile(rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			Order: 10, Enabled: true, Name: "app 3050", Action: "allow",
+			Source:   rules.Source{Type: "range", Value: "192.168.1.0/24"},
+			Ports:    rules.Ports{Type: "list", List: []int{3050}},
+			Protocol: "tcp", Zone: "docker",
+		}},
+	}, map[int]bool{3050: true}, nil)
+	allow := strings.Index(out, "-s 192.168.1.0/24 -p tcp -m conntrack --ctorigdstport 3050 -j RETURN")
+	drop := strings.Index(out, "--ctorigdstport 3050 --ctstate NEW -j DROP")
+	if allow < 0 || drop < 0 || allow > drop {
+		t.Fatalf("allow (%d) must precede port drop (%d)", allow, drop)
+	}
 }
 
 func TestHostAllowRule(t *testing.T) {
