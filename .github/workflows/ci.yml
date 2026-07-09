@@ -84,14 +84,17 @@ jobs:
         run: bash build.sh
       - name: Capture first tarball SHA
         id: sha1
-        run: echo "sha=$(sha256sum dist/zfw-*.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+        # build.sh emits one tarball per arch (amd64+arm64), so hash the set of
+        # per-file digests into one value — a multi-line $GITHUB_OUTPUT is
+        # rejected ("Invalid format").
+        run: echo "sha=$(sha256sum dist/zfw-*.tar.gz | sort | sha256sum | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - name: Clean
         run: rm -rf dist/ raw/usr/bin/zfwd internal/handlers/openapi.yaml
       - name: Second build (reproducibility check)
         run: bash build.sh
       - name: Compare SHAs
         run: |
-          NEW=$(sha256sum dist/zfw-*.tar.gz | cut -d' ' -f1)
+          NEW=$(sha256sum dist/zfw-*.tar.gz | sort | sha256sum | cut -d' ' -f1)
           OLD="${{ steps.sha1.outputs.sha }}"
           if [ "$NEW" != "$OLD" ]; then
             echo "REPRODUCIBILITY REGRESSION: $OLD -> $NEW"
