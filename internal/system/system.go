@@ -348,13 +348,20 @@ func Versions(ctx context.Context) []Component {
 		Note: "regreSSHion (CVE-2024-6387) not affected from 9.8p1 onward", Level: "ok",
 	})
 
-	ipt := extractVersion(run(ctx, "iptables-legacy", "--version"))
+	// Report the backend that actually carries Docker's chains — legacy on
+	// ZimaOS<=1.6.1, nft on >=1.6.2. Probing the default `iptables` first
+	// reflects the live packet path instead of assuming legacy.
+	ipt := extractVersion(run(ctx, "iptables", "--version"))
 	if ipt == "" {
-		ipt = extractVersion(run(ctx, "iptables", "--version"))
+		ipt = extractVersion(run(ctx, "iptables-legacy", "--version"))
+	}
+	backendNote := "Backend: nf_tables (matches Docker on ZimaOS>=1.6.2)"
+	if strings.Contains(ipt, "legacy") {
+		backendNote = "Backend: iptables-legacy (matches Docker on ZimaOS<=1.6.1)"
 	}
 	cs = append(cs, Component{
 		Name: "iptables", Version: orDash(ipt),
-		Note: "Backend: iptables-legacy (Docker-compatible)", Level: "ok",
+		Note: backendNote, Level: "ok",
 	})
 	verCache, verCached = cs, time.Now()
 	return cs
