@@ -44,7 +44,7 @@ func TestUDPPublishedPortGetsDefaultDeny(t *testing.T) {
 // diffed across applies, so the rule order must not depend on map iteration.
 func TestDenyLinesOrderIsDeterministic(t *testing.T) {
 	first := denyLines(pp8181(), "ZFW-DOCK-DROP ")
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		if got := denyLines(pp8181(), "ZFW-DOCK-DROP "); !equalStrings(got, first) {
 			t.Fatalf("denyLines is not deterministic:\n  %v\n  %v", first, got)
 		}

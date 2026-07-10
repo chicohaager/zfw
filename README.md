@@ -4,7 +4,9 @@
 
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v1.0.17 — two ZimaOS 1.6.2 fixes. **(1)** The iptables backend is now identified by asking the binary (`iptables -V` → `nf_tables`/`legacy`) instead of pattern-matching its name. On 1.6.2 the plain `iptables` symlink drives nf_tables despite having no `nft` in its name, so whenever the Docker-FORWARD probe missed — e.g. `zfwd` starting before `dockerd` — IPv6 was pinned to the empty legacy table and the dashboard reported "IPv6 protection ✗" while `ZFW-IN6` was live. **(2)** The published-port inventory that scopes the `DOCKER-USER` default-deny now unions docker-proxy sockets with `docker ps`. With `"userland-proxy": false` there is no docker-proxy, the inventory came up empty, and the per-port default-deny was silently not emitted at all — the firewall failed open behind a green tile. **(3)** The inventory is now protocol-aware: `parseDockerPorts` used to discard UDP mappings outright, so a container publishing e.g. `8181/udp` got neither an allow rule nor a deny rule and stayed reachable from any source while its TCP sibling was filtered. Published UDP ports now get both. Also new: the IPv6 `DOCKER-USER` chain is populated (it matters the moment Docker IPv6 is enabled), and an empty inventory under `default_policy=deny` is now logged as an error instead of passing silently.
+> **Current release:** v1.0.18 — follow-up to v1.0.17. `revert` (and therefore the Safe-Apply dead-man) never emptied the **IPv6** `DOCKER-USER` chain, which v1.0.17 started filling — so a "reverted" firewall kept silently dropping IPv6 traffic to published container ports while every status surface reported it was off. `revert` now restores that chain's stock `-j RETURN`, and `zfw status` shows it. The engine script also carried the same name-based backend guess fixed elsewhere in v1.0.17 (`case "$IPT" in *nft*)`), so on ZimaOS 1.6.2 its `revert`/`status` operated on the wrong IPv6 table. Finally, the UI, README and engine logs now say plainly that the dead-man **removes the firewall entirely** rather than restoring the previous rules.
+>
+> **Previous release:** v1.0.17 — two ZimaOS 1.6.2 fixes. **(1)** The iptables backend is now identified by asking the binary (`iptables -V` → `nf_tables`/`legacy`) instead of pattern-matching its name. On 1.6.2 the plain `iptables` symlink drives nf_tables despite having no `nft` in its name, so whenever the Docker-FORWARD probe missed — e.g. `zfwd` starting before `dockerd` — IPv6 was pinned to the empty legacy table and the dashboard reported "IPv6 protection ✗" while `ZFW-IN6` was live. **(2)** The published-port inventory that scopes the `DOCKER-USER` default-deny now unions docker-proxy sockets with `docker ps`. With `"userland-proxy": false` there is no docker-proxy, the inventory came up empty, and the per-port default-deny was silently not emitted at all — the firewall failed open behind a green tile. **(3)** The inventory is now protocol-aware: `parseDockerPorts` used to discard UDP mappings outright, so a container publishing e.g. `8181/udp` got neither an allow rule nor a deny rule and stayed reachable from any source while its TCP sibling was filtered. Published UDP ports now get both. Also new: the IPv6 `DOCKER-USER` chain is populated (it matters the moment Docker IPv6 is enabled), and an empty inventory under `default_policy=deny` is now logged as an error instead of passing silently.
 
 ZFW is a standalone ZimaOS module that adds the one thing ZimaOS does not ship:
 a **host firewall** — with a web UI and a live security dashboard.
@@ -62,9 +64,11 @@ entire class of exposure at once. That is what ZFW provides.
 
 A standalone ZimaOS module — a tile in the ZimaOS dashboard — with five sections:
 
-- **Firewall** — live status; **Safe-Apply** with a 120-second dead-man switch that
-  auto-reverts the rules if you do not confirm in time, so a bad rule can never lock
-  you out; Commit; Revert.
+- **Firewall** — live status; **Safe-Apply** with a 120-second dead-man switch: if you do
+  not Confirm in time, ZFW **removes the firewall entirely** (all ZFW rules dropped, host
+  back to its unprotected stock state — *not* a restore of the previously committed rules).
+  A bad rule can never lock you out, but an unattended Safe-Apply leaves the host
+  unprotected; Commit; Revert.
 - **Allowlist** — edit which ports are reachable from the LAN by clicking — no SSH,
   no file editing.
 - **Exposure** — every listening TCP port, live, classified: reachable from the LAN /
