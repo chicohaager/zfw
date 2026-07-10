@@ -45,17 +45,59 @@ type Manager struct {
 	ipt6   string
 }
 
+// familyOf reports the backend an iptables binary drives: "nft" or "legacy".
+// Both `iptables` and `ip6tables` are alternatives symlinks whose target
+// varies per distro release (ZimaOS 1.6.2 points them at nf_tables), so the
+// binary *name* says nothing about the table it writes. `-V` does:
+//
+//	iptables v1.8.11 (nf_tables)
+//	iptables v1.8.11 (legacy)
+//
+// Returns "" when the binary is missing or prints neither marker.
+func familyOf(bin string) string {
+	out, err := exec.Command(bin, "-V").CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	switch s := string(out); {
+	case strings.Contains(s, "nf_tables"):
+		return "nft"
+	case strings.Contains(s, "legacy"):
+		return "legacy"
+	}
+	return ""
+}
+
+// v6For returns the ip6tables binary that drives the same backend as the
+// given IPv4 binary. Deriving it from the v4 binary's *name* (the pre-v1.0.17
+// `strings.Contains(iptBin, "nft")` test) breaks on the fallback path: when
+// the Docker-FORWARD probe finds nothing — e.g. zfwd starts before dockerd has
+// installed its chains — iptBin is the plain "iptables" alternatives symlink,
+// which contains no "nft" substring even though it drives nf_tables. IPv6 then
+// gets pinned to ip6tables-legacy, reads an empty table, and Status reports
+// "IPv6 protection ✗" while ZFW-IN6 is live in the nft table. Ask each
+// candidate what it actually drives instead of pattern-matching its name.
+func v6For(iptBin string) string {
+	fam := familyOf(iptBin)
+	if fam == "" {
+		fam = "nft" // modern default; still verified against each candidate below
+	}
+	for _, c := range []string{"ip6tables-" + fam, "ip6tables"} {
+		if _, err := exec.LookPath(c); err != nil {
+			continue
+		}
+		if familyOf(c) == fam {
+			return c
+		}
+	}
+	return "ip6tables"
+}
+
 // New returns a Manager whose iptables backend matches whichever backend
 // Docker actually uses — legacy on ZimaOS<=1.6.1, nft on >=1.6.2. Picking a
 // fixed backend silently writes to an unused table after the 1.6.2 nft switch,
 // so probe which backend owns Docker's FORWARD jumps and match it.
 func New(bin, conf string) *Manager {
-	pick := func(primary, fallback string) string {
-		if _, err := exec.LookPath(primary); err == nil {
-			return primary
-		}
-		return fallback
-	}
 	dockerBackend := func() string {
 		for _, c := range []string{"iptables-nft", "iptables-legacy"} {
 			if _, err := exec.LookPath(c); err != nil {
@@ -66,18 +108,17 @@ func New(bin, conf string) *Manager {
 				return c
 			}
 		}
-		return pick("iptables", "iptables-legacy")
+		if _, err := exec.LookPath("iptables"); err == nil {
+			return "iptables"
+		}
+		return "iptables-legacy"
 	}
 	iptBin := dockerBackend()
-	ipt6 := pick("ip6tables-legacy", "ip6tables")
-	if strings.Contains(iptBin, "nft") {
-		ipt6 = pick("ip6tables-nft", "ip6tables")
-	}
 	return &Manager{
 		Bin:    bin,
 		Conf:   conf,
 		iptBin: iptBin,
-		ipt6:   ipt6,
+		ipt6:   v6For(iptBin),
 	}
 }
 
@@ -109,9 +150,7 @@ func (m *Manager) Status(ctx context.Context) Status {
 			}
 		}
 	}
-	if out, err := run(ctx, m.ipt6, "-S", "ZFW-IN6"); err == nil && strings.Contains(out, "-A ZFW-IN6") {
-		s.IPv6Active = true
-	}
+	s.IPv6Active = m.ipv6Active(ctx)
 	if out, _ := run(ctx, "systemctl", "is-active", "zfw-deadman.timer"); strings.TrimSpace(out) == "active" {
 		s.Deadman = true
 	}
@@ -119,6 +158,34 @@ func (m *Manager) Status(ctx context.Context) Status {
 		s.ServiceEnabled = true
 	}
 	return s
+}
+
+// ipv6Active reports whether ZFW-IN6 is both populated and hooked into INPUT.
+// Checking only that the chain has rules would call a stranded chain
+// "protection"; a chain nothing jumps to filters nothing.
+//
+// The Manager's ip6tables binary is resolved once at start, but a host can
+// carry rules in *both* backends (ZimaOS 1.6.2 leaves the legacy tables in
+// place after switching Docker to nft) and the kernel traverses whichever
+// table holds rules. So if the primary binary comes up empty, ask the other
+// family before reporting ✗ — a false "IPv6 protection ✗" on a host that is
+// in fact protected is the exact bug reported against v1.0.16.
+func (m *Manager) ipv6Active(ctx context.Context) bool {
+	seen := map[string]bool{}
+	for _, bin := range []string{m.ipt6, "ip6tables-nft", "ip6tables-legacy"} {
+		if bin == "" || seen[bin] {
+			continue
+		}
+		seen[bin] = true
+		out, err := run(ctx, bin, "-S", "ZFW-IN6")
+		if err != nil || !strings.Contains(out, "-A ZFW-IN6") {
+			continue
+		}
+		if hook, err := run(ctx, bin, "-S", "INPUT"); err == nil && strings.Contains(hook, "-j ZFW-IN6") {
+			return true
+		}
+	}
+	return false
 }
 
 // LoadConfig parses allowlist.conf.

@@ -166,8 +166,9 @@ func seedRulesIfMissing(cfg config.Config, fw *firewall.Manager) {
 		mctx, mcancel := context.WithTimeout(context.Background(), 20*time.Second)
 		dp := system.DockerPorts(mctx)
 		mcancel()
-		ports := make([]int, 0, len(dp))
-		for p := range dp {
+		all := dp.All()
+		ports := make([]int, 0, len(all))
+		for p := range all {
 			ports = append(ports, p)
 		}
 		rs := rules.FromTiers(tier, ports)
@@ -188,7 +189,7 @@ func seedRulesIfMissing(cfg config.Config, fw *firewall.Manager) {
 	} else {
 		slog.Info("seeded default rules.json — not applied; user must Safe-Apply",
 			"lan", lan, "host", hostIP,
-			"rules", len(rs.Rules), "docker_ports", len(dp))
+			"rules", len(rs.Rules), "docker_ports", len(dp.All()))
 	}
 }
 

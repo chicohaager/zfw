@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chicohaager/zfw/internal/system"
+
 	"github.com/chicohaager/zfw/internal/rules"
 )
 
@@ -73,7 +75,7 @@ func comprehensiveRuleSet() rules.RuleSet {
 // bypass/default lines are duplicated between them on purpose).
 func TestRestoreMatchesBashRules(t *testing.T) {
 	rs := comprehensiveRuleSet()
-	dp := map[int]bool{8080: true}
+	dp := tcpOnly(map[int]bool{8080: true})
 	gf := map[string]string{"cn": "/DATA/zfw/geo/cn.ipset", "ru": "/DATA/zfw/geo/ru.ipset"}
 	extra := []string{"wg+", "vpn0"}
 
@@ -98,7 +100,7 @@ func TestRestoreMatchesBashRules(t *testing.T) {
 func TestRestoreMatchesBashRulesAllowPolicy(t *testing.T) {
 	rs := comprehensiveRuleSet()
 	rs.DefaultPolicy = "allow"
-	dp := map[int]bool{8080: true}
+	dp := tcpOnly(map[int]bool{8080: true})
 
 	bash := Compile(rs, dp, nil)
 	rest := CompileRestore(rs, dp)
@@ -115,7 +117,7 @@ func TestRestoreMatchesBashRulesAllowPolicy(t *testing.T) {
 // any -A line, and ends with COMMIT.
 func TestRestoreDocumentShape(t *testing.T) {
 	rs := comprehensiveRuleSet()
-	rest := CompileRestore(rs, map[int]bool{8080: true})
+	rest := CompileRestore(rs, tcpOnly(map[int]bool{8080: true}))
 
 	for _, doc := range []string{rest.V4, rest.V6} {
 		lines := strings.Split(strings.TrimRight(doc, "\n"), "\n")
@@ -153,7 +155,7 @@ func TestRestoreDocumentShape(t *testing.T) {
 // and emit the idempotent jump hooks.
 func TestCompileRestoreScriptShape(t *testing.T) {
 	rs := comprehensiveRuleSet()
-	dp := map[int]bool{8080: true}
+	dp := tcpOnly(map[int]bool{8080: true})
 	gf := map[string]string{"cn": "/DATA/zfw/geo/cn.ipset", "ru": "/DATA/zfw/geo/ru.ipset"}
 	script := CompileRestoreScript(rs, dp, gf, "wg+")
 
@@ -203,7 +205,7 @@ func TestCompileRestoreScriptOmitsAbsentOutboundHooks(t *testing.T) {
 			Ports:  rules.Ports{Type: "list", List: []int{22}}, Protocol: "tcp", Zone: "host",
 		}},
 	}
-	script := CompileRestoreScript(rs, nil, nil)
+	script := CompileRestoreScript(rs, system.PublishedPorts{}, nil)
 	if strings.Contains(script, "ZFW-OUT") || strings.Contains(script, "ZFW-FWD-OUT") {
 		t.Error("inbound-only rule set emitted outbound chains/hooks")
 	}

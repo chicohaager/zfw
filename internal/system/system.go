@@ -206,10 +206,42 @@ func Listening(ctx context.Context) ([]Socket, error) {
 // current published-port list into the rule, so a Docker app's rule
 // follows its ports across restarts and remaps.
 type DockerContainer struct {
-	ID    string `json:"id"`    // short 12-char container ID
-	Name  string `json:"name"`  // container name (handier for the UI than the ID)
-	Image string `json:"image"` // image:tag the container is running
-	Ports []int  `json:"ports"` // host-published TCP ports, sorted+deduped
+	ID       string `json:"id"`        // short 12-char container ID
+	Name     string `json:"name"`      // container name (handier for the UI than the ID)
+	Image    string `json:"image"`     // image:tag the container is running
+	Ports    []int  `json:"ports"`     // host-published TCP ports, sorted+deduped
+	PortsUDP []int  `json:"ports_udp"` // host-published UDP ports, sorted+deduped
+}
+
+// PublishedPorts is the live Docker published-port inventory, split by
+// transport protocol. The split is load-bearing: the DOCKER-USER default-deny
+// is emitted per (port, protocol) pair, and a deny emitted for the wrong
+// protocol either misses traffic or locks out a working service.
+type PublishedPorts struct {
+	TCP map[int]bool
+	UDP map[int]bool
+}
+
+// Has reports whether a port is published on any protocol. Zone resolution
+// ("auto") only cares that Docker owns the port, not how it is reached.
+func (p PublishedPorts) Has(port int) bool { return p.TCP[port] || p.UDP[port] }
+
+// Any reports whether the inventory knows a single published port. An empty
+// inventory means the default-deny cannot be scoped — callers must treat that
+// as an error, never as "nothing to protect".
+func (p PublishedPorts) Any() bool { return len(p.TCP) > 0 || len(p.UDP) > 0 }
+
+// All returns the union of both protocol sets, for the zone-routing paths
+// that key on the port number alone.
+func (p PublishedPorts) All() map[int]bool {
+	m := make(map[int]bool, len(p.TCP)+len(p.UDP))
+	for port := range p.TCP {
+		m[port] = true
+	}
+	for port := range p.UDP {
+		m[port] = true
+	}
+	return m
 }
 
 // DockerContainers returns the live container inventory. Empty slice on
@@ -232,33 +264,47 @@ func DockerContainers(ctx context.Context) []DockerContainer {
 		if len(parts) == 4 {
 			portsField = parts[3]
 		}
+		tcp, udp := parseDockerPorts(portsField)
 		cs = append(cs, DockerContainer{
-			ID:    parts[0],
-			Name:  parts[1],
-			Image: parts[2],
-			Ports: parseDockerPorts(portsField),
+			ID:       parts[0],
+			Name:     parts[1],
+			Image:    parts[2],
+			Ports:    tcp,
+			PortsUDP: udp,
 		})
 	}
 	return cs
 }
 
-// parseDockerPorts extracts host-side TCP port numbers from the
-// docker-ps Ports column. Format examples:
+// parseDockerPorts extracts host-side published port numbers from the
+// docker-ps Ports column, split into TCP and UDP. Format examples:
 //
 //	"0.0.0.0:8096->8096/tcp, :::8096->8096/tcp"
 //	"0.0.0.0:32400->32400/tcp, :::32400->32400/tcp, 32400/udp"
+//	"0.0.0.0:8181->80/tcp, 0.0.0.0:8181->80/udp"
 //
-// Container-only ports (no `->host` mapping) are skipped because they
-// are not LAN-reachable. UDP-mapped ports are dropped because the rule
-// engine emits TCP rules by default; the user can add UDP rules
-// explicitly.
-func parseDockerPorts(s string) []int {
-	seen := map[int]bool{}
-	var ports []int
+// Container-only ports (no `->host` mapping) are skipped because they are not
+// LAN-reachable — note the bare "32400/udp" above, which is *not* published.
+//
+// Until v1.0.17 UDP mappings were discarded entirely. That silently exempted
+// every published UDP port from the DOCKER-USER default-deny: no allow rule
+// was generated for it and no deny rule either, so it stayed reachable from
+// any source while the TCP ports beside it were filtered.
+func parseDockerPorts(s string) (tcp, udp []int) {
+	seen := map[string]bool{}
 	for _, p := range strings.Split(s, ",") {
 		p = strings.TrimSpace(p)
-		// Only host-mapped TCP entries carry "host:port->container/tcp".
-		if !strings.Contains(p, "->") || !strings.HasSuffix(p, "/tcp") {
+		// Only host-mapped entries carry "host:port->container/proto".
+		if !strings.Contains(p, "->") {
+			continue
+		}
+		var proto string
+		switch {
+		case strings.HasSuffix(p, "/tcp"):
+			proto = "tcp"
+		case strings.HasSuffix(p, "/udp"):
+			proto = "udp"
+		default:
 			continue
 		}
 		arrow := strings.Index(p, "->")
@@ -271,29 +317,61 @@ func parseDockerPorts(s string) []int {
 		if err != nil || n < 1 || n > 65535 {
 			continue
 		}
-		if !seen[n] {
-			seen[n] = true
-			ports = append(ports, n)
+		key := proto + ":" + before[colon+1:]
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if proto == "tcp" {
+			tcp = append(tcp, n)
+		} else {
+			udp = append(udp, n)
 		}
 	}
-	sort.Ints(ports)
-	return ports
+	sort.Ints(tcp)
+	sort.Ints(udp)
+	return tcp, udp
 }
 
-// DockerPorts returns the set of TCP ports published by Docker (recognised by
-// the docker-proxy process). Used to resolve firewall rule zone "auto".
-func DockerPorts(ctx context.Context) map[int]bool {
-	m := map[int]bool{}
-	socks, err := Listening(ctx)
-	if err != nil {
-		return m
-	}
-	for _, s := range socks {
-		if s.Proc == "docker-proxy" {
-			m[s.Port] = true
+// DockerPorts returns the set of TCP ports published by Docker. Used to
+// resolve firewall rule zone "auto" and — load-bearing for security — to
+// scope the DOCKER-USER default-deny, which is emitted once per published
+// port. An empty set therefore means *no* default-deny is emitted at all.
+//
+// Two independent inventories are unioned, because either can come up empty
+// on a healthy host:
+//
+//   - docker-proxy listening sockets. Absent entirely when the daemon runs
+//     with "userland-proxy": false, where Docker relies on DNAT alone. Before
+//     v1.0.17 this was the only source, so such a host silently lost its
+//     DOCKER-USER default-deny while the dashboard still showed green.
+//   - `docker ps` published ports. Absent when the docker CLI or daemon is
+//     unreachable (test envs, daemon restarting).
+//
+// Failing open here is worse than failing loud: callers that gate a
+// default-deny on this set must treat empty-but-containers-running as an
+// error, not as "nothing to protect".
+//
+// The docker-proxy inventory contributes TCP only — it is read from `ss -tln`,
+// which lists TCP listeners. `docker ps` supplies both protocols.
+func DockerPorts(ctx context.Context) PublishedPorts {
+	pp := PublishedPorts{TCP: map[int]bool{}, UDP: map[int]bool{}}
+	if socks, err := Listening(ctx); err == nil {
+		for _, s := range socks {
+			if s.Proc == "docker-proxy" {
+				pp.TCP[s.Port] = true
+			}
 		}
 	}
-	return m
+	for _, c := range DockerContainers(ctx) {
+		for _, p := range c.Ports {
+			pp.TCP[p] = true
+		}
+		for _, p := range c.PortsUDP {
+			pp.UDP[p] = true
+		}
+	}
+	return pp
 }
 
 // Component is one software component with a version and a risk note.

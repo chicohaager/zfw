@@ -162,7 +162,7 @@ func (s *Server) Recompile(ctx context.Context) error {
 // rsHint lets a caller pass a not-yet-saved rule set so the geo
 // prefetch covers the about-to-be-saved country codes; passing nil
 // reads the current rules.json from disk for the geo plan.
-func (s *Server) prefetchForCompile(ctx context.Context, rsHint *rules.RuleSet) ([]system.DockerContainer, map[int]bool, error) {
+func (s *Server) prefetchForCompile(ctx context.Context, rsHint *rules.RuleSet) ([]system.DockerContainer, system.PublishedPorts, error) {
 	containers := system.DockerContainers(ctx)
 	dockerPorts := system.DockerPorts(ctx)
 
@@ -175,7 +175,7 @@ func (s *Server) prefetchForCompile(ctx context.Context, rsHint *rules.RuleSet) 
 		// the caller can fail loud.
 		loaded, err := rules.Load(s.rulesPath)
 		if err != nil && !os.IsNotExist(err) {
-			return nil, nil, err
+			return nil, system.PublishedPorts{}, err
 		}
 		rs = loaded
 	}
@@ -188,7 +188,7 @@ func (s *Server) prefetchForCompile(ctx context.Context, rsHint *rules.RuleSet) 
 		}
 	}
 	if len(ccSet) > maxGeoCountries {
-		return nil, nil, fmt.Errorf("too many countries (%d) — at most %d geo sets", len(ccSet), maxGeoCountries)
+		return nil, system.PublishedPorts{}, fmt.Errorf("too many countries (%d) — at most %d geo sets", len(ccSet), maxGeoCountries)
 	}
 	if len(ccSet) > 0 {
 		codes := make([]string, 0, len(ccSet))
@@ -196,7 +196,7 @@ func (s *Server) prefetchForCompile(ctx context.Context, rsHint *rules.RuleSet) 
 			codes = append(codes, cc)
 		}
 		if err := s.geo.Ensure(ctx, codes, nil); err != nil {
-			return nil, nil, err
+			return nil, system.PublishedPorts{}, err
 		}
 	}
 	return containers, dockerPorts, nil
@@ -209,7 +209,7 @@ func (s *Server) prefetchForCompile(ctx context.Context, rsHint *rules.RuleSet) 
 // containers + dockerPorts maps and pre-warm s.geo if any country
 // sources are in play. Used by both the unlocked-entry Recompile and
 // by mutate handlers that hold s.mu across save+recompile.
-func (s *Server) recompileLocked(containers []system.DockerContainer, dockerPorts map[int]bool) error {
+func (s *Server) recompileLocked(containers []system.DockerContainer, dockerPorts system.PublishedPorts) error {
 	rs, err := rules.Load(s.rulesPath)
 	if err != nil {
 		return err
@@ -255,6 +255,15 @@ func (s *Server) recompileLocked(containers []system.DockerContainer, dockerPort
 			}
 			rs.Rules[i].Ports = rules.Ports{Type: "list", List: ports}
 		}
+	}
+	// The DOCKER-USER default-deny is emitted once per published port, so an
+	// empty port inventory silently degrades "deny" to "allow everything that
+	// reaches a container". That must never pass as a normal apply: say so
+	// loudly rather than shipping a green tile over an open forward path.
+	if rs.DefaultPolicy == "deny" && !dockerPorts.Any() && len(containers) > 0 {
+		slog.Error("docker port inventory empty while containers are running — "+
+			"DOCKER-USER default-deny cannot be scoped and will not be emitted",
+			"containers", len(containers))
 	}
 	geoFiles := map[string]string{}
 	for _, r := range rs.Rules {

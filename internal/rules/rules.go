@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/chicohaager/zfw/internal/system"
 )
 
 // migrateMu serialises the migrate-and-save path in Load. Two
@@ -211,11 +213,14 @@ func NewID() string {
 // blocks everything else — closing the LAN footguns flagged by the audit
 // (VM VNC without password, NFS/RPC, ttyd, etc.) by construction.
 //
-// dockerPorts may be nil; in that case only the baseline is returned. The
-// caller passes the result of system.DockerPorts(ctx) — the inventory must
+// dockerPorts may be zero-valued; in that case only the baseline is returned.
+// The caller passes the result of system.DockerPorts(ctx) — the inventory must
 // be live, not cached, so a stopped container does not leave a stale rule
 // pinned in the starter set.
-func Defaults(lan, hostIP string, dockerPorts map[int]bool) RuleSet {
+//
+// A port published on both protocols yields a single "both" rule; the deny
+// side is emitted per protocol either way, so the two stay symmetric.
+func Defaults(lan, hostIP string, dockerPorts system.PublishedPorts) RuleSet {
 	src := Source{Type: "range", Value: lan}
 	mk := func(order int, name, action, proto, zone string, ports ...int) Rule {
 		return Rule{
@@ -238,14 +243,21 @@ func Defaults(lan, hostIP string, dockerPorts map[int]bool) RuleSet {
 		mk(50, "mDNS discovery", "allow", "udp", "host", 5353),
 	}
 	// Live Docker-published ports — sorted so the rule list is deterministic.
-	ports := make([]int, 0, len(dockerPorts))
-	for p := range dockerPorts {
+	ports := make([]int, 0, len(dockerPorts.TCP)+len(dockerPorts.UDP))
+	for p := range dockerPorts.All() {
 		ports = append(ports, p)
 	}
 	sort.Ints(ports)
 	order := 60
 	for _, p := range ports {
-		rs = append(rs, mk(order, fmt.Sprintf("Docker app on :%d", p), "allow", "tcp", "docker", p))
+		proto := "both"
+		switch {
+		case !dockerPorts.UDP[p]:
+			proto = "tcp"
+		case !dockerPorts.TCP[p]:
+			proto = "udp"
+		}
+		rs = append(rs, mk(order, fmt.Sprintf("Docker app on :%d", p), "allow", proto, "docker", p))
 		order += 10
 	}
 	return RuleSet{
