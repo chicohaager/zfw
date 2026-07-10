@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/chicohaager/zfw/internal/firewall"
@@ -309,10 +310,10 @@ func TestMutateRateLimitTrips(t *testing.T) {
 // TestReadRateLimitTrips pins the R3-5 (v1.0.2) fix: the four expensive
 // read endpoints share a read-side bucket of burst 60 / sustained 5/s so
 // an authenticated client cannot flood them and CPU-pin the daemon.
-// /api/conntrack is the cheapest to exercise — no kernel module needed,
-// the handler swallows the conntrack-read error and returns 200 [] so
-// the test environment is fine. The 61st call in a tight loop must
-// answer 429.
+// /api/conntrack is the cheapest to exercise. Its own status (200 with the
+// table, or 503 when no conntrack source is readable — see
+// TestConntrackFailsLoudNotEmpty) is irrelevant here; only the 429 is. The
+// 61st call in a tight loop must answer 429.
 func TestReadRateLimitTrips(t *testing.T) {
 	s, _ := newTestServer(t, &fakeFirewall{})
 	for i := 0; i < 60; i++ {
@@ -879,14 +880,20 @@ func TestPeersReceiveHappyPath(t *testing.T) {
 	}
 }
 
-// TestConntrackReturnsArray guards /api/conntrack: in a test
-// environment the kernel module / /proc/net/nf_conntrack may be
-// absent (this is run inside `go test`, not on a ZimaOS host), so
-// the handler must respond 200 with [] rather than 500 — the UI's
-// "no connections" branch reads an array, never null.
+// TestConntrackReturnsArray guards the *success* shape of /api/conntrack: an
+// idle host answers 200 [] and never 200 null, because the UI iterates the
+// slice.
+//
+// Until v1.0.19 this test also accepted 200 [] for an *unreadable* table —
+// the handler swallowed the read error, which is the bug behind issue #1.
+// That case is now a 503 (see TestConntrackFailsLoudNotEmpty), so a test
+// environment with no readable source lands there and this test skips.
 func TestConntrackReturnsArray(t *testing.T) {
 	s, _ := newTestServer(t, &fakeFirewall{})
 	w := do(s, http.MethodGet, "/api/conntrack", nil)
+	if w.Code == http.StatusServiceUnavailable {
+		t.Skip("no conntrack source readable here — the success shape cannot be exercised")
+	}
 	if w.Code != http.StatusOK {
 		t.Fatalf("got HTTP %d, want 200 (body=%s)", w.Code, w.Body.String())
 	}
@@ -1017,5 +1024,42 @@ func TestDebugEndpoint(t *testing.T) {
 	}
 	if lv.Level() != slog.LevelInfo {
 		t.Fatalf("after disable, level is %v, want Info", lv.Level())
+	}
+}
+
+// TestConntrackFailsLoudNotEmpty is the handler half of issue #1. The old
+// code did `if err != nil { entries = []Entry{} }` and answered 200, so a
+// host whose connection table could not be read was indistinguishable from
+// an idle one. The UI then told the user their conntrack module was missing
+// — on a host that was tracking hundreds of flows.
+//
+// PATH is emptied so conntrack(8) is unreachable; the test process is
+// unprivileged so the ctnetlink dump is refused. If this environment can
+// still read a source, there is no failure to assert and we skip rather
+// than pretend.
+func TestConntrackFailsLoudNotEmpty(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	s, _ := newTestServer(t, &fakeFirewall{})
+
+	w := do(s, http.MethodGet, "/api/conntrack", nil)
+	if w.Code == http.StatusOK {
+		if strings.TrimSpace(w.Body.String()) == "[]" {
+			t.Fatal("HTTP 200 with an empty array: cannot tell 'idle host' from 'unreadable table'")
+		}
+		t.Skip("a conntrack source is readable here — the failure path cannot be exercised")
+	}
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("GET /api/conntrack: HTTP %d, want 503 when no source is readable", w.Code)
+	}
+	var body map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("503 body is not JSON: %v", err)
+	}
+	msg := body["error"]
+	if !strings.Contains(msg, "connection table unreadable") {
+		t.Errorf("error = %q, want it to say the table is unreadable", msg)
+	}
+	if !strings.Contains(msg, "ctnetlink") {
+		t.Errorf("error = %q, want it to name the source that failed", msg)
 	}
 }
