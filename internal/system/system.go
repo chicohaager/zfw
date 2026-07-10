@@ -176,10 +176,9 @@ func Listening(ctx context.Context) ([]Socket, error) {
 			scope = "local"
 		}
 		proc := ""
-		if j := strings.Index(line, `users:(("`); j >= 0 {
-			rest := line[j+9:]
-			if k := strings.IndexByte(rest, '"'); k >= 0 {
-				proc = rest[:k]
+		if _, rest, ok := strings.Cut(line, `users:(("`); ok {
+			if name, _, ok := strings.Cut(rest, `"`); ok {
+				proc = name
 			}
 		}
 		if ex, ok := seen[port]; ok {
@@ -307,8 +306,7 @@ func parseDockerPorts(s string) (tcp, udp []int) {
 		default:
 			continue
 		}
-		arrow := strings.Index(p, "->")
-		before := p[:arrow]
+		before, _, _ := strings.Cut(p, "->")
 		colon := strings.LastIndex(before, ":")
 		if colon < 0 {
 			continue
@@ -527,14 +525,12 @@ func parseKernel(s string) (maj, min, patch int) {
 		if i >= len(parts) {
 			return 0
 		}
-		num := ""
-		for _, r := range parts[i] {
-			if r < '0' || r > '9' {
-				break
-			}
-			num += string(r)
+		// Leading digits only: "12-generic" -> 12, "" -> 0.
+		end := 0
+		for end < len(parts[i]) && parts[i][end] >= '0' && parts[i][end] <= '9' {
+			end++
 		}
-		n, _ := strconv.Atoi(num)
+		n, _ := strconv.Atoi(parts[i][:end])
 		return n
 	}
 	return get(0), get(1), get(2)

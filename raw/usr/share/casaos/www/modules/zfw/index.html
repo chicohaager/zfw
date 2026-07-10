@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex">
   <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
   <title>ZFW Firewall</title>
-  <link rel="stylesheet" href="./styles.css?v=1.0.17">
+  <link rel="stylesheet" href="./styles.css?v=1.0.18">
 </head>
 <body>
   <header>
@@ -45,8 +45,11 @@
     <section id="tab-firewall" class="tab-panel active" role="tabpanel">
       <p class="panel-hint">
         Status of the ZFW host firewall. <b>Safe-Apply</b> installs the rules with a 120-second dead-man timer &mdash;
-        if <em>Confirm</em> is not clicked within that window, the firewall rolls back automatically
-        (lock-out protection).
+        if <em>Confirm</em> is not clicked within that window, ZFW <b>removes the firewall entirely</b>:
+        every ZFW rule is dropped and the host returns to its unprotected stock state. It does
+        <em>not</em> restore the previously committed rules. That is the lock-out escape hatch &mdash;
+        a rule that cuts off your own access cannot outlive the timer, but an unattended Safe-Apply
+        leaves the host with no firewall.
       </p>
       <div id="fw-status" class="status-grid"><div class="loading">Loading&hellip;</div></div>
       <div class="action-row">
@@ -257,6 +260,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=1.0.17"></script>
+  <script src="./app.js?v=1.0.18"></script>
 </body>
 </html>
