@@ -1,9 +1,9 @@
 // Package conntrack reads the kernel's live connection-tracking table
 // and exposes it as structured Entry records for the UI's Connections
-// tab. Source-of-truth is /proc/net/nf_conntrack (always available when
-// the kernel module is loaded — which it is on every ZimaOS host
-// because ZFW already depends on conntrack matches). The conntrack(8)
-// userland tool is tried as a fall-through only.
+// tab. Source-of-truth is ctnetlink (the kernel's netlink interface);
+// /proc/net/nf_conntrack and the conntrack(8) userland tool are tried as
+// fall-throughs for hosts that expose them. See Read for why the order
+// matters on ZimaOS.
 //
 // Read caps the result at a configurable limit so a host with tens of
 // thousands of connections does not balloon the API response.
@@ -12,6 +12,8 @@ package conntrack
 import (
 	"bufio"
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -35,15 +37,39 @@ type Entry struct {
 
 // Read returns the live conntrack table. limit caps the result; pass
 // 0 for "no cap" (use sparingly — a busy host can have 100k+ entries).
-// Errors only on I/O failure; an empty table is (nil, nil).
+// An empty table is (nil, nil); an unreadable one is always an error.
+//
+// Three sources are tried in order of availability, most universal first:
+//
+//  1. ctnetlink — the kernel's netlink interface. The only one a stock
+//     ZimaOS kernel offers (CONFIG_NF_CONNTRACK_PROCFS is off and
+//     conntrack(8) is not in the image), which is why the Connections tab
+//     was permanently empty before v1.0.19. Needs CAP_NET_ADMIN.
+//  2. /proc/net/nf_conntrack — present on distro kernels that enable PROCFS.
+//  3. conntrack(8) — the userland tool, if someone installed it.
+//
+// When every source fails the errors are joined and returned. Callers must
+// not turn that into an empty list: "no connections" and "cannot read the
+// connection table" are different facts, and conflating them is what made
+// the UI blame a kernel module that was, in fact, tracking 877 flows.
 func Read(ctx context.Context, limit int) ([]Entry, error) {
-	if entries, err := readProc(ctx, limit); err == nil {
-		return entries, nil
-	} else if entries, err := readCmd(ctx, limit); err == nil {
+	var errs []error
+	if entries, err := readNetlink(ctx, limit); err == nil {
 		return entries, nil
 	} else {
-		return nil, err
+		errs = append(errs, fmt.Errorf("ctnetlink: %w", err))
 	}
+	if entries, err := readProc(ctx, limit); err == nil {
+		return entries, nil
+	} else {
+		errs = append(errs, fmt.Errorf("/proc/net/nf_conntrack: %w", err))
+	}
+	if entries, err := readCmd(ctx, limit); err == nil {
+		return entries, nil
+	} else {
+		errs = append(errs, fmt.Errorf("conntrack(8): %w", err))
+	}
+	return nil, errors.Join(errs...)
 }
 
 // readProc parses /proc/net/nf_conntrack. The file's line format is

@@ -795,8 +795,17 @@ func (s *Server) conntrack(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx()
 	defer cancel()
 	entries, err := conntrack.Read(ctx, 500)
-	if err != nil || entries == nil {
-		entries = []conntrack.Entry{}
+	if err != nil {
+		// Never answer 200 [] here. An unreadable connection table is not
+		// an empty one, and conflating them sent issue #1's reporter
+		// chasing a kernel module that was in fact tracking hundreds of
+		// flows. Say what failed, with a status the UI cannot mistake.
+		slog.Error("conntrack read failed", "err", err)
+		fail(w, http.StatusServiceUnavailable, "connection table unreadable: "+err.Error())
+		return
+	}
+	if entries == nil {
+		entries = []conntrack.Entry{} // genuinely idle host: [], not null
 	}
 	writeJSON(w, http.StatusOK, entries)
 }
