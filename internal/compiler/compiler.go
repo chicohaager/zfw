@@ -13,6 +13,7 @@ import (
 
 	"github.com/chicohaager/zfw/internal/geo"
 	"github.com/chicohaager/zfw/internal/rules"
+	"github.com/chicohaager/zfw/internal/system"
 )
 
 // Compile returns the bash ruleset script.
@@ -25,7 +26,7 @@ import (
 //     expected to have validated names — emitting an attacker-controlled
 //     iface name here would otherwise be a shell-injection vector via the
 //     compiled.sh path. v0.5.4.
-func Compile(rs rules.RuleSet, dockerPorts map[int]bool, geoFiles map[string]string, extraBypass ...string) string {
+func Compile(rs rules.RuleSet, pp system.PublishedPorts, geoFiles map[string]string, extraBypass ...string) string {
 	var b strings.Builder
 	emitHeader(&b)
 	emitGeoSets(&b, geoFiles)
@@ -33,9 +34,13 @@ func Compile(rs rules.RuleSet, dockerPorts map[int]bool, geoFiles map[string]str
 	rl := append([]rules.Rule(nil), rs.Rules...)
 	sort.SliceStable(rl, func(i, j int) bool { return rl[i].Order < rl[j].Order })
 
-	emitHostChain(&b, rs, rl, dockerPorts, extraBypass)
-	emitDockerChain(&b, rs, rl, dockerPorts, extraBypass)
-	emitV6Chain(&b, rs, rl, dockerPorts, extraBypass)
+	// Zone routing keys on the port number alone; only the default-deny needs
+	// the protocol split.
+	all := pp.All()
+	emitHostChain(&b, rs, rl, all, extraBypass)
+	emitDockerChain(&b, rs, rl, pp, extraBypass)
+	emitV6Chain(&b, rs, rl, all, extraBypass)
+	emitDockerChain6(&b, rs, rl, pp, extraBypass)
 	emitOutboundChains(&b, rl)
 	return b.String()
 }
@@ -47,14 +52,21 @@ func Compile(rs rules.RuleSet, dockerPorts map[int]bool, geoFiles map[string]str
 // Docker's FORWARD jumps, then falls back to the system default. Emitted into
 // both the bash and restore apply paths so a backend switch never leaves ZFW
 // writing to an inert table.
+// _zfw_fam asks a binary which backend it drives ("nft"/"legacy") instead of
+// pattern-matching its name: the fallback path yields the plain `iptables`
+// alternatives symlink, which on ZimaOS 1.6.2 drives nf_tables despite having
+// no "nft" in its name. The old `case "$IPT" in *nft*)` therefore pinned IPT6
+// to ip6tables-legacy and wrote ZFW-IN6 into a table nothing traverses.
 const dockerBackendPick = `_zfw_pick_ipt(){ for c in iptables-nft iptables-legacy; do command -v "$c" >/dev/null 2>&1 || continue; if "$c" -S FORWARD 2>/dev/null | grep -qE "DOCKER-USER|DOCKER-FORWARD"; then command -v "$c"; return 0; fi; done; command -v iptables 2>/dev/null || command -v iptables-legacy; }
+_zfw_fam(){ "$1" -V 2>/dev/null | grep -q nf_tables && echo nft || echo legacy; }
 IPT="$(_zfw_pick_ipt)"
-case "$IPT" in *nft*) IPT6="$(command -v ip6tables-nft 2>/dev/null || command -v ip6tables 2>/dev/null || true)";; *) IPT6="$(command -v ip6tables-legacy 2>/dev/null || command -v ip6tables 2>/dev/null || true)";; esac
+IPTFAM="$(_zfw_fam "$IPT")"
+case "$IPTFAM" in nft) IPT6="$(command -v ip6tables-nft 2>/dev/null || command -v ip6tables 2>/dev/null || true)";; *) IPT6="$(command -v ip6tables-legacy 2>/dev/null || command -v ip6tables 2>/dev/null || true)";; esac
 `
 
 // dockerBackendPickRestore is dockerBackendPick plus the iptables-restore
 // binaries (IPTR/IPT6R) the atomic B4 path needs, kept in the same backend.
-const dockerBackendPickRestore = dockerBackendPick + `case "$IPT" in *nft*) IPTR="$(command -v iptables-nft-restore 2>/dev/null || command -v iptables-restore)"; IPT6R="$(command -v ip6tables-nft-restore 2>/dev/null || command -v ip6tables-restore 2>/dev/null || true)";; *) IPTR="$(command -v iptables-legacy-restore 2>/dev/null || command -v iptables-restore)"; IPT6R="$(command -v ip6tables-legacy-restore 2>/dev/null || command -v ip6tables-restore 2>/dev/null || true)";; esac
+const dockerBackendPickRestore = dockerBackendPick + `case "$IPTFAM" in nft) IPTR="$(command -v iptables-nft-restore 2>/dev/null || command -v iptables-restore)"; IPT6R="$(command -v ip6tables-nft-restore 2>/dev/null || command -v ip6tables-restore 2>/dev/null || true)";; *) IPTR="$(command -v iptables-legacy-restore 2>/dev/null || command -v iptables-restore)"; IPT6R="$(command -v ip6tables-legacy-restore 2>/dev/null || command -v ip6tables-restore 2>/dev/null || true)";; esac
 `
 
 func emitHeader(b *strings.Builder) {
@@ -164,63 +176,15 @@ func emitHostChain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, docker
 }
 
 // emitDockerChain writes DOCKER-USER: the published-container-port filter.
-func emitDockerChain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool, extraBypass []string) {
-	// ---- DOCKER-USER: published container ports ----
+// The rule content comes from dockerUserRules so the bash and restore apply
+// paths cannot drift (pinned by TestRestoreMatchesBashRules).
+func emitDockerChain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPorts, extraBypass []string) {
 	b.WriteString("# ===== DOCKER-USER (published container ports) =====\n")
 	b.WriteString("if $IPT -L DOCKER-USER -n >/dev/null 2>&1; then\n")
 	b.WriteString("  $IPT -F DOCKER-USER\n")
-	b.WriteString("  $IPT -A DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN\n")
-	b.WriteString("  $IPT -A DOCKER-USER -s 127.0.0.0/8 -j RETURN\n")
-	if rs.HostIP != "" {
-		fmt.Fprintf(b, "  $IPT -A DOCKER-USER -s %s -j RETURN\n", rs.HostIP)
+	for _, line := range dockerUserRules(rs, rl, pp, extraBypass) {
+		fmt.Fprintf(b, "  $IPT -A DOCKER-USER %s\n", line)
 	}
-	b.WriteString("  $IPT -A DOCKER-USER -i tailscale0 -j RETURN\n")
-	b.WriteString("  $IPT -A DOCKER-USER -i zt+ -j RETURN\n")
-	// WireGuard wildcard — v0.5.4. Same rationale as the ZFW-IN entry:
-	// WireGuard peers are pre-authenticated by the protocol; bypass them
-	// before the LAN-DROP catch-all hits container traffic.
-	b.WriteString("  $IPT -A DOCKER-USER -i wg+ -j RETURN\n")
-	for _, iface := range extraBypass {
-		fmt.Fprintf(b, "  $IPT -A DOCKER-USER -i %s -j RETURN\n", iface)
-	}
-	for _, r := range rl {
-		if !r.Enabled {
-			continue
-		}
-		for _, line := range dockerLines(r, dockerPorts) {
-			fmt.Fprintf(b, "  $IPT -A DOCKER-USER %s\n", line)
-		}
-	}
-	if rs.DefaultPolicy == "deny" {
-		// Default-deny scoped to the PUBLISHED PORTS, not to a single source
-		// subnet. The previous rule dropped only traffic *sourced from rs.LAN*,
-		// so any other origin — a second VLAN routed without SNAT, a WAN client
-		// hitting a port-forwarded service, a ZeroTier route — fell through to
-		// the stock RETURN below and reached every published container port.
-		// (On a plain single-subnet host this was invisible: other subnets are
-		// usually SNATed into the LAN and matched the allow rules instead.)
-		//
-		// Drop NEW inbound to a published port that matched no allow rule above,
-		// regardless of source. Container-originated traffic is returned first
-		// via the docker bridges so egress (different ctorigdstport anyway) and
-		// inter-container flows are never caught; established flows returned at
-		// the top of the chain.
-		b.WriteString("  $IPT -A DOCKER-USER -i docker0 -j RETURN\n")
-		b.WriteString("  $IPT -A DOCKER-USER -i br-+ -j RETURN\n")
-		ports := make([]int, 0, len(dockerPorts))
-		for p := range dockerPorts {
-			ports = append(ports, p)
-		}
-		sort.Ints(ports)
-		for _, p := range ports {
-			// conntrack --ctorigdstport is the pre-DNAT (published) port and
-			// takes a single port only, so one LOG+DROP pair per port. NEW-only
-			// for the same log-volume reason as ZFW-IN.
-			fmt.Fprintf(b, "  $IPT -A DOCKER-USER -p tcp -m conntrack --ctorigdstport %d --ctstate NEW -j LOG --log-prefix \"ZFW-DOCK-DROP \" --log-level 6\n", p)
-			fmt.Fprintf(b, "  $IPT -A DOCKER-USER -p tcp -m conntrack --ctorigdstport %d --ctstate NEW -j DROP\n", p)
-		}
-	}
-	b.WriteString("  $IPT -A DOCKER-USER -j RETURN\n")
 	b.WriteString("fi\n\n")
 }
 
@@ -291,6 +255,19 @@ func emitV6Chain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, dockerPo
 		b.WriteString("  $IPT6 -A ZFW-IN6 -j DROP\n")
 	}
 	b.WriteString("  $IPT6 -C INPUT -j ZFW-IN6 2>/dev/null || $IPT6 -I INPUT 1 -j ZFW-IN6\n")
+	b.WriteString("fi\n")
+}
+
+// emitDockerChain6 writes the IPv6 DOCKER-USER chain — see dockerUser6Rules
+// for why it matters. Guarded twice: no ip6tables backend, or no v6
+// DOCKER-USER chain (Docker's ip6tables support off) means nothing to fill.
+func emitDockerChain6(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPorts, extraBypass []string) {
+	b.WriteString("\n# ===== DOCKER-USER IPv6 (published container ports) =====\n")
+	b.WriteString(`if [ -n "$IPT6" ] && $IPT6 -L DOCKER-USER -n >/dev/null 2>&1; then` + "\n")
+	b.WriteString("  $IPT6 -F DOCKER-USER\n")
+	for _, line := range dockerUser6Rules(rs, rl, pp, extraBypass) {
+		fmt.Fprintf(b, "  $IPT6 -A DOCKER-USER %s\n", line)
+	}
 	b.WriteString("fi\n")
 }
 
@@ -592,6 +569,50 @@ func hostLines6(r rules.Rule, dockerPorts map[int]bool) []string {
 	for _, proto := range protoList(r.Protocol) {
 		for _, pa := range portArgs(ps) {
 			lines = append(lines, wrapEmit(joinArgs(src, "-p", proto, pa, sch), r, target)...)
+		}
+	}
+	return lines
+}
+
+// dockerLines6 is dockerLines for the IPv6 DOCKER-USER chain: same
+// published-port (pre-DNAT) conntrack match, but IPv4-only sources — literal
+// v4 addresses and the geo ipsets — are skipped, exactly as hostLines6 does.
+func dockerLines6(r rules.Rule, dockerPorts map[int]bool) []string {
+	if r.IsOutbound() {
+		return nil
+	}
+	ps, ok := portsForZone(r, dockerPorts, "docker")
+	if !ok {
+		return nil
+	}
+	src := source6Arg(r.Source)
+	if src == "skip" {
+		return nil
+	}
+	target := "RETURN"
+	if r.Action == "deny" {
+		target = "DROP"
+	}
+	sch := scheduleArg(r.Schedule)
+	var lines []string
+	if ps.All {
+		if r.Protocol == "both" {
+			return wrapEmit(joinArgs(src, sch), r, target)
+		}
+		return wrapEmit(joinArgs(src, "-p", r.Protocol, sch), r, target)
+	}
+	for _, proto := range protoList(r.Protocol) {
+		if ps.isRange() {
+			lines = append(lines, wrapEmit(joinArgs(src, "-p", proto,
+				"-m", "conntrack",
+				"--ctorigdstport", fmt.Sprintf("%d:%d", ps.From, ps.To),
+				sch), r, target)...)
+			continue
+		}
+		for _, p := range ps.List {
+			lines = append(lines, wrapEmit(joinArgs(src, "-p", proto,
+				"-m", "conntrack", "--ctorigdstport", strconv.Itoa(p),
+				sch), r, target)...)
 		}
 	}
 	return lines

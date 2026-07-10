@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/chicohaager/zfw/internal/rules"
+	"github.com/chicohaager/zfw/internal/system"
 )
 
 // CompileRestore is the B4 (v1.1) atomic-apply path: instead of the
@@ -43,13 +44,13 @@ type RestoreScript struct {
 // CompileRestore builds the restore documents for a rule set. dockerPorts
 // resolves zone "auto"; extraBypass appends inbound-bypass interfaces
 // (already validated by the caller, as for Compile).
-func CompileRestore(rs rules.RuleSet, dockerPorts map[int]bool, extraBypass ...string) RestoreScript {
+func CompileRestore(rs rules.RuleSet, pp system.PublishedPorts, extraBypass ...string) RestoreScript {
 	rl := append([]rules.Rule(nil), rs.Rules...)
 	sort.SliceStable(rl, func(i, j int) bool { return rl[i].Order < rl[j].Order })
 
 	return RestoreScript{
-		V4: restoreV4(rs, rl, dockerPorts, extraBypass),
-		V6: restoreV6(rs, rl, dockerPorts, extraBypass),
+		V4: restoreV4(rs, rl, pp, extraBypass),
+		V6: restoreV6(rs, rl, pp, extraBypass),
 	}
 }
 
@@ -67,11 +68,11 @@ func CompileRestore(rs rules.RuleSet, dockerPorts map[int]bool, extraBypass ...s
 // chain population changes. It is written alongside compiled.sh; the
 // engine picks which one to run, so the bash path stays the default and
 // the restore path is opt-in until proven.
-func CompileRestoreScript(rs rules.RuleSet, dockerPorts map[int]bool, geoFiles map[string]string, extraBypass ...string) string {
+func CompileRestoreScript(rs rules.RuleSet, pp system.PublishedPorts, geoFiles map[string]string, extraBypass ...string) string {
 	rl := append([]rules.Rule(nil), rs.Rules...)
 	sort.SliceStable(rl, func(i, j int) bool { return rl[i].Order < rl[j].Order })
-	v4 := restoreV4(rs, rl, dockerPorts, extraBypass)
-	v6 := restoreV6(rs, rl, dockerPorts, extraBypass)
+	v4 := restoreV4(rs, rl, pp, extraBypass)
+	v6 := restoreV6(rs, rl, pp, extraBypass)
 	hasHostOut, hasDockerOut := outboundZones(rl)
 
 	var b strings.Builder
@@ -139,7 +140,7 @@ func CompileRestoreScript(rs rules.RuleSet, dockerPorts map[int]bool, geoFiles m
 // restoreV4 emits the IPv4 filter table: ZFW-IN + DOCKER-USER, plus the
 // outbound chains when present. Chain declarations precede all -A lines,
 // as iptables-restore requires.
-func restoreV4(rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool, extraBypass []string) string {
+func restoreV4(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPorts, extraBypass []string) string {
 	hasHostOut, hasDockerOut := outboundZones(rl)
 
 	chains := []string{"ZFW-IN", "DOCKER-USER"}
@@ -155,8 +156,8 @@ func restoreV4(rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool, extr
 	for _, c := range chains {
 		fmt.Fprintf(&b, ":%s - [0:0]\n", c)
 	}
-	writeChain(&b, "ZFW-IN", zfwInRules(rs, rl, dockerPorts, extraBypass))
-	writeChain(&b, "DOCKER-USER", dockerUserRules(rs, rl, dockerPorts, extraBypass))
+	writeChain(&b, "ZFW-IN", zfwInRules(rs, rl, pp.All(), extraBypass))
+	writeChain(&b, "DOCKER-USER", dockerUserRules(rs, rl, pp, extraBypass))
 	if hasHostOut {
 		writeChain(&b, "ZFW-OUT", zfwOutRules(rl))
 	}
@@ -170,10 +171,14 @@ func restoreV4(rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool, extr
 // restoreV6 emits the IPv6 filter table: ZFW-IN6, plus ZFW-OUT6 when host
 // outbound rules exist (the engine wrapper runs this only when an
 // ip6tables backend is present).
-func restoreV6(rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool, extraBypass []string) string {
+func restoreV6(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPorts, extraBypass []string) string {
 	hasHostOut, _ := outboundZones(rl)
 
-	chains := []string{"ZFW-IN6"}
+	// DOCKER-USER is declared here too: on a host where Docker's ip6tables
+	// support is on, the chain already exists (Docker creates it and jumps to
+	// it from FORWARD) but is empty. Declaring it is a no-op when Docker's
+	// ip6tables support is off — the chain is created, nothing jumps to it.
+	chains := []string{"ZFW-IN6", "DOCKER-USER"}
 	if hasHostOut {
 		chains = append(chains, "ZFW-OUT6")
 	}
@@ -183,7 +188,8 @@ func restoreV6(rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool, extr
 	for _, c := range chains {
 		fmt.Fprintf(&b, ":%s - [0:0]\n", c)
 	}
-	writeChain(&b, "ZFW-IN6", zfwIn6Rules(rs, rl, dockerPorts, extraBypass))
+	writeChain(&b, "ZFW-IN6", zfwIn6Rules(rs, rl, pp.All(), extraBypass))
+	writeChain(&b, "DOCKER-USER", dockerUser6Rules(rs, rl, pp, extraBypass))
 	if hasHostOut {
 		writeChain(&b, "ZFW-OUT6", zfwOut6Rules(rl))
 	}
@@ -256,7 +262,40 @@ func zfwInRules(rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool, ext
 	return out
 }
 
-func dockerUserRules(rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool, extraBypass []string) []string {
+// denyLines builds the port-scoped default-deny: a LOG+DROP pair per
+// (published port, protocol). conntrack --ctorigdstport is the pre-DNAT
+// (published) port and takes a single port only, hence one pair each. NEW-only
+// for the same log-volume reason as ZFW-IN.
+//
+// Both protocols are covered since v1.0.17. Before that only TCP was emitted,
+// because the port inventory discarded UDP mappings outright — so a container
+// publishing e.g. 8181/udp kept it reachable from any source while its TCP
+// sibling was filtered.
+func denyLines(pp system.PublishedPorts, logPrefix string) []string {
+	ports := make([]int, 0, len(pp.TCP)+len(pp.UDP))
+	for p := range pp.All() {
+		ports = append(ports, p)
+	}
+	sort.Ints(ports)
+
+	var out []string
+	for _, p := range ports {
+		for _, proto := range []string{"tcp", "udp"} {
+			if proto == "tcp" && !pp.TCP[p] {
+				continue
+			}
+			if proto == "udp" && !pp.UDP[p] {
+				continue
+			}
+			out = append(out,
+				fmt.Sprintf("-p %s -m conntrack --ctorigdstport %d --ctstate NEW -j LOG --log-prefix %q --log-level 6", proto, p, logPrefix),
+				fmt.Sprintf("-p %s -m conntrack --ctorigdstport %d --ctstate NEW -j DROP", proto, p))
+		}
+	}
+	return out
+}
+
+func dockerUserRules(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPorts, extraBypass []string) []string {
 	out := []string{
 		"-m conntrack --ctstate ESTABLISHED,RELATED -j RETURN",
 		"-s 127.0.0.0/8 -j RETURN",
@@ -271,29 +310,63 @@ func dockerUserRules(rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool
 	for _, iface := range extraBypass {
 		out = append(out, "-i "+iface+" -j RETURN")
 	}
+	all := pp.All()
 	for _, r := range rl {
 		if !r.Enabled {
 			continue
 		}
-		out = append(out, dockerLines(r, dockerPorts)...)
+		out = append(out, dockerLines(r, all)...)
 	}
 	if rs.DefaultPolicy == "deny" {
-		// Published-port-scoped default-deny — see emitDockerChain (bash path)
-		// for the rationale. Kept byte-identical so TestRestoreMatchesBashRules
-		// stays green and both apply paths enforce the same policy.
+		// Container-originated traffic is returned first via the docker
+		// bridges, so egress and inter-container flows are never caught;
+		// established flows returned at the top of the chain.
 		out = append(out,
 			"-i docker0 -j RETURN",
 			"-i br-+ -j RETURN")
-		ports := make([]int, 0, len(dockerPorts))
-		for p := range dockerPorts {
-			ports = append(ports, p)
+		out = append(out, denyLines(pp, "ZFW-DOCK-DROP ")...)
+	}
+	out = append(out, "-j RETURN")
+	return out
+}
+
+// dockerUser6Rules mirrors dockerUserRules onto ip6tables. Docker creates an
+// IPv6 DOCKER-USER chain and a FORWARD jump to it whenever its ip6tables
+// support is on, but leaves it empty; ZFW never wrote to it before v1.0.17.
+//
+// On a stock ZimaOS that chain is dead code: Docker publishes no IPv6 DNAT
+// rules and containers get no global IPv6 address, so a v6 connection to a
+// published port terminates on the host's docker-proxy listener and is
+// filtered by ZFW-IN6 in INPUT — it never reaches FORWARD. The moment a user
+// enables Docker IPv6 (`"ipv6": true` + fixed-cidr-v6), containers get GUAs,
+// v6 traffic is forwarded instead of proxied, and an empty DOCKER-USER means
+// every published port is reachable from any IPv6 source. Emit the same
+// port-scoped default-deny there so IPv6 cannot be the way in.
+//
+// 127.0.0.0/8 has no v6 counterpart worth matching (::1 traffic never enters
+// FORWARD) and rs.HostIP is IPv4-only, so both are omitted.
+func dockerUser6Rules(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPorts, extraBypass []string) []string {
+	out := []string{
+		"-m conntrack --ctstate ESTABLISHED,RELATED -j RETURN",
+		"-i tailscale0 -j RETURN",
+		"-i zt+ -j RETURN",
+		"-i wg+ -j RETURN",
+	}
+	for _, iface := range extraBypass {
+		out = append(out, "-i "+iface+" -j RETURN")
+	}
+	all := pp.All()
+	for _, r := range rl {
+		if !r.Enabled {
+			continue
 		}
-		sort.Ints(ports)
-		for _, p := range ports {
-			out = append(out,
-				fmt.Sprintf("-p tcp -m conntrack --ctorigdstport %d --ctstate NEW -j LOG --log-prefix \"ZFW-DOCK-DROP \" --log-level 6", p),
-				fmt.Sprintf("-p tcp -m conntrack --ctorigdstport %d --ctstate NEW -j DROP", p))
-		}
+		out = append(out, dockerLines6(r, all)...)
+	}
+	if rs.DefaultPolicy == "deny" {
+		out = append(out,
+			"-i docker0 -j RETURN",
+			"-i br-+ -j RETURN")
+		out = append(out, denyLines(pp, "ZFW-DOCK6-DROP ")...)
 	}
 	out = append(out, "-j RETURN")
 	return out
