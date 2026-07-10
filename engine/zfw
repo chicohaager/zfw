@@ -30,9 +30,18 @@ PERSIST_UNIT="/etc/systemd/system/zfw.service"
 # Backend: match whichever iptables backend Docker actually uses (legacy on
 # ZimaOS<=1.6.1, nft on >=1.6.2). Hardcoding legacy silently no-ops after the
 # 1.6.2 nft switch — rules land in an unused table. Probe Docker's FORWARD jumps.
+#
+# The backend a binary drives is read from `iptables -V` ("(nf_tables)" /
+# "(legacy)"), never guessed from its name: when the FORWARD probe misses,
+# the fallback yields the plain `iptables` alternatives symlink, which drives
+# nf_tables on 1.6.2 despite having no "nft" in its name. Pattern-matching the
+# name pinned IPT6 to the legacy table, so revert/status operated on IPv6
+# chains that were not the ones in the packet path.
 _zfw_pick_ipt(){ for c in iptables-nft iptables-legacy; do command -v "$c" >/dev/null 2>&1 || continue; if "$c" -S FORWARD 2>/dev/null | grep -qE "DOCKER-USER|DOCKER-FORWARD"; then command -v "$c"; return 0; fi; done; command -v iptables 2>/dev/null || command -v iptables-legacy; }
+_zfw_fam(){ "$1" -V 2>/dev/null | grep -q nf_tables && echo nft || echo legacy; }
 IPT="$(_zfw_pick_ipt)"
-case "$IPT" in *nft*) IPT6="$(command -v ip6tables-nft 2>/dev/null || command -v ip6tables 2>/dev/null || true)";; *) IPT6="$(command -v ip6tables-legacy 2>/dev/null || command -v ip6tables 2>/dev/null || true)";; esac
+IPTFAM="$(_zfw_fam "$IPT")"
+case "$IPTFAM" in nft) IPT6="$(command -v ip6tables-nft 2>/dev/null || command -v ip6tables 2>/dev/null || true)";; *) IPT6="$(command -v ip6tables-legacy 2>/dev/null || command -v ip6tables 2>/dev/null || true)";; esac
 
 log(){ echo "[zfw] $*"; }
 
@@ -106,6 +115,15 @@ revert(){
     $IPT6 -D OUTPUT -j ZFW-OUT6 2>/dev/null || true
     $IPT6 -F ZFW-OUT6 2>/dev/null || true
     $IPT6 -X ZFW-OUT6 2>/dev/null || true
+    # IPv6 DOCKER-USER (v1.0.17): ZFW fills this chain, so revert must empty
+    # it again. Docker owns the chain and its FORWARD jump — we only restore
+    # the stock `-j RETURN` body, exactly as for the IPv4 chain above. Missed
+    # here, a "reverted" firewall would keep silently dropping IPv6 traffic to
+    # published container ports while every status surface reports it is off.
+    if $IPT6 -L DOCKER-USER -n >/dev/null 2>&1; then
+      $IPT6 -F DOCKER-USER 2>/dev/null || true
+      $IPT6 -A DOCKER-USER -j RETURN 2>/dev/null || true
+    fi
   fi
 }
 
@@ -151,7 +169,7 @@ arm_deadman(){
   systemctl reset-failed "${DEADMAN}.service" 2>/dev/null || true
   systemd-run --on-active=120 --unit="$DEADMAN" \
     /bin/bash "${BASH_SOURCE[0]}" _autorevert >/dev/null 2>&1
-  log "DEADMAN ARMED — auto-revert in 120s unless you run:  zfw commit"
+  log "DEADMAN ARMED — in 120s the firewall is REMOVED (all ZFW rules dropped, stock ACCEPT; not a restore of the previous rules) unless you run:  zfw commit"
 }
 
 case "${1:-}" in
@@ -218,7 +236,7 @@ case "${1:-}" in
     log "firewall reverted — all ZFW rules removed, stock state restored, boot-persistence disabled"
     ;;
   _autorevert)
-    log "DEADMAN FIRED — reverting firewall"
+    log "DEADMAN FIRED — Confirm was not run in time; REMOVING the firewall (all ZFW rules dropped, stock ACCEPT). The host is now unprotected — re-apply once you can reach it."
     revert
     ;;
   status)
@@ -228,6 +246,7 @@ case "${1:-}" in
     echo "--- ZFW-FWD-OUT ---"; $IPT -S ZFW-FWD-OUT 2>/dev/null || echo "(not loaded — no outbound docker rules)"
     [ -n "$IPT6" ] && { echo "--- ZFW-IN6 ---"; $IPT6 -S ZFW-IN6 2>/dev/null || echo "(not loaded)"; }
     [ -n "$IPT6" ] && { echo "--- ZFW-OUT6 ---"; $IPT6 -S ZFW-OUT6 2>/dev/null || echo "(not loaded)"; }
+    [ -n "$IPT6" ] && { echo "--- DOCKER-USER (IPv6) ---"; $IPT6 -S DOCKER-USER 2>/dev/null || echo "(absent)"; }
     echo "--- deadman ---";     systemctl is-active "${DEADMAN}.timer" 2>/dev/null || echo "inactive"
     ;;
   *)
