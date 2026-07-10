@@ -1114,10 +1114,19 @@ async function loadEvents() {
 
 /* ---------- conntrack ---------- */
 async function loadConntrack() {
-  const raw = await api('/conntrack');
+  let raw;
+  try {
+    raw = await api('/conntrack');
+  } catch (e) {
+    // "Cannot read the table" and "the table is empty" are different facts.
+    // Show the daemon's reason instead of guessing at a missing module.
+    $('#conntrack-list').innerHTML =
+      `<div class="loading">Could not read the connection table: ${esc(e.message)}</div>`;
+    throw e;
+  }
   const d = Array.isArray(raw) ? raw : [];
   if (!d.length) {
-    $('#conntrack-list').innerHTML = '<div class="loading">No active connections, or the kernel conntrack module is not available on this host.</div>';
+    $('#conntrack-list').innerHTML = '<div class="loading">No active connections on this host.</div>';
     return;
   }
   // GeoIP source-flag enrichment (v1.0.13). Same batch lookup the Events
