@@ -89,7 +89,7 @@ func TestEngineApplyAllowsExpectedHostPort(t *testing.T) {
 			Protocol: "tcp", Zone: "host",
 		}},
 	}
-	out := runInNetns(t, Compile(rs, nil, nil), "ZFW-IN")
+	out := runInNetns(t, Compile(rs, system.PublishedPorts{}, nil), "ZFW-IN")
 	wantLines := []string{
 		"-N ZFW-IN",
 		"-A ZFW-IN -s 192.168.1.0/24",
@@ -119,7 +119,7 @@ func TestEngineApplyPortRangeEmitsContiguousRule(t *testing.T) {
 			Protocol: "tcp", Zone: "host",
 		}},
 	}
-	out := runInNetns(t, Compile(rs, nil, nil), "ZFW-IN")
+	out := runInNetns(t, Compile(rs, system.PublishedPorts{}, nil), "ZFW-IN")
 	if c := strings.Count(out, "--dport 5900:5999"); c != 1 {
 		t.Errorf("expected exactly one '--dport 5900:5999' line, got %d\n%s", c, out)
 	}
@@ -147,7 +147,7 @@ func TestEngineApplyIPv6SourceDoesNotCrashIPv4(t *testing.T) {
 			Protocol: "tcp", Zone: "host",
 		}},
 	}
-	out := runInNetns(t, Compile(rs, nil, nil), "ZFW-IN")
+	out := runInNetns(t, Compile(rs, system.PublishedPorts{}, nil), "ZFW-IN")
 	// Test passes if runInNetns did not Fatalf (no crash) and the IPv4
 	// chain is present without an IPv6 source line.
 	if !strings.Contains(out, "-N ZFW-IN") {
@@ -177,7 +177,7 @@ func TestEngineRevertClearsAllChains(t *testing.T) {
 		// diagnostic when the chain is absent.
 		`$IPT -S ZFW-IN 2>&1 || true`,
 	}, "\n")
-	combined := Compile(rs, nil, nil) + "\n" + revertScript
+	combined := Compile(rs, system.PublishedPorts{}, nil) + "\n" + revertScript
 
 	dir := t.TempDir()
 	scriptPath := filepath.Join(dir, "compiled.sh")

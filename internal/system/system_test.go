@@ -68,9 +68,9 @@ func TestParseDockerPorts(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := parseDockerPorts(c.in)
+			got, _ := parseDockerPorts(c.in)
 			if !reflect.DeepEqual(got, c.want) {
-				t.Errorf("parseDockerPorts(%q)=%v want %v", c.in, got, c.want)
+				t.Errorf("parseDockerPorts(%q) tcp=%v want %v", c.in, got, c.want)
 			}
 		})
 	}

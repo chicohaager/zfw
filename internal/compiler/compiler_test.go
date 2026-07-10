@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chicohaager/zfw/internal/system"
+
 	"github.com/chicohaager/zfw/internal/rules"
 )
 
@@ -24,7 +26,7 @@ func mustNotContain(t *testing.T, haystack, needle string) {
 func TestEmptyDefaultDeny(t *testing.T) {
 	out := Compile(rules.RuleSet{
 		LAN: "192.168.1.0/24", HostIP: "192.168.1.143", DefaultPolicy: "deny",
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT -A ZFW-IN -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT")
 	mustContain(t, out, "$IPT -A ZFW-IN -j DROP")
 	mustContain(t, out, "$IPT -C INPUT -j ZFW-IN")
@@ -42,7 +44,7 @@ func TestEmptyDefaultDeny(t *testing.T) {
 func TestDockerPublishedPortDefaultDeny(t *testing.T) {
 	out := Compile(rules.RuleSet{
 		LAN: "192.168.1.0/24", HostIP: "192.168.1.143", DefaultPolicy: "deny",
-	}, map[int]bool{3050: true}, nil)
+	}, tcpOnly(map[int]bool{3050: true}), nil)
 	mustContain(t, out, `$IPT -A DOCKER-USER -p tcp -m conntrack --ctorigdstport 3050 --ctstate NEW -j DROP`)
 	mustContain(t, out, "$IPT -A DOCKER-USER -i docker0 -j RETURN")
 	mustContain(t, out, "$IPT -A DOCKER-USER -i br-+ -j RETURN")
@@ -61,7 +63,7 @@ func TestDockerAllowPrecedesPortDrop(t *testing.T) {
 			Ports:    rules.Ports{Type: "list", List: []int{3050}},
 			Protocol: "tcp", Zone: "docker",
 		}},
-	}, map[int]bool{3050: true}, nil)
+	}, tcpOnly(map[int]bool{3050: true}), nil)
 	allow := strings.Index(out, "-s 192.168.1.0/24 -p tcp -m conntrack --ctorigdstport 3050 -j RETURN")
 	drop := strings.Index(out, "--ctorigdstport 3050 --ctstate NEW -j DROP")
 	if allow < 0 || drop < 0 || allow > drop {
@@ -78,7 +80,7 @@ func TestHostAllowRule(t *testing.T) {
 			Ports:    rules.Ports{Type: "list", List: []int{22}},
 			Protocol: "tcp", Zone: "host",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -j ACCEPT")
 }
 
@@ -91,7 +93,7 @@ func TestDockerDenyRule(t *testing.T) {
 			Ports:    rules.Ports{Type: "list", List: []int{8888}},
 			Protocol: "tcp", Zone: "docker",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "-m conntrack --ctorigdstport 8888 -j DROP")
 }
 
@@ -104,7 +106,7 @@ func TestZoneAutoSplitsByDockerPorts(t *testing.T) {
 			Ports:    rules.Ports{Type: "list", List: []int{22, 8888}},
 			Protocol: "tcp", Zone: "auto",
 		}},
-	}, map[int]bool{8888: true}, nil)
+	}, tcpOnly(map[int]bool{8888: true}), nil)
 	mustContain(t, out, "$IPT -A ZFW-IN -p tcp --dport 22 -j ACCEPT")
 	mustContain(t, out, "--ctorigdstport 8888 -j RETURN")
 }
@@ -118,14 +120,14 @@ func TestDisabledRuleSkipped(t *testing.T) {
 			Ports:    rules.Ports{Type: "list", List: []int{9999}},
 			Protocol: "tcp", Zone: "host",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustNotContain(t, out, "--dport 9999")
 }
 
 func TestDefaultAllowMode(t *testing.T) {
 	out := Compile(rules.RuleSet{
 		LAN: "192.168.1.0/24", DefaultPolicy: "allow",
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT -A ZFW-IN -j RETURN")
 	mustNotContain(t, out, "$IPT -A ZFW-IN -j DROP\n")
 	mustNotContain(t, out, "$IPT -A DOCKER-USER -s 192.168.1.0/24 -j DROP")
@@ -134,7 +136,7 @@ func TestDefaultAllowMode(t *testing.T) {
 func TestV6Drop(t *testing.T) {
 	out := Compile(rules.RuleSet{
 		DefaultPolicy: "deny", V6Drop: []int{5900, 8717},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT6 -A ZFW-IN6 -p tcp --dport 5900 -j DROP")
 	mustContain(t, out, "$IPT6 -A ZFW-IN6 -p tcp --dport 8717 -j DROP")
 }
@@ -148,7 +150,7 @@ func TestCountryRule(t *testing.T) {
 			Ports:    rules.Ports{Type: "list", List: []int{8096}},
 			Protocol: "tcp", Zone: "host",
 		}},
-	}, nil, map[string]string{"de": "/DATA/zfw/geo/de.ipset"})
+	}, system.PublishedPorts{}, map[string]string{"de": "/DATA/zfw/geo/de.ipset"})
 	mustContain(t, out, "modprobe ip_set ip_set_hash_net xt_set")
 	mustContain(t, out, "ipset restore -exist -f \"/DATA/zfw/geo/de.ipset\"")
 	mustContain(t, out, "-m set --match-set zfw-cc-de src -p tcp --dport 8096 -j ACCEPT")
@@ -163,7 +165,7 @@ func TestCountryDenyMultiple(t *testing.T) {
 			Ports:    rules.Ports{Type: "all"},
 			Protocol: "both", Zone: "host",
 		}},
-	}, nil, map[string]string{"ru": "/x/ru.ipset", "cn": "/x/cn.ipset"})
+	}, system.PublishedPorts{}, map[string]string{"ru": "/x/ru.ipset", "cn": "/x/cn.ipset"})
 	mustContain(t, out, "-m set --match-set zfw-cc-ru src -j DROP")
 	mustContain(t, out, "-m set --match-set zfw-cc-cn src -j DROP")
 }
@@ -182,7 +184,7 @@ func TestHostPortRange(t *testing.T) {
 			Ports:    rules.Ports{Type: "range", From: 5900, To: 5999},
 			Protocol: "tcp", Zone: "host",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT -A ZFW-IN -p tcp --dport 5900:5999 -j DROP")
 	mustNotContain(t, out, "multiport")
 }
@@ -199,7 +201,7 @@ func TestDockerPortRange(t *testing.T) {
 			Ports:    rules.Ports{Type: "range", From: 8000, To: 8100},
 			Protocol: "tcp", Zone: "docker",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "--ctorigdstport 8000:8100 -j RETURN")
 }
 
@@ -209,7 +211,7 @@ func TestDockerPortRange(t *testing.T) {
 func TestIPv6ChainAlwaysEmitted(t *testing.T) {
 	out := Compile(rules.RuleSet{
 		LAN: "192.168.1.0/24", HostIP: "192.168.1.143", DefaultPolicy: "deny",
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT6 -N ZFW-IN6")
 	mustContain(t, out, "$IPT6 -A ZFW-IN6 -p ipv6-icmp -j RETURN")
 	mustContain(t, out, "$IPT6 -A ZFW-IN6 -s fe80::/10 -j RETURN")
@@ -223,7 +225,7 @@ func TestIPv6ChainAlwaysEmitted(t *testing.T) {
 func TestDockerBridgeBypass(t *testing.T) {
 	out := Compile(rules.RuleSet{
 		LAN: "192.168.1.0/24", HostIP: "192.168.1.143", DefaultPolicy: "deny",
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT -A ZFW-IN -i docker0 -j ACCEPT")
 	mustContain(t, out, "$IPT -A ZFW-IN -i br-+ -j ACCEPT")
 }
@@ -243,7 +245,7 @@ func TestIPv6SourceRoutesToIPv6Chain(t *testing.T) {
 			Ports:    rules.Ports{Type: "list", List: []int{22}},
 			Protocol: "tcp", Zone: "host",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT6 -A ZFW-IN6 -s 2001:db8::/64 -p tcp --dport 22 -j RETURN")
 	mustNotContain(t, out, "$IPT -A ZFW-IN -s 2001:db8::/64")
 	// DOCKER-USER must not see the IPv6 source either — DOCKER-USER is IPv4
@@ -263,7 +265,7 @@ func TestIPv6SingleSourceRoutesToIPv6Chain(t *testing.T) {
 			Ports:    rules.Ports{Type: "list", List: []int{443}},
 			Protocol: "tcp", Zone: "host",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT6 -A ZFW-IN6 -s 2001:db8::42 -p tcp --dport 443 -j RETURN")
 	mustNotContain(t, out, "$IPT -A ZFW-IN -s 2001:db8::42")
 }
@@ -282,7 +284,7 @@ func TestIPv4SourceStillRoutesToIPv4Chain(t *testing.T) {
 			Ports:    rules.Ports{Type: "list", List: []int{22}},
 			Protocol: "tcp", Zone: "host",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -j ACCEPT")
 	mustNotContain(t, out, "$IPT6 -A ZFW-IN6 -s 192.168.1.0/24")
 }
@@ -301,7 +303,7 @@ func TestScheduledRuleEmitsTimeClause(t *testing.T) {
 			Protocol: "tcp", Zone: "host",
 			Schedule: &rules.Schedule{From: "08:00", To: "18:00", Days: []string{"mon", "tue", "wed", "thu", "fri"}},
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -m time --timestart 08:00 --timestop 18:00 --kerneltz --weekdays Mon,Tue,Wed,Thu,Fri -j ACCEPT")
 }
 
@@ -318,7 +320,7 @@ func TestScheduledRuleWithoutDaysOmitsWeekdays(t *testing.T) {
 			Protocol: "tcp", Zone: "host",
 			Schedule: &rules.Schedule{From: "22:00", To: "06:00"},
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "-m time --timestart 22:00 --timestop 06:00 --kerneltz -j ACCEPT")
 	mustNotContain(t, out, "--weekdays")
 }
@@ -336,7 +338,7 @@ func TestRuleWithoutScheduleEmitsNoTimeClause(t *testing.T) {
 			Ports:    rules.Ports{Type: "list", List: []int{22}},
 			Protocol: "tcp", Zone: "host",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustNotContain(t, out, "-m time")
 }
 
@@ -355,7 +357,7 @@ func TestLogTrueEmitsLogLineBeforeAction(t *testing.T) {
 			Protocol: "tcp", Zone: "host",
 			Log: true,
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	logLine := `$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -j LOG --log-prefix "ZFW-RULE-rabcd1234 " --log-level 6`
 	actLine := "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -j ACCEPT"
 	mustContain(t, out, logLine)
@@ -382,7 +384,7 @@ func TestRateLimitEmitsRecentClause(t *testing.T) {
 			Protocol: "tcp", Zone: "host",
 			RateLimit: &rules.RateLimit{Conn: 3, Seconds: 1},
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -m recent --set --name zrfeed")
 	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -m recent --update --seconds 1 --hitcount 3 --name zrfeed -j DROP")
 	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -j ACCEPT")
@@ -404,7 +406,7 @@ func TestOutboundHostRuleEmitsZFWOut(t *testing.T) {
 			Zone:      "host",
 			Direction: "outbound",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT -N ZFW-OUT")
 	// R4-6 (v1.0.2): destination is emitted as a strconv.Quote'd literal
 	// for shell-injection defence-in-depth, so the assertion matches the
@@ -431,7 +433,7 @@ func TestOutboundDockerRuleEmitsZFWFwdOut(t *testing.T) {
 			Zone:      "docker",
 			Direction: "outbound",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT -N ZFW-FWD-OUT")
 	// R4-6: quoted destination — see TestOutboundHostRuleEmitsZFWOut.
 	mustContain(t, out, `$IPT -A ZFW-FWD-OUT -d "169.254.169.254" -j DROP`)
@@ -451,7 +453,7 @@ func TestNoOutboundRulesEmitsNoOutboundChains(t *testing.T) {
 			Ports:    rules.Ports{Type: "list", List: []int{22}},
 			Protocol: "tcp", Zone: "host",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustNotContain(t, out, "ZFW-OUT")
 	mustNotContain(t, out, "ZFW-FWD-OUT")
 }
@@ -471,7 +473,7 @@ func TestOutboundChainTerminatesInReturn(t *testing.T) {
 			Protocol: "both", Zone: "host",
 			Direction: "outbound",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT -A ZFW-OUT -j RETURN")
 	// No DROP on the chain as catch-all (only the per-rule DROP above).
 	mustNotContain(t, out, "$IPT -A ZFW-OUT -j DROP\n")
@@ -483,7 +485,7 @@ func TestOutboundChainTerminatesInReturn(t *testing.T) {
 // wg-clients / wg-mesh is pre-authenticated by the protocol, so
 // default-deny should not catch them.
 func TestWireGuardWildcardBypassed(t *testing.T) {
-	out := Compile(rules.RuleSet{DefaultPolicy: "deny"}, nil, nil)
+	out := Compile(rules.RuleSet{DefaultPolicy: "deny"}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT -A ZFW-IN -i wg+ -j ACCEPT")
 	mustContain(t, out, "$IPT -A DOCKER-USER -i wg+ -j RETURN")
 	mustContain(t, out, "$IPT6 -A ZFW-IN6 -i wg+ -j RETURN")
@@ -495,7 +497,7 @@ func TestWireGuardWildcardBypassed(t *testing.T) {
 // VPN interface ("vpn0", "wg-priv+", …) does not require forking
 // the daemon.
 func TestExtraBypassIfacesEmittedInAllChains(t *testing.T) {
-	out := Compile(rules.RuleSet{DefaultPolicy: "deny"}, nil, nil, "vpn0", "mesh+")
+	out := Compile(rules.RuleSet{DefaultPolicy: "deny"}, system.PublishedPorts{}, nil, "vpn0", "mesh+")
 	mustContain(t, out, "$IPT -A ZFW-IN -i vpn0 -j ACCEPT")
 	mustContain(t, out, "$IPT -A ZFW-IN -i mesh+ -j ACCEPT")
 	mustContain(t, out, "$IPT -A DOCKER-USER -i vpn0 -j RETURN")
@@ -530,7 +532,7 @@ func TestOutboundDestQuotedAsDefenseInDepth(t *testing.T) {
 				Direction: "outbound",
 			},
 		},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, `$IPT -A ZFW-OUT -d "203.0.113.42" -j DROP`)
 	mustContain(t, out, `$IPT6 -A ZFW-OUT6 -d "2001:db8::1" -j DROP`)
 }
@@ -549,7 +551,7 @@ func TestNoLogNoRateLimitNoExtraLines(t *testing.T) {
 			Ports:    rules.Ports{Type: "list", List: []int{22}},
 			Protocol: "tcp", Zone: "host",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT -A ZFW-IN -s 192.168.1.0/24 -p tcp --dport 22 -j ACCEPT")
 	mustNotContain(t, out, "ZFW-RULE-rplain")
 	mustNotContain(t, out, "--name zrplain")
@@ -576,7 +578,7 @@ func TestMultiportChunksAt15Ports(t *testing.T) {
 			Ports:    rules.Ports{Type: "list", List: ports},
 			Protocol: "tcp", Zone: "host",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	// First chunk: ports 1000-1014 (15), second chunk: 1015-1019 (5).
 	mustContain(t, out, "--dports 1000,1001,1002,1003,1004,1005,1006,1007,1008,1009,1010,1011,1012,1013,1014 ")
 	mustContain(t, out, "--dports 1015,1016,1017,1018,1019 ")
@@ -607,7 +609,7 @@ func TestMultiportChunkOfOneFallsBackToDport(t *testing.T) {
 			Ports:    rules.Ports{Type: "list", List: ports},
 			Protocol: "tcp", Zone: "host",
 		}},
-	}, nil, nil)
+	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "--dport 2015 ")
 	mustNotContain(t, out, "--dports 2015")
 }
