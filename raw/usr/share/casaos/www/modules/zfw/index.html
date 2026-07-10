@@ -7,7 +7,7 @@
   <meta name="robots" content="noindex">
   <meta http-equiv="cache-control" content="no-cache, no-store, must-revalidate">
   <title>ZFW Firewall</title>
-  <link rel="stylesheet" href="./styles.css?v=1.0.18">
+  <link rel="stylesheet" href="./styles.css?v=1.0.19">
 </head>
 <body>
   <header>
@@ -109,8 +109,9 @@
         Live kernel connection-tracking table &mdash; what flows are
         currently open on the host (TCP <b>ESTABLISHED</b>, UDP
         replied, etc.). Original direction only (initiator → target),
-        capped at 500 entries per refresh. Empty on hosts where the
-        kernel conntrack module is unavailable.
+        capped at 500 entries per refresh. Read over <b>ctnetlink</b>;
+        if the table cannot be read, the reason is shown here rather
+        than an empty list.
       </p>
       <div id="conntrack-list"><div class="loading">Loading&hellip;</div></div>
     </section>
@@ -260,6 +261,6 @@
     </div>
   </div>
 
-  <script src="./app.js?v=1.0.18"></script>
+  <script src="./app.js?v=1.0.19"></script>
 </body>
 </html>
