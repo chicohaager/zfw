@@ -152,6 +152,32 @@ time to update an install in place.
 Open it from the ZimaOS dashboard (tile **ZFW Firewall**), or directly at
 `http://<host>/modules/zfw/index.html`.
 
+### Install from Docker Hub
+
+If you would rather not copy a tarball around, the same release is published as
+an **installer image** ([`chicohaager/zfw`](https://hub.docker.com/r/chicohaager/zfw),
+multi-arch: amd64 + arm64). Run it on the ZimaOS host:
+
+```sh
+docker run --rm --privileged --pid=host -v /:/host chicohaager/zfw:1.0.20
+```
+
+**The container is a delivery vehicle, not a runtime.** It stages the payload and
+runs the very same `install.sh` inside the *host's* namespaces, then exits — ZFW
+ends up on the host as a systemd-sysext module, exactly as with the tarball.
+
+That distinction is not cosmetic. ZFW's engine arms the Safe-Apply dead-man with
+`systemd-run` and manages boot-persistence with `systemctl`. A ZFW running
+*inside* a container would have no host systemd to do either with, so the one
+promise the whole design rests on — **a bad rule can never lock you out** —
+would silently not exist. So we do not ship a runtime container, and you should
+be suspicious of any firewall that does.
+
+The flags are what they look like: `--privileged` and `--pid=host` let the
+installer enter the host's namespaces, `-v /:/host` is the filesystem it installs
+into. Uninstalling is `zfw revert` on the host, then removing
+`/var/lib/extensions/zfw.raw`.
+
 ## Configuration
 
 The allowlist is edited from the UI, or directly in `/DATA/zfw/allowlist.conf`:
