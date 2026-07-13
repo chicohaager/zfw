@@ -67,9 +67,16 @@ var bruteForceTargets = map[int]bool{
 func Read(ctx context.Context, since time.Time, limit int) ([]Event, error) {
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	// The " UTC" suffix is load-bearing: journalctl parses a bare timestamp in
+	// the host's LOCAL timezone, so handing it a UTC-formatted string silently
+	// shifts the window by the UTC offset. West of UTC that puts `since` in the
+	// future and the Events tab comes up permanently empty while the kernel is
+	// actively logging drops; east of UTC the window is quietly wider than
+	// asked for. Verified against journalctl: the same timestamp with and
+	// without the suffix returns different event sets on a UTC+2 host.
 	cmd := exec.CommandContext(cctx, "journalctl",
 		"-k", "--no-pager", "-o", "json",
-		"--since", since.UTC().Format("2006-01-02 15:04:05"))
+		"--since", since.UTC().Format("2006-01-02 15:04:05")+" UTC")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err

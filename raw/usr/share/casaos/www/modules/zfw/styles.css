@@ -8,7 +8,17 @@
  * carry raw hex values — change the token, all components follow.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Fira+Sans:wght@400;500;600;700&family=Fira+Code:wght@400;500&display=swap');
+/*
+ * No webfont import. A firewall admin page must not call out to a third party
+ * on every load: it leaked the admin's IP and User-Agent to Google from a
+ * self-hosted security appliance, added a remote-CSS supply-chain surface to
+ * the one page that controls the host's packet filter, and on an isolated or
+ * offline LAN — a normal place to run this — the render-blocking @import
+ * stalled first paint until it timed out. The --font-sans / --font-mono stacks
+ * below already fall back to Fira when the host has it and to the platform UI
+ * font otherwise, so the page renders self-contained, exactly like the rest of
+ * the sysext.
+ */
 
 :root {
   /* surfaces */

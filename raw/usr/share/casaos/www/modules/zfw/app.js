@@ -140,7 +140,7 @@ function renderRules() {
       ? ` <span class="note-pill" title="${esc(r.notes)}">note</span>`
       : '';
     const schedBadge = r.schedule
-      ? ` <span class="sched-pill" title="Active ${esc(r.schedule.from)}–${esc(r.schedule.to)}${r.schedule.days && r.schedule.days.length ? ' on ' + r.schedule.days.join(',') : ' every day'}">${esc(r.schedule.from)}–${esc(r.schedule.to)}</span>`
+      ? ` <span class="sched-pill" title="Active ${esc(r.schedule.from)}–${esc(r.schedule.to)}${r.schedule.days && r.schedule.days.length ? ' on ' + esc(r.schedule.days.join(',')) : ' every day'}">${esc(r.schedule.from)}–${esc(r.schedule.to)}</span>`
       : '';
     const dirBadge = r.direction === 'outbound'
       ? ' <span class="dir-pill dir-out" title="Outbound — applies to traffic FROM this host / its containers">&rarr;</span>'
@@ -1091,7 +1091,11 @@ async function loadEvents() {
   const rows = recent.map(e => {
     const t = new Date(e.time);
     const ts = t.toLocaleTimeString() + ' ' + t.toLocaleDateString();
-    const [cls, lbl] = zoneMap[e.zone] || ['badge-local', e.zone];
+    // The fallback branch puts a server-supplied zone straight into the DOM.
+    // parseDropLine constrains zone to host|host6|docker today, so this is not
+    // reachable — but every other sink in this file escapes, and frontend safety
+    // must not quietly depend on a backend validator staying strict.
+    const [cls, lbl] = zoneMap[e.zone] || ['badge-local', esc(e.zone || '?')];
     const pills = (e.threats || []).map(tag =>
       `<span class="threat-pill threat-${esc(tag)}" title="Classifier flagged this event with ${esc(tag)}">${esc(threatLabel[tag] || tag)}</span>`
     ).join('');

@@ -22,6 +22,7 @@ import (
 	"github.com/chicohaager/zfw/internal/firewall"
 	"github.com/chicohaager/zfw/internal/peers"
 	"github.com/chicohaager/zfw/internal/rules"
+	"github.com/chicohaager/zfw/internal/system"
 	"github.com/chicohaager/zfw/internal/update"
 )
 
@@ -92,7 +93,18 @@ func newTestServer(t *testing.T, fw *fakeFirewall) (*Server, string) {
 	compiledPath := filepath.Join(dir, "compiled.sh")
 	geoDir := filepath.Join(dir, "geo")
 	historyPath := filepath.Join(dir, "audit-history.json")
-	return NewServer(fw, rulesPath, compiledPath, geoDir, historyPath, nil, "", "", nil, nil), rulesPath
+	s := NewServer(fw, rulesPath, compiledPath, geoDir, historyPath, nil, "", "", nil, nil)
+	// Pin the docker inventory to a healthy stub. Left on the real probes the
+	// suite would shell out to the build host's docker and change behaviour with
+	// it — a box whose docker daemon is down would now (correctly) refuse to
+	// compile a deny policy, failing tests that have nothing to do with docker.
+	s.dockerPorts = func(context.Context) (system.PublishedPorts, error) {
+		return system.PublishedPorts{TCP: map[int]bool{8096: true}, UDP: map[int]bool{}}, nil
+	}
+	s.dockerContainers = func(context.Context) ([]system.DockerContainer, error) {
+		return nil, nil
+	}
+	return s, rulesPath
 }
 
 // do drives a single request through the Server's mux and returns the
@@ -1061,5 +1073,94 @@ func TestConntrackFailsLoudNotEmpty(t *testing.T) {
 	}
 	if !strings.Contains(msg, "ctnetlink") {
 		t.Errorf("error = %q, want it to name the source that failed", msg)
+	}
+}
+
+// TestDenyPolicyRefusesUnreadableDockerInventory reproduces the field report
+// against v1.0.19: `iptables-nft -S DOCKER-USER | grep -c ctorigdstport` came
+// back 0 — the chain held nothing but its bypasses and a trailing RETURN —
+// while the apply reported success and the dashboard stayed green.
+//
+// The path: the DOCKER-USER default-deny is emitted once per *published* port,
+// so it is only as good as the port inventory. When the daemon cannot read that
+// inventory (docker CLI missing from its PATH, socket permission denied, daemon
+// restarting) the probe used to swallow the error and hand back an empty set,
+// which the compiler faithfully rendered as "no ports to deny". docker-proxy
+// running on the host proves nothing here — what matters is what *zfwd* can see.
+//
+// An unreadable inventory must now fail the compile instead of producing an
+// open forward path under a deny policy.
+func TestDenyPolicyRefusesUnreadableDockerInventory(t *testing.T) {
+	s, rulesPath := newTestServer(t, &fakeFirewall{})
+	seedRules(t, rulesPath) // default_policy: deny
+	s.dockerPorts = func(context.Context) (system.PublishedPorts, error) {
+		err := errors.New("docker ps: permission denied while trying to connect to the Docker daemon socket")
+		return system.PublishedPorts{TCP: map[int]bool{}, UDP: map[int]bool{}, SourceErr: err}, err
+	}
+
+	err := s.Recompile(context.Background())
+	if err == nil {
+		t.Fatal("Recompile returned nil with an unreadable docker inventory under a deny " +
+			"policy — that is the bug: DOCKER-USER gets compiled without a single " +
+			"per-port deny rule and the apply still reports success")
+	}
+	if !strings.Contains(err.Error(), "DOCKER-USER") {
+		t.Errorf("error %q does not name the chain it is protecting — the operator "+
+			"has to be able to tell what was refused and why", err)
+	}
+	if _, statErr := os.Stat(s.compiledPath); statErr == nil {
+		t.Error("compiled.sh was written despite the refusal — an unscoped DOCKER-USER " +
+			"must never reach the engine")
+	}
+}
+
+// TestDenyPolicyCompilesWhenDockerIsSimplyEmpty is the other half of the guard:
+// "docker is readable and nothing is published" is a legitimate, fully-protected
+// host (there is nothing to deny), not an error. The predicate is "inventory
+// unreadable", never "inventory empty" — conflating the two would break every
+// host whose containers publish no ports.
+func TestDenyPolicyCompilesWhenDockerIsSimplyEmpty(t *testing.T) {
+	s, rulesPath := newTestServer(t, &fakeFirewall{})
+	seedRules(t, rulesPath) // default_policy: deny
+	s.dockerPorts = func(context.Context) (system.PublishedPorts, error) {
+		return system.PublishedPorts{TCP: map[int]bool{}, UDP: map[int]bool{}}, nil
+	}
+
+	if err := s.Recompile(context.Background()); err != nil {
+		t.Fatalf("Recompile = %v, want nil: a readable docker with no published ports "+
+			"is a normal host, not a failure", err)
+	}
+	if _, err := os.Stat(s.compiledPath); err != nil {
+		t.Errorf("compiled.sh not written: %v", err)
+	}
+}
+
+// TestDenyPolicyEmitsPerPortDeny pins the payoff: with a readable inventory the
+// compiled DOCKER-USER chain actually carries the per-port conntrack deny rules
+// the operator greps for.
+func TestDenyPolicyEmitsPerPortDeny(t *testing.T) {
+	s, rulesPath := newTestServer(t, &fakeFirewall{})
+	seedRules(t, rulesPath) // default_policy: deny
+	s.dockerPorts = func(context.Context) (system.PublishedPorts, error) {
+		return system.PublishedPorts{
+			TCP: map[int]bool{8096: true},
+			UDP: map[int]bool{1900: true},
+		}, nil
+	}
+
+	if err := s.Recompile(context.Background()); err != nil {
+		t.Fatalf("Recompile: %v", err)
+	}
+	out, err := os.ReadFile(s.compiledPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"-p tcp -m conntrack --ctorigdstport 8096 --ctstate NEW -j DROP",
+		"-p udp -m conntrack --ctorigdstport 1900 --ctstate NEW -j DROP",
+	} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("compiled.sh missing %q", want)
+		}
 	}
 }
