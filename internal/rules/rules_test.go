@@ -452,3 +452,48 @@ func TestValidateRejectsIPv6LANAndHostIP(t *testing.T) {
 		t.Errorf("Validate rejected valid IPv4 LAN/host_ip: %v", err)
 	}
 }
+
+// TestScheduleRejectsSignedHHMM: strconv.Atoi accepts a leading sign, so
+// "+9:30" and "-0:15" are five characters with a colon at index 2 that parse to
+// in-range numbers — they used to pass Validate. They then compiled into
+// `-m time --timestart +9:30`, which iptables rejects; because the compiled
+// script runs under `set -eu` that aborts the apply mid-chain, the engine
+// reverts, and the host ends up with no firewall at all — from a rule set the
+// UI had just called valid. The time fields must be plain digits.
+func TestScheduleRejectsSignedHHMM(t *testing.T) {
+	for _, bad := range []string{"+9:30", "-0:15", "1+:30", "09:+5"} {
+		rs := RuleSet{
+			DefaultPolicy: "deny",
+			Rules: []Rule{{
+				ID: "r1", Name: "scheduled", Action: "allow",
+				Protocol: "tcp", Zone: "host",
+				Source:   Source{Type: "any"},
+				Ports:    Ports{Type: "list", List: []int{22}},
+				Schedule: &Schedule{From: bad, To: "18:00"},
+			}},
+		}
+		if err := Validate(rs); err == nil {
+			t.Errorf("Validate accepted schedule from=%q — it compiles to an "+
+				"iptables --timestart that aborts the apply and takes the whole "+
+				"firewall down with it", bad)
+		}
+	}
+}
+
+// TestScheduleAcceptsPlainHHMM is the guard against over-tightening: the normal
+// form must still validate.
+func TestScheduleAcceptsPlainHHMM(t *testing.T) {
+	rs := RuleSet{
+		DefaultPolicy: "deny",
+		Rules: []Rule{{
+			ID: "r1", Name: "scheduled", Action: "allow",
+			Protocol: "tcp", Zone: "host",
+			Source:   Source{Type: "any"},
+			Ports:    Ports{Type: "list", List: []int{22}},
+			Schedule: &Schedule{From: "08:00", To: "18:30", Days: []string{"mon"}},
+		}},
+	}
+	if err := Validate(rs); err != nil {
+		t.Errorf("Validate rejected a valid schedule: %v", err)
+	}
+}

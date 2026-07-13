@@ -25,6 +25,12 @@ on:
   pull_request:
     branches: [main, master]
 
+# Least privilege by default. Without this the workflow inherits the
+# repository-default GITHUB_TOKEN scope, which on older repos is write-all —
+# far more than any job here needs. Every job below only reads the checkout.
+permissions:
+  contents: read
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -56,7 +62,7 @@ jobs:
       - name: govulncheck
         run: |
           cp docs/openapi.yaml internal/handlers/openapi.yaml
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
           "$(go env GOPATH)/bin/govulncheck" ./...
 
   test:
@@ -78,8 +84,12 @@ jobs:
         with: { go-version: '1.22' }
       - name: Install squashfs-tools
         run: sudo apt-get update && sudo apt-get install -y squashfs-tools
+      # Pinned, not @latest: this runs inside the job that produces the published
+      # release tarball, so a compromised upstream release of the SBOM tool would
+      # execute right next to the artifact it is meant to describe. Bump
+      # deliberately.
       - name: Install cyclonedx-gomod (SBOM)
-        run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest
+        run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.10.0
       - name: First build
         run: bash build.sh
       - name: Capture first tarball SHA

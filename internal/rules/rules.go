@@ -658,9 +658,22 @@ func validateSchedule(s Schedule) error {
 }
 
 // isHHMM reports whether s is a "HH:MM" string in 24-hour wall-clock form.
+//
+// The digit check is explicit because strconv.Atoi accepts a leading sign:
+// "+9:30" and "-0:15" are five characters with a colon at index 2 and parse to
+// in-range numbers, so they used to validate. They then compiled straight into
+// `-m time --timestart +9:30`, which iptables rejects — and since the compiled
+// script runs under `set -eu` that aborts the apply mid-chain, leaving the
+// engine to revert and the host with no firewall, from a rule set the UI had
+// called valid.
 func isHHMM(s string) bool {
 	if len(s) != 5 || s[2] != ':' {
 		return false
+	}
+	for _, i := range [4]int{0, 1, 3, 4} {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
 	}
 	h, err1 := strconv.Atoi(s[:2])
 	m, err2 := strconv.Atoi(s[3:])

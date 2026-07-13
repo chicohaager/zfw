@@ -122,10 +122,45 @@ func New(bin, conf string) *Manager {
 	}
 }
 
+// run executes a short-lived probe (iptables -S, systemctl is-active, …). The
+// 25 s cap is a backstop against a wedged binary; these all answer in
+// milliseconds. Engine invocations do NOT go through here — see runEngine.
 func run(ctx context.Context, name string, args ...string) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(cctx, name, args...).CombinedOutput()
+	return string(out), err
+}
+
+// runEngine executes the privileged engine script. It differs from run in two
+// ways that matter, both learned from the apply path:
+//
+// First, it honours the caller's deadline instead of imposing its own 25 s.
+// An apply is not a probe: it modprobes, restores several country ipsets and
+// inserts hundreds of rules, which on a slow ARM host can exceed 25 s. The
+// handler already bounds it (90 s), and the daemon's startup recompile bounds
+// its own — a second, tighter, invisible cap only turned a slow apply into a
+// reported failure.
+//
+// Second, it runs the engine in its own process group and kills the whole group
+// on cancellation. exec.CommandContext kills just the process it started, so a
+// timeout used to leave the engine's `bash compiled.sh` child running: it kept
+// mutating iptables while the handler reported the apply had failed, the
+// engine's own revert-on-failure never ran, and in safe mode the still-armed
+// dead-man later tore down a firewall the operator had been told did not apply.
+// State and report have to agree.
+func runEngine(ctx context.Context, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		// Negative pid = the whole process group: the engine and every child it
+		// spawned (bash compiled.sh, iptables, ipset).
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	// Give the group a moment to die before we stop waiting on its output pipes,
+	// so a child that ignores the signal cannot pin this goroutine forever.
+	cmd.WaitDelay = 5 * time.Second
+	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
@@ -277,18 +312,28 @@ func validate(c Config) error {
 	return nil
 }
 
-// Apply runs the engine. When safe is true a 120s dead-man auto-revert is armed.
-func (m *Manager) Apply(ctx context.Context, safe bool) (string, error) {
-	// The engine script is executed as root — refuse to run it unless it is
-	// owned by root and not group/world-writable (ZFW-S8).
+// engine runs the engine script with the given verb after re-checking that it
+// is still safe to execute as root. Every exec of m.Bin goes through here:
+// the ZFW-S8 guard is a property of running that file as root, not of the
+// "apply" verb, and Commit/Revert exec exactly the same file with exactly the
+// same privileges. Checking only in Apply left the guard trivially bypassable
+// — an actor able to write under /DATA (a container with the usual /DATA bind
+// mount) could swap the engine for their own script, watch Apply refuse it,
+// and have it run as root the moment the operator clicked Confirm or Revert.
+func (m *Manager) engine(ctx context.Context, args ...string) (string, error) {
 	if err := secureRootFile(m.Bin); err != nil {
 		return "", fmt.Errorf("engine script unsafe: %w", err)
 	}
+	return runEngine(ctx, m.Bin, args...)
+}
+
+// Apply runs the engine. When safe is true a 120s dead-man auto-revert is armed.
+func (m *Manager) Apply(ctx context.Context, safe bool) (string, error) {
 	args := []string{"apply"}
 	if safe {
 		args = append(args, "--safe")
 	}
-	return run(ctx, m.Bin, args...)
+	return m.engine(ctx, args...)
 }
 
 // secureRootFile verifies path is owned by root and not group/world-writable
@@ -309,10 +354,10 @@ func secureRootFile(path string) error {
 
 // Commit cancels an armed dead-man timer so the rules persist.
 func (m *Manager) Commit(ctx context.Context) (string, error) {
-	return run(ctx, m.Bin, "commit")
+	return m.engine(ctx, "commit")
 }
 
 // Revert removes all ZFW rules and restores the stock state.
 func (m *Manager) Revert(ctx context.Context) (string, error) {
-	return run(ctx, m.Bin, "revert")
+	return m.engine(ctx, "revert")
 }

@@ -162,9 +162,19 @@ func seedRulesIfMissing(cfg config.Config, fw *firewall.Manager) {
 	if _, err := os.Stat(cfg.RulesFile); !os.IsNotExist(err) {
 		return
 	}
+	// Seeding is a one-shot: it no-ops once rules.json exists. A rule set seeded
+	// from a half-read inventory would therefore bake missing docker ports in
+	// permanently. Skip the seed instead and retry on the next start, when the
+	// docker daemon is likely up.
+	if _, perr := system.DockerPorts(context.Background()); perr != nil {
+		slog.Error("docker published-port inventory unreadable — not seeding rules.json "+
+			"(a rule set seeded now would permanently miss published ports); retrying on next start",
+			"err", perr)
+		return
+	}
 	if tier, lerr := fw.LoadConfig(); lerr == nil {
 		mctx, mcancel := context.WithTimeout(context.Background(), 20*time.Second)
-		dp := system.DockerPorts(mctx)
+		dp, _ := system.DockerPorts(mctx)
 		mcancel()
 		all := dp.All()
 		ports := make([]int, 0, len(all))
@@ -179,9 +189,22 @@ func seedRulesIfMissing(cfg config.Config, fw *firewall.Manager) {
 		}
 		return
 	}
-	lan, hostIP := system.DetectLAN()
+	// Same one-shot logic as the docker guard above, for the other half of the
+	// seed. When the default route is not up yet — the boot race internal/watchdog
+	// exists for — DetectLAN returns the 192.168.1.0/24 *placeholder*, not this
+	// host's LAN. Seeding that would write allow rules for a network the operator
+	// does not own into every rule, permanently; the first Safe-Apply would then
+	// drop their real LAN. Skip and retry on the next start instead.
+	lan, hostIP, detected := system.DetectLANOK()
+	if !detected {
+		slog.Error("LAN detection failed (no default route yet?) — not seeding rules.json "+
+			"(a seed now would bake the 192.168.1.0/24 placeholder into every rule); "+
+			"retrying on next start",
+			"placeholder", lan)
+		return
+	}
 	dctx, dcancel := context.WithTimeout(context.Background(), 10*time.Second)
-	dp := system.DockerPorts(dctx)
+	dp, _ := system.DockerPorts(dctx)
 	dcancel()
 	rs := rules.Defaults(lan, hostIP, dp)
 	if serr := rules.Save(cfg.RulesFile, rs); serr != nil {

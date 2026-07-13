@@ -5,6 +5,8 @@ package system
 import (
 	"bufio"
 	"context"
+	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -73,25 +75,43 @@ func DetectLAN6() (lan6CIDR, hostIP6 string) {
 // and any handler reaching DetectLAN was otherwise inconsistent — one
 // payed the kernel-route-resolution cost, the other did not.
 func DetectLAN() (lanCIDR, hostIP string) {
-	lanMu.Lock()
-	defer lanMu.Unlock()
-	if !lanCached.IsZero() && time.Since(lanCached) < lanTTL {
-		return lanCacheLAN, lanCacheIP
-	}
-	lan, ip := detectLANUncached()
-	lanCacheLAN, lanCacheIP, lanCached = lan, ip, time.Now()
+	lan, ip, _ := DetectLANOK()
 	return lan, ip
 }
 
-func detectLANUncached() (lanCIDR, hostIP string) {
+// DetectLANOK is DetectLAN with the detection outcome kept. ok is true only
+// when the CIDR was actually read off the interface that owns the default
+// route; when it is false the returned CIDR is the 192.168.1.0/24 *placeholder*,
+// not a fact about this host.
+//
+// The distinction matters to exactly one caller, and it matters permanently
+// there: seedRulesIfMissing writes the detected LAN into rules.json, and that
+// seed is a one-shot — it never runs again once the file exists. A daemon that
+// starts before the default route is up (the very boot race internal/watchdog
+// exists for) would otherwise bake "192.168.1.0/24" into every allow rule on a
+// host whose LAN is 10.0.0.0/24, and the first Safe-Apply would then drop the
+// operator's own network. Callers that only need a cosmetic pre-fill (the rule
+// templates) can keep using DetectLAN and its placeholder.
+func DetectLANOK() (lanCIDR, hostIP string, ok bool) {
+	lanMu.Lock()
+	defer lanMu.Unlock()
+	if !lanCached.IsZero() && time.Since(lanCached) < lanTTL {
+		return lanCacheLAN, lanCacheIP, lanCacheOK
+	}
+	lan, ip, detected := detectLANUncached()
+	lanCacheLAN, lanCacheIP, lanCacheOK, lanCached = lan, ip, detected, time.Now()
+	return lan, ip, detected
+}
+
+func detectLANUncached() (lanCIDR, hostIP string, ok bool) {
 	lanCIDR = "192.168.1.0/24"
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
 		return
 	}
 	defer conn.Close()
-	local, ok := conn.LocalAddr().(*net.UDPAddr)
-	if !ok {
+	local, addrOK := conn.LocalAddr().(*net.UDPAddr)
+	if !addrOK {
 		return
 	}
 	hostIP = local.IP.String()
@@ -105,12 +125,14 @@ func detectLANUncached() (lanCIDR, hostIP string) {
 			continue
 		}
 		for _, addr := range addrs {
-			ipnet, ok := addr.(*net.IPNet)
-			if !ok || !ipnet.IP.Equal(local.IP) {
+			ipnet, isNet := addr.(*net.IPNet)
+			if !isNet || !ipnet.IP.Equal(local.IP) {
 				continue
 			}
+			// Only here is the CIDR a fact rather than a guess: it came off the
+			// interface holding the default-route source address.
 			if _, network, err := net.ParseCIDR(ipnet.String()); err == nil {
-				lanCIDR = network.String()
+				lanCIDR, ok = network.String(), true
 			}
 			return
 		}
@@ -126,15 +148,29 @@ var (
 	lanCached   time.Time
 	lanCacheLAN string
 	lanCacheIP  string
+	lanCacheOK  bool
 )
 
 const lanTTL = 60 * time.Second
 
 func run(ctx context.Context, name string, args ...string) string {
+	out, _ := runErr(ctx, name, args...)
+	return out
+}
+
+// runErr is run() with the error kept. Version probes are happy to treat a
+// missing binary as "unknown"; the Docker inventory is not — an unreadable
+// source there means "I don't know what is published", which is the opposite
+// of "nothing is published". Keeping the error is what lets the two apart.
+func runErr(ctx context.Context, name string, args ...string) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	out, _ := exec.CommandContext(cctx, name, args...).CombinedOutput()
-	return string(out)
+	out, err := exec.CommandContext(cctx, name, args...).CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("%s %s: %w: %s",
+			name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
 }
 
 // Socket is one listening TCP port.
@@ -171,8 +207,13 @@ func Listening(ctx context.Context) ([]Socket, error) {
 		if err != nil {
 			continue
 		}
+		// The whole 127.0.0.0/8 block is loopback, not just 127.0.0.1 —
+		// systemd-resolved's 127.0.0.53:53 is the everyday case. Matching the
+		// two literal strings reported it with scope "all", and the Exposure
+		// tab then listed a loopback-only service as LAN-reachable, which is
+		// the one thing that tab exists to get right.
 		scope := "all"
-		if host == "127.0.0.1" || host == "::1" {
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
 			scope = "local"
 		}
 		proc := ""
@@ -219,6 +260,13 @@ type DockerContainer struct {
 type PublishedPorts struct {
 	TCP map[int]bool
 	UDP map[int]bool
+	// SourceErr is set when an inventory source could not be read (see
+	// DockerPorts). The port set is then a floor, not the truth: it may be
+	// empty simply because nobody could be asked. Any caller that scopes a
+	// default-deny by this inventory must refuse to compile while this is
+	// non-nil rather than emit an empty — that is, allow-everything —
+	// DOCKER-USER chain.
+	SourceErr error
 }
 
 // Has reports whether a port is published on any protocol. Zone resolution
@@ -243,12 +291,17 @@ func (p PublishedPorts) All() map[int]bool {
 	return m
 }
 
-// DockerContainers returns the live container inventory. Empty slice on
-// error (test envs without docker, daemon down, etc.) — the daemon
-// degrades to using saved Rule.Ports for bound rules.
-func DockerContainers(ctx context.Context) []DockerContainer {
-	out := run(ctx, "docker", "ps",
+// DockerContainers returns the live container inventory. A failing `docker ps`
+// (CLI missing, daemon down, socket unreachable) returns the error alongside an
+// empty slice: callers that only need bound-rule ports may ignore it and fall
+// back to saved Rule.Ports, but callers that gate a default-deny on the result
+// must not read the empty slice as "no containers are running" — see DockerPorts.
+func DockerContainers(ctx context.Context) ([]DockerContainer, error) {
+	out, err := runErr(ctx, "docker", "ps",
 		"--format", "{{.ID}}\t{{.Names}}\t{{.Image}}\t{{.Ports}}")
+	if err != nil {
+		return nil, err
+	}
 	var cs []DockerContainer
 	for _, line := range strings.Split(out, "\n") {
 		line = strings.TrimSpace(line)
@@ -272,7 +325,7 @@ func DockerContainers(ctx context.Context) []DockerContainer {
 			PortsUDP: udp,
 		})
 	}
-	return cs
+	return cs, nil
 }
 
 // parseDockerPorts extracts host-side published port numbers from the
@@ -352,16 +405,39 @@ func parseDockerPorts(s string) (tcp, udp []int) {
 //
 // The docker-proxy inventory contributes TCP only — it is read from `ss -tln`,
 // which lists TCP listeners. `docker ps` supplies both protocols.
-func DockerPorts(ctx context.Context) PublishedPorts {
+//
+// The returned error is the difference between "nothing is published" and "I
+// could not find out". `docker ps` is the authoritative source — it lists every
+// published mapping including UDP, with or without the userland proxy — so if it
+// fails the inventory is incomplete no matter what the socket scan turned up,
+// and the error is set. A caller that scopes a default-deny by this inventory
+// must refuse to compile on a non-nil error instead of emitting an empty (i.e.
+// allow-everything) DOCKER-USER chain. Pre-v1.0.20 the error was swallowed here
+// and the empty inventory read as "nothing to protect": on a host where the
+// daemon could not run `docker ps`, ZFW compiled a DOCKER-USER chain with no
+// per-port deny rules and still reported a green apply.
+func DockerPorts(ctx context.Context) (PublishedPorts, error) {
 	pp := PublishedPorts{TCP: map[int]bool{}, UDP: map[int]bool{}}
-	if socks, err := Listening(ctx); err == nil {
-		for _, s := range socks {
-			if s.Proc == "docker-proxy" {
-				pp.TCP[s.Port] = true
-			}
+	var errs []error
+
+	// Socket scan: TCP-only, and empty by design when Docker runs with
+	// "userland-proxy": false. A failure here is not fatal on its own —
+	// `docker ps` below covers the same ground and more.
+	socks, ssErr := Listening(ctx)
+	if ssErr != nil {
+		errs = append(errs, fmt.Errorf("docker-proxy socket scan: %w", ssErr))
+	}
+	for _, s := range socks {
+		if s.Proc == "docker-proxy" {
+			pp.TCP[s.Port] = true
 		}
 	}
-	for _, c := range DockerContainers(ctx) {
+
+	cs, dockerErr := DockerContainers(ctx)
+	if dockerErr != nil {
+		errs = append(errs, fmt.Errorf("docker ps: %w", dockerErr))
+	}
+	for _, c := range cs {
 		for _, p := range c.Ports {
 			pp.TCP[p] = true
 		}
@@ -369,7 +445,22 @@ func DockerPorts(ctx context.Context) PublishedPorts {
 			pp.UDP[p] = true
 		}
 	}
-	return pp
+
+	// Only `docker ps` failing makes the inventory untrustworthy. A failed
+	// socket scan on top of a working `docker ps` costs nothing: every port
+	// docker-proxy listens on is a port `docker ps` already reported.
+	if dockerErr == nil {
+		return pp, nil
+	}
+	// No docker CLI *and* no docker-proxy listener: this host does not run
+	// Docker at all. There is no DOCKER-USER chain to scope, so an empty
+	// inventory is the truth here rather than a gap — report it as such so a
+	// docker-less host (dev box, CI) is not blocked from applying host rules.
+	if errors.Is(dockerErr, exec.ErrNotFound) && len(pp.TCP) == 0 {
+		return pp, nil
+	}
+	pp.SourceErr = errors.Join(errs...)
+	return pp, pp.SourceErr
 }
 
 // Component is one software component with a version and a risk note.
@@ -514,9 +605,26 @@ func kernelVulnerable(kern string) bool {
 	return maj == 6 && min == 12 && patch > 0 && patch < 86
 }
 
+// dockerOld reports whether a Docker Engine version is older than 29.3.1, the
+// fix version named in the finding's own note.
+//
+// It used to test `maj < 29`, which contradicted that note: 29.0.0 through
+// 29.3.0 were rendered with level "ok" directly beside text saying they were
+// affected. The Versions tab exists to tell an operator whether to patch, so a
+// component that disagrees with its own annotation is worse than no annotation.
+// The comparison now matches the stated fix version.
 func dockerOld(ver string) bool {
-	maj, _, _ := parseKernel(ver) // reuse the major.minor.patch splitter
-	return maj > 0 && maj < 29
+	maj, min, patch := parseKernel(ver) // reuse the major.minor.patch splitter
+	if maj <= 0 {
+		return false // unparseable / absent — do not claim it is vulnerable
+	}
+	if maj != 29 {
+		return maj < 29
+	}
+	if min != 3 {
+		return min < 3
+	}
+	return patch < 1
 }
 
 func parseKernel(s string) (maj, min, patch int) {

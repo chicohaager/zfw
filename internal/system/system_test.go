@@ -176,7 +176,14 @@ func TestKernelVulnerable(t *testing.T) {
 	}
 }
 
-// TestDockerOld pins the docker cp escapes detection: < 29 is old.
+// TestDockerOld pins the docker cp escapes detection against the fix version
+// this project names in both places it states the finding: the Versions note on
+// the component itself ("docker cp escapes < 29.3.1") and audit finding M7.
+//
+// The check used to test only `maj < 29`, so 29.0.0 through 29.3.0 were rendered
+// with level "ok" directly beside text saying they were affected. A component
+// that contradicts its own annotation is worse than no annotation — the tab
+// exists to answer exactly one question: "must I patch?".
 func TestDockerOld(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -184,8 +191,10 @@ func TestDockerOld(t *testing.T) {
 	}{
 		{"27.5.1", true},
 		{"28.99.99", true},
-		{"29.0.0", false},
-		{"29.3.1", false},
+		{"29.0.0", true},
+		{"29.3.0", true},
+		{"29.3.1", false}, // the fix version itself is not affected
+		{"29.4.0", false},
 		{"30.0.0", false},
 		{"", false}, // unknown — don't trip the warning
 	}

@@ -57,9 +57,21 @@ say "module : $RAW"
 say "engine : $ENGINE"
 
 # --- verify the module checksum when the .sha256 is shipped alongside ---
+#
+# This detects corruption, not tampering: the .sha256 travels inside the same
+# tarball as the .raw, so anyone who can rewrite one can rewrite the other. The
+# authenticity anchor is the tarball SHA pinned in mod-store/zfw.yaml plus the
+# HTTPS download (cosign signing is deliberately not wired up yet — see
+# .github/workflows/ci.yml). Say so when the check is skipped, rather than
+# leaving the operator to assume it ran.
 if [ -f "$RAW.sha256" ] && command -v sha256sum >/dev/null 2>&1; then
 	( cd "$(dirname "$RAW")" && sha256sum -c "$(basename "$RAW").sha256" >/dev/null ) \
-		&& say "checksum OK" || die "checksum mismatch on $RAW"
+		&& say "checksum OK (integrity only — verifies the download, not the publisher)" \
+		|| die "checksum mismatch on $RAW"
+elif [ ! -f "$RAW.sha256" ]; then
+	say "WARNING: no $RAW.sha256 alongside the module — integrity NOT verified"
+else
+	say "WARNING: sha256sum not available — integrity NOT verified"
 fi
 
 # --- 1. sysext module (atomic replace) ---
@@ -70,6 +82,17 @@ say "module installed -> $EXT_DIR/$NAME.raw"
 
 # --- 2. firewall engine: root-owned and root-only — it is executed as root,
 #        so a non-root-writable path here would be a privilege-escalation hole.
+#
+# Refuse a symlinked engine dir before chown/chmod touch it. /DATA is writable by
+# any container that bind-mounts it — the standard ZimaOS app pattern — so a
+# malicious one can plant /DATA/zfw -> /etc ahead of a (re)install. mkdir -p is
+# happy with an existing symlink, and chown/chmod then follow it: the script
+# would chmod 0700 /etc as root, locking every non-root process out of the
+# system's config, and drop the engine at /etc/zfw. Test the path itself, not
+# what it points at.
+if [ -L "$ENGINE_DIR" ]; then
+	die "$ENGINE_DIR is a symlink -> $(readlink "$ENGINE_DIR"). Refusing: this script chowns and chmods it as root. Remove the symlink and re-run."
+fi
 mkdir -p "$ENGINE_DIR"
 chown root:root "$ENGINE_DIR"
 chmod 0700 "$ENGINE_DIR"
