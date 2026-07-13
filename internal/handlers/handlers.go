@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -79,6 +80,12 @@ type Server struct {
 	// without restarting the daemon. nil = the endpoint reports the
 	// feature unavailable. v1.0.13.
 	logLevel *slog.LevelVar
+	// dockerPorts / dockerContainers are the live-inventory probes, injected
+	// so the compile guards can be tested against an unreachable docker daemon
+	// without one (and so the suite never depends on the build host's docker).
+	// Default to the real system probes in NewServer.
+	dockerPorts      func(context.Context) (system.PublishedPorts, error)
+	dockerContainers func(context.Context) ([]system.DockerContainer, error)
 }
 
 // SetLogLevel wires the daemon's runtime log-level control into the
@@ -114,7 +121,9 @@ func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string,
 		mutateRL: newKeyedLimiter(1, 10, 3, 30),
 		// Per client burst 60 / 5/s (see readRL field doc); aggregate
 		// burst 180 / 15/s as the shared ceiling.
-		readRL: newKeyedLimiter(5, 60, 15, 180),
+		readRL:           newKeyedLimiter(5, 60, 15, 180),
+		dockerPorts:      system.DockerPorts,
+		dockerContainers: system.DockerContainers,
 	}
 }
 
@@ -163,8 +172,19 @@ func (s *Server) Recompile(ctx context.Context) error {
 // prefetch covers the about-to-be-saved country codes; passing nil
 // reads the current rules.json from disk for the geo plan.
 func (s *Server) prefetchForCompile(ctx context.Context, rsHint *rules.RuleSet) ([]system.DockerContainer, system.PublishedPorts, error) {
-	containers := system.DockerContainers(ctx)
-	dockerPorts := system.DockerPorts(ctx)
+	// An unreadable docker inventory is carried through as
+	// PublishedPorts.SourceErr rather than swallowed into an empty port set:
+	// recompileLocked refuses to scope a default-deny by a port set it does not
+	// actually know. It is not fatal here, because a host with no Docker at all
+	// must still be able to compile its host rules.
+	containers, cErr := s.dockerContainers(ctx)
+	if cErr != nil {
+		slog.Warn("docker container inventory unreadable — container-bound rules fall back to their saved ports", "err", cErr)
+	}
+	dockerPorts, ppErr := s.dockerPorts(ctx)
+	if ppErr != nil {
+		slog.Error("docker published-port inventory unreadable", "err", ppErr)
+	}
 
 	var rs rules.RuleSet
 	if rsHint != nil {
@@ -223,11 +243,19 @@ func (s *Server) recompileLocked(containers []system.DockerContainer, dockerPort
 		byID := make(map[string][]int, len(containers))
 		byName := make(map[string][]int, len(containers))
 		for _, c := range containers {
+			// Both protocols: the substituted port list must cover everything
+			// the container actually publishes. Keyed on c.Ports alone (TCP),
+			// a rule bound to a container publishing e.g. 8181/tcp + 5514/udp
+			// had its ports rewritten to just [8181] — so the UDP port lost its
+			// allow rule and was silently dropped by the default-deny, on a rule
+			// the UI promises "follows its container". Same UDP blind spot that
+			// v1.0.17 closed in the port inventory, one layer up.
+			ports := containerPorts(c)
 			if c.ID != "" {
-				byID[c.ID] = c.Ports
+				byID[c.ID] = ports
 			}
 			if c.Name != "" {
-				byName[c.Name] = c.Ports
+				byName[c.Name] = ports
 			}
 		}
 		// CQ-3: warn if a name doubles as some other container's ID
@@ -257,13 +285,26 @@ func (s *Server) recompileLocked(containers []system.DockerContainer, dockerPort
 		}
 	}
 	// The DOCKER-USER default-deny is emitted once per published port, so an
-	// empty port inventory silently degrades "deny" to "allow everything that
-	// reaches a container". That must never pass as a normal apply: say so
-	// loudly rather than shipping a green tile over an open forward path.
-	if rs.DefaultPolicy == "deny" && !dockerPorts.Any() && len(containers) > 0 {
-		slog.Error("docker port inventory empty while containers are running — "+
-			"DOCKER-USER default-deny cannot be scoped and will not be emitted",
-			"containers", len(containers))
+	// unknown port inventory silently degrades "deny" to "allow everything that
+	// reaches a container": no per-port deny rule is emitted, the chain is left
+	// with nothing but its bypasses and a trailing RETURN, and the dashboard
+	// still goes green. Refuse the compile instead — a firewall that cannot see
+	// what it must protect has to say so, not guess "nothing".
+	//
+	// The predicate is "inventory unreadable", NOT "inventory empty". Those are
+	// different hosts: `docker ps` succeeding with zero published ports is a
+	// legitimate, fully-protected state (nothing to deny), while `docker ps`
+	// failing means the port set is unknown. Until v1.0.20 this guard read
+	// `!dockerPorts.Any() && len(containers) > 0` and only logged — so it stayed
+	// silent in the one case that matters (a broken docker CLI returns *no*
+	// containers, so `len(containers) > 0` was false), fired spuriously on hosts
+	// whose containers publish no ports, and let the apply report success either
+	// way. That is the "0 ctorigdstport in DOCKER-USER while the apply is green"
+	// report from the field.
+	if rs.DefaultPolicy == "deny" && dockerPorts.SourceErr != nil {
+		return fmt.Errorf("docker published-port inventory unreadable — refusing to compile a "+
+			"deny policy that would leave DOCKER-USER unscoped (every published container port "+
+			"would stay reachable from any source): %w", dockerPorts.SourceErr)
 	}
 	geoFiles := map[string]string{}
 	for _, r := range rs.Rules {
@@ -275,8 +316,7 @@ func (s *Server) recompileLocked(containers []system.DockerContainer, dockerPort
 		}
 	}
 	script := compiler.Compile(rs, dockerPorts, geoFiles, s.extraBypass...)
-	// 0600: the compiled script is executed as root — keep it owner-only.
-	if err := os.WriteFile(s.compiledPath, []byte(script), 0o600); err != nil {
+	if err := writeScriptAtomic(s.compiledPath, script); err != nil {
 		return err
 	}
 	// Also write the atomic-apply variant (B4) alongside compiled.sh so
@@ -284,10 +324,46 @@ func (s *Server) recompileLocked(containers []system.DockerContainer, dockerPort
 	// Dormant until the engine opts in; a write failure here must not
 	// fail the apply since the default bash path already succeeded.
 	restoreScript := compiler.CompileRestoreScript(rs, dockerPorts, geoFiles, s.extraBypass...)
-	if err := os.WriteFile(restorePathFor(s.compiledPath), []byte(restoreScript), 0o600); err != nil {
+	if err := writeScriptAtomic(restorePathFor(s.compiledPath), restoreScript); err != nil {
 		slog.Warn("write compiled.restore.sh (non-fatal — bash path is default)", "err", err)
 	}
 	return nil
+}
+
+// writeScriptAtomic publishes a compiled script via tmp+rename so a reader
+// never observes a half-written file. s.mu serialises the daemon's own
+// compiles, but not the engine: zfw.service is PartOf=docker.service, so it
+// re-runs `bash compiled.sh` on every dockerd restart — at the same moment
+// dockerwatch sees that docker event and recompiles. A plain os.WriteFile
+// truncates the very inode bash is reading, and a mid-line truncation is a
+// syntax error: under `set -eu` the engine aborts, reverts, and the host is
+// left with no firewall after a routine docker restart. rename(2) is atomic
+// within a filesystem, so the engine sees either the old script or the new one.
+//
+// The tmp file is created 0600 (the script is executed as root, so it must
+// never be group/world-writable — the engine's own secure_file check would
+// refuse it, and rightly so) and lives in the same directory as the target so
+// the rename stays within one filesystem.
+func writeScriptAtomic(path, content string) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, filepath.Base(path)+".tmp*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // no-op once the rename below succeeded
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.WriteString(content); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // restorePathFor derives the atomic-apply script path that sits next to
@@ -337,7 +413,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/events", s.rateLimitedGet(s.events))
 	mux.HandleFunc("/api/conntrack", s.rateLimitedGet(s.conntrack))
 	mux.HandleFunc("/api/debug", s.rateLimited(s.debugLevel))
-	mux.HandleFunc("/api/system/containers", s.systemContainers)
+	// system/containers forks `docker ps` per call — same flood surface as the
+	// R3-5 endpoints above, and the only shell-out GET that was missing the
+	// read limiter. Uncapped, an authenticated session could loop it and fork
+	// a docker CLI process per request until the daemon is CPU-pinned.
+	mux.HandleFunc("/api/system/containers", s.rateLimitedGet(s.systemContainers))
 	mux.HandleFunc("/api/openapi.json", s.openapi)
 	mux.HandleFunc("/api/openapi.yaml", s.openapi)
 	return mux
@@ -503,7 +583,14 @@ func (s *Server) rulesDefaults(w http.ResponseWriter, r *http.Request) {
 	} else {
 		lan, hostIP = system.DetectLAN()
 	}
-	dp := system.DockerPorts(ctx)
+	// "Recommended defaults" derives its per-port docker rules from the live
+	// inventory, so a half-read inventory would silently produce a half-covered
+	// rule set. Fail rather than hand the operator defaults that miss ports.
+	dp, err := s.dockerPorts(ctx)
+	if err != nil {
+		fail(w, http.StatusInternalServerError, "docker published-port inventory: "+err.Error())
+		return
+	}
 	rs := rules.Defaults(lan, hostIP, dp)
 	// CQ-2: mirror the rules POST contract — Validate before Save,
 	// Recompile after, fire the webhook.
@@ -772,7 +859,14 @@ func (s *Server) systemContainers(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := reqCtx()
 	defer cancel()
-	cs := system.DockerContainers(ctx)
+	cs, err := s.dockerContainers(ctx)
+	if err != nil {
+		// An unreachable docker daemon is not an empty container list: showing
+		// "no containers detected" here would invite the operator to bind rules
+		// to nothing. Say what actually broke.
+		fail(w, http.StatusInternalServerError, "docker inventory: "+err.Error())
+		return
+	}
 	if cs == nil {
 		cs = []system.DockerContainer{}
 	}
@@ -1034,6 +1128,34 @@ func toSet(xs []string) map[string]bool {
 		m[x] = true
 	}
 	return m
+}
+
+// containerPorts is the full published-port set of one container: TCP and UDP
+// unioned, sorted and de-duplicated. A rule bound to a container is rewritten
+// to this list, so it has to be everything the container publishes — a
+// TCP-only list silently strips the container's UDP ports out of its own allow
+// rule. The rule's Protocol field decides which protocols the ports are
+// emitted for; this is the port *set*, not a protocol decision.
+func containerPorts(c system.DockerContainer) []int {
+	if len(c.PortsUDP) == 0 {
+		return c.Ports // already sorted + de-duplicated by system.DockerContainers
+	}
+	seen := make(map[int]bool, len(c.Ports)+len(c.PortsUDP))
+	out := make([]int, 0, len(c.Ports)+len(c.PortsUDP))
+	for _, p := range c.Ports {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	for _, p := range c.PortsUDP {
+		if !seen[p] {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	sort.Ints(out)
+	return out
 }
 
 // portsEqual reports whether two int slices represent the same set of

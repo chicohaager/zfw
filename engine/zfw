@@ -90,6 +90,19 @@ secure_file(){
   return 0
 }
 
+# disable_persistence removes the boot-restore unit. It belongs to every path
+# that tears the firewall down, not just the `revert` verb: the dead-man and the
+# failed-apply rollback used to flush the live chains and stop there, leaving
+# zfw.service enabled and pointing at the very compiled.sh they had just rolled
+# back. Because that unit is PartOf=docker.service, the rejected ruleset came
+# back on the next reboot *or the next dockerd restart* — this time with no
+# dead-man armed. A safety net that reinstates what it caught is not a net.
+disable_persistence(){
+  systemctl disable zfw.service >/dev/null 2>&1 || true
+  rm -f "$PERSIST_UNIT" 2>/dev/null || true
+  systemctl daemon-reload 2>/dev/null || true
+}
+
 revert(){
   $IPT -D INPUT -j ZFW-IN 2>/dev/null || true
   $IPT -F ZFW-IN 2>/dev/null || true
@@ -167,8 +180,22 @@ UNIT
 arm_deadman(){
   systemctl stop "${DEADMAN}.timer" 2>/dev/null || true
   systemctl reset-failed "${DEADMAN}.service" 2>/dev/null || true
-  systemd-run --on-active=120 --unit="$DEADMAN" \
-    /bin/bash "${BASH_SOURCE[0]}" _autorevert >/dev/null 2>&1
+  # The exit status of systemd-run is the whole point of --safe: if arming
+  # fails (systemd unavailable, a unit-name collision reset-failed did not
+  # clear, read-only /run) the apply below runs with NO rollback timer. This
+  # used to be discarded and "DEADMAN ARMED" logged unconditionally, so
+  # Safe-Apply could lock the operator out while telling them they were
+  # covered. Fail closed instead: no net, no apply.
+  #
+  # SELF_DIR is absolute (it is resolved via cd+pwd), so the transient unit
+  # gets an absolute path even when the engine was invoked as ./zfw — a
+  # relative BASH_SOURCE would be resolved against / inside the unit and the
+  # auto-revert would never run.
+  if ! err="$(systemd-run --on-active=120 --unit="$DEADMAN" \
+      /bin/bash "$SELF_DIR/$(basename "${BASH_SOURCE[0]}")" _autorevert 2>&1)"; then
+    echo "[zfw] ERROR: could not arm the dead-man timer — refusing to Safe-Apply without a rollback net: $err" >&2
+    return 1
+  fi
   log "DEADMAN ARMED — in 120s the firewall is REMOVED (all ZFW rules dropped, stock ACCEPT; not a restore of the previous rules) unless you run:  zfw commit"
 }
 
@@ -185,15 +212,20 @@ case "${1:-}" in
     # path additionally --tests each table first, but the dead-man stays
     # the active safety net at apply time). Arming it afterwards never
     # runs once the apply has already died.
-    if [ -n "$safe" ]; then arm_deadman; fi
+    if [ -n "$safe" ]; then arm_deadman || exit 1; fi
     if ! bash "$SCRIPT"; then
       echo "[zfw] ERROR: applying compiled ruleset failed — reverting partial state" >&2
       revert
+      # The ruleset that just failed is still the one compiled.sh holds, and a
+      # previous `commit` may have left zfw.service enabled to replay it at
+      # boot / on the next docker restart. Tear the persistence down with the
+      # rules, or the rollback is undone by the next reboot.
+      disable_persistence
       if [ -n "$safe" ]; then
         systemctl stop "${DEADMAN}.timer" 2>/dev/null || true
         systemctl reset-failed "${DEADMAN}.service" 2>/dev/null || true
       fi
-      log "partial state reverted — firewall is OFF (stock ACCEPT); fix rules and re-apply"
+      log "partial state reverted — firewall is OFF (stock ACCEPT), boot-persistence disabled; fix rules and re-apply"
       exit 1
     fi
     log "firewall applied"
@@ -230,14 +262,13 @@ case "${1:-}" in
     revert
     # Disable + remove the boot-restore unit so a fresh boot returns to the
     # stock state. daemon-reload after the rm so systemd forgets the unit.
-    systemctl disable zfw.service >/dev/null 2>&1 || true
-    rm -f "$PERSIST_UNIT" 2>/dev/null || true
-    systemctl daemon-reload 2>/dev/null || true
+    disable_persistence
     log "firewall reverted — all ZFW rules removed, stock state restored, boot-persistence disabled"
     ;;
   _autorevert)
-    log "DEADMAN FIRED — Confirm was not run in time; REMOVING the firewall (all ZFW rules dropped, stock ACCEPT). The host is now unprotected — re-apply once you can reach it."
+    log "DEADMAN FIRED — Confirm was not run in time; REMOVING the firewall (all ZFW rules dropped, stock ACCEPT) and disabling boot-persistence so the rolled-back ruleset cannot return on the next reboot or docker restart. The host is now unprotected — re-apply once you can reach it."
     revert
+    disable_persistence
     ;;
   status)
     echo "--- ZFW-IN ---";      $IPT -S ZFW-IN 2>/dev/null || echo "(not loaded)"

@@ -26,6 +26,8 @@ import (
 	"net/url"
 	"os"
 	"time"
+
+	"github.com/chicohaager/zfw/internal/httputil"
 )
 
 // Peer is one configured follower.
@@ -137,6 +139,17 @@ func pushOne(ctx context.Context, client *http.Client, p Peer, body []byte) Resu
 // DefaultClient returns an http.Client with a 30s timeout — long enough
 // for a slow Recompile on the receiver, short enough that a hung peer
 // doesn't pin the leader's push request indefinitely.
+//
+// It carries the same SafeCheckRedirect as the update/notify/geo clients
+// (R4-7); this was the one outbound client that missed it. The push body is a
+// *bytes.Reader, so Go supplies GetBody and re-sends the payload on a 307/308
+// — a compromised or MITM'd follower could answer the rules push with a
+// redirect to a private/loopback URL and have the root daemon POST the rule
+// set wherever it pointed. SafeCheckRedirect refuses public→private hops and
+// https→http downgrades, and fails closed when the target will not resolve.
 func DefaultClient() *http.Client {
-	return &http.Client{Timeout: 30 * time.Second}
+	return &http.Client{
+		Timeout:       30 * time.Second,
+		CheckRedirect: httputil.SafeCheckRedirect(5),
+	}
 }

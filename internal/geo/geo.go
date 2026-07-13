@@ -153,11 +153,59 @@ func (m *Manager) fetch(ctx context.Context, cc string) error {
 	if len(body) == 0 {
 		return fmt.Errorf("empty response")
 	}
-	tmp := m.zonePath(cc) + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+	// A 200 is not proof that we were handed a zone file. A captive portal or a
+	// CDN error page answers 200 with HTML, and this rename publishes it over a
+	// perfectly good cached zone — after which renderIpset finds no CIDRs and
+	// every apply involving that country fails until a clean re-download. The
+	// "network error is tolerated, the cache survives" design above is defeated
+	// by a *successful-looking* fetch. Require the payload to actually contain
+	// CIDRs before it is allowed to replace the cache.
+	if n := countCIDRs(body); n == 0 {
+		return fmt.Errorf("response contains no CIDR entries (%d bytes) — refusing to "+
+			"overwrite the cached zone with it", len(body))
+	}
+	// Unique tmp file per fetch: Ensure runs outside the recompile mutex
+	// (prefetchForCompile is explicitly documented as safe to call without
+	// s.mu), so a dockerwatch recompile and a rules POST can fetch the same
+	// country concurrently. Both used the one fixed "<cc>.zone.tmp" path and
+	// interleaved their writes into it, and the rename then published a torn
+	// file. renderIpset skips unparseable lines silently, so the result was a
+	// quietly-shrunken blocklist with a green apply — cached for 30 days.
+	f, err := os.CreateTemp(m.dir, cc+".zone.*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // no-op once the rename below succeeded
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(body); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, m.zonePath(cc))
+}
+
+// countCIDRs reports how many lines of a fetched zone file parse as CIDRs. It
+// mirrors renderIpset's own parser, which is the consumer that decides whether
+// the file is usable at all.
+func countCIDRs(body []byte) int {
+	n := 0
+	for _, line := range strings.Split(string(body), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(line); err == nil {
+			n++
+		}
+	}
+	return n
 }
 
 // Lookup returns the lowercase ISO-3166 alpha-2 country code for ip, or

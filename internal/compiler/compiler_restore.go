@@ -310,6 +310,25 @@ func dockerUserRules(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPorts
 	for _, iface := range extraBypass {
 		out = append(out, "-i "+iface+" -j RETURN")
 	}
+	// Container-originated traffic leaves through the docker bridges, so it is
+	// returned BEFORE any user rule is consulted — egress and inter-container
+	// flows are none of DOCKER-USER's business here. DOCKER-USER hangs off
+	// FORWARD and `--ctorigdstport` carries no direction: for a container's own
+	// outbound HTTPS the original destination port is 443, so a user deny rule
+	// "any → 443, zone docker" (which the UI presents as an *inbound* rule —
+	// outbound has had its own Direction since v0.5.6) matched that egress
+	// connection too and killed it. A deny with ports=all went further and cut
+	// every container's network access.
+	//
+	// These two lines used to sit *after* the rule loop, and only under
+	// default_policy=deny — while the comment there claimed they were "returned
+	// first", which is exactly what they were not. Inbound filtering is
+	// unaffected by hoisting them: LAN traffic to a published port arrives on
+	// the physical interface, not on docker0/br-+, so it still falls through to
+	// the user rules and the per-port default-deny below.
+	out = append(out,
+		"-i docker0 -j RETURN",
+		"-i br-+ -j RETURN")
 	all := pp.All()
 	for _, r := range rl {
 		if !r.Enabled {
@@ -318,12 +337,6 @@ func dockerUserRules(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPorts
 		out = append(out, dockerLines(r, all)...)
 	}
 	if rs.DefaultPolicy == "deny" {
-		// Container-originated traffic is returned first via the docker
-		// bridges, so egress and inter-container flows are never caught;
-		// established flows returned at the top of the chain.
-		out = append(out,
-			"-i docker0 -j RETURN",
-			"-i br-+ -j RETURN")
 		out = append(out, denyLines(pp, "ZFW-DOCK-DROP ")...)
 	}
 	out = append(out, "-j RETURN")

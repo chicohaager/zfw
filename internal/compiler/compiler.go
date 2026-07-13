@@ -375,13 +375,21 @@ func emitOutboundChains(b *strings.Builder, rl []rules.Rule) {
 // no peer source ("any") emit only the port match. Empty result if
 // the rule is misshaped for outbound.
 //
-// Round-4 R4-6 (closed v1.0.2): the destination address is emitted via
-// strconv.Quote as defence-in-depth. rules.Validate already canonicalises
-// ip/range values via net.ParseIP / net.ParseCIDR (so only digits, dots,
-// colons and slashes reach here today), but quoting the literal keeps
-// a future Validate relaxation from silently re-opening a shell-injection
-// vector into the root-run compiled.sh. Mirrors the R4-1 LOG --log-prefix
-// strconv.Quote fix.
+// The destination address is emitted via strconv.Quote. Be precise about what
+// that does and does not buy, because the comment here used to claim more than
+// it delivered: strconv.Quote produces a *Go* double-quoted literal, and inside
+// bash double quotes `$`, backticks and `\` stay live. It is therefore NOT a
+// backstop against shell injection — a value of `$(reboot)` would survive it
+// intact into the root-run compiled.sh. It cannot be swapped for POSIX
+// single-quoting either: these exact strings are also emitted into the
+// iptables-restore document (see compiler_restore.go), whose parser understands
+// double quotes and backslash escapes but not single quotes.
+//
+// So the load-bearing control is rules.Validate, and only rules.Validate: ip and
+// range values are canonicalised through net.ParseIP / net.ParseCIDR, which
+// cannot return a string containing a shell metacharacter. TestNoShellMetaChar
+// CanReachTheCompiler pins that invariant so a future relaxation of Validate
+// fails a test instead of quietly opening a root-code-execution path.
 func outboundLines(r rules.Rule) []string {
 	target := "ACCEPT"
 	if r.Action == "deny" {
