@@ -86,6 +86,15 @@ type Server struct {
 	// Default to the real system probes in NewServer.
 	dockerPorts      func(context.Context) (system.PublishedPorts, error)
 	dockerContainers func(context.Context) ([]system.DockerContainer, error)
+
+	// lastCompiled is the (binding-resolved) rule set the most recent
+	// recompileLocked produced; lastApplied is the one the last successful
+	// apply pushed live. Their diff (rules.NewlyBlocked) drives the post-apply
+	// conntrack flush, so a port the operator just switched from allow to deny
+	// has its established connections torn down at once instead of surviving on
+	// the ESTABLISHED,RELATED fast-path. Both are guarded by mu. v1.0.21.
+	lastCompiled rules.RuleSet
+	lastApplied  rules.RuleSet
 }
 
 // SetLogLevel wires the daemon's runtime log-level control into the
@@ -327,6 +336,10 @@ func (s *Server) recompileLocked(containers []system.DockerContainer, dockerPort
 	if err := writeScriptAtomic(restorePathFor(s.compiledPath), restoreScript); err != nil {
 		slog.Warn("write compiled.restore.sh (non-fatal — bash path is default)", "err", err)
 	}
+	// Record the binding-resolved rule set that backs the script just written,
+	// so a subsequent apply can diff it against what is currently live and flush
+	// conntrack for the ports that transitioned to denied (v1.0.21).
+	s.lastCompiled = rs
 	return nil
 }
 
@@ -685,7 +698,37 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.emitEvent("firewall.applied", map[string]any{"safe": body.Safe})
+
+	// v1.0.21: tear down conntrack for the ports this apply switched from
+	// allowed to denied. Without it, a connection already established to such a
+	// port survives on the ESTABLISHED,RELATED fast-path until it closes on its
+	// own, so "Apply" looks like it did nothing to a live connection and the
+	// operator had to disable/enable the whole firewall to make the block bite.
+	// Best-effort: the rules are already live, so a flush failure is logged, not
+	// surfaced as an apply failure. First apply after boot has an empty
+	// lastApplied and so flushes nothing (every port reads as already-denied).
+	if targets := blockedPortKeys(rules.NewlyBlocked(s.lastApplied, s.lastCompiled)); len(targets) > 0 {
+		if n, ferr := conntrack.Flush(ctx, targets); ferr != nil {
+			slog.Warn("conntrack flush after apply (non-fatal)", "err", ferr, "ports", len(targets))
+		} else if n > 0 {
+			slog.Info("flushed conntrack for newly-blocked ports", "deleted", n, "ports", len(targets))
+		}
+	}
+	s.lastApplied = s.lastCompiled
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "applied", "output": out})
+}
+
+// blockedPortKeys adapts the rules-layer diff to the conntrack flush API.
+func blockedPortKeys(pps []rules.PortProto) []conntrack.PortKey {
+	if len(pps) == 0 {
+		return nil
+	}
+	out := make([]conntrack.PortKey, len(pps))
+	for i, pp := range pps {
+		out[i] = conntrack.PortKey{Proto: pp.Proto, Port: pp.Port}
+	}
+	return out
 }
 
 func (s *Server) commit(w http.ResponseWriter, r *http.Request) {
