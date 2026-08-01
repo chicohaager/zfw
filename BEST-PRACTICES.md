@@ -161,6 +161,37 @@ ZimaOS is dual-stacked. A rule that closes a port on IPv4 does nothing for
 IPv6. Use the **V6-Drop** list to block sensitive ports on IPv6 as well —
 especially anything you have just locked down on IPv4.
 
+**The other direction bites harder, and it is easy to miss (v1.0.22).** A rule
+whose source is an IPv4 address or range — which is what every rule in the
+*Recommended defaults* set is, scoped to your LAN — **cannot apply to IPv6 at
+all**. There is no way to express `192.168.1.0/24` as an ip6tables source
+match. With the default policy on Deny, that means the IPv6 input chain
+(`ZFW-IN6`) carries no allow rule and drops every inbound IPv6 connection,
+while the rule table shows nothing but green "Allow" rows.
+
+You will not notice this from the LAN. Testing at home almost always goes over
+IPv4, and IPv4 is fine. It shows up the first time someone reaches the host
+**from the internet by domain name**: if the name has an `AAAA` record, the
+client connects over IPv6 and is dropped — the service looks dead from outside
+and healthy from inside.
+
+Since v1.0.22 the Rules tab marks such rules **IPv4 only**, and warns with a
+banner when a deny-by-default set has no IPv6 coverage at all on a host that
+really does have a public IPv6 address. What to do about it:
+
+- For a service that must be reachable **from the internet**, give it a rule
+  with source **Any** (or an explicit IPv6 range). One such rule for the port
+  is enough; keep the LAN-scoped rule alongside it if you like.
+- For a service that must **not** be reachable from the internet, leave it
+  LAN-scoped — the IPv6 drop is then doing exactly what you want, and the
+  badge is telling you so rather than hiding it.
+- To see what is actually being dropped, look for the log prefix
+  `ZFW-IN6-DROP` in the Events tab or in `journalctl -k`.
+
+Note also that a host reachable only through Tailscale or ZeroTier does not
+count as having public IPv6 — those hand out ULA addresses (`fd…`), which ZFW
+bypasses by interface anyway, and the banner deliberately stays quiet for them.
+
 ---
 
 ## 9. First-time setup walkthrough
@@ -241,6 +272,8 @@ only one.
 - [ ] Every `LAN` row in the Exposure tab reviewed and justified
 - [ ] No-auth services (dashboards, noVNC, VM VNC console) blocked or secured
 - [ ] IPv6 ports closed via V6-Drop where the IPv4 port is closed
+- [ ] No **IPv4 only** badge on a rule for a service that must be reachable
+      from the internet (§8) — and no IPv6 coverage banner on the Rules tab
 - [ ] Change applied with **Safe-Apply**, verified on a fresh connection,
       then **Confirm**ed
 - [ ] Audit-tab findings driven towards *fixed*
