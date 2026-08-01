@@ -12,7 +12,7 @@ info:
 
     Non-GET requests share a token-bucket rate-limit (burst 10, sustained
     1/s); excessive traffic is answered with `429 Too Many Requests`.
-  version: "1.0.9"
+  version: "1.0.22"
   license:
     name: See repository
 servers:
@@ -252,7 +252,57 @@ paths:
           description: Must be "1". Acknowledges that the saved rules will be replaced by the recommended defaults.
       responses:
         '200': { description: Defaults installed., content: { application/json: { schema: { $ref: '#/components/schemas/RuleSet' } } } }
-        '400': { description: Missing ?confirm=1 — destructive overwrite refused. }
+        '400': { description: "Missing ?confirm=1 — destructive overwrite refused." }
+        '429': { description: Rate-limited. }
+
+  /api/rules/v6:
+    get:
+      summary: IPv6 coverage report for the saved rule set (v1.0.22). Read-only — it never touches the live firewall.
+      description: >
+        Names, per rule, whether the rule reaches the IPv6 chains (ZFW-IN6 / ZFW-OUT6) at all, and
+        why not when it does not. Derived from the compiler's own emitters, so it describes what
+        ip6tables actually carries rather than a second reading of the rule model.
+        Scope is deliberately ZFW-IN6/ZFW-OUT6: on a stock ZimaOS, Docker's ip6tables support is off,
+        so an inbound IPv6 connection to a published container port terminates on the host's
+        docker-proxy listener and is filtered in INPUT, never in FORWARD/DOCKER-USER.
+      responses:
+        '200':
+          description: Coverage report.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rules:
+                    type: array
+                    description: One entry per *enabled* rule, in rule order. Disabled rules are omitted — they emit nothing on either family.
+                    items:
+                      type: object
+                      properties:
+                        id:       { type: string, example: "r1a2b3c4" }
+                        mirrored: { type: boolean, description: "True when the rule contributes at least one line to ZFW-IN6 / ZFW-OUT6." }
+                        reason:
+                          type: string
+                          description: >
+                            Absent when mirrored. "ipv4-source" — an IPv4 address or range cannot be matched on
+                            ip6tables (this is what rules.Defaults seeds into every starter rule).
+                            "country-source" — geo matching uses IPv4-only ipsets.
+                            "docker-all-ports" — ports=all on the Docker zone is not widened to the host's IPv6
+                            input chain, which would also expose host-native services.
+                            "no-ports" — the rule matches no port.
+                          enum: [ipv4-source, country-source, docker-all-ports, no-ports, not-mirrored]
+                  inbound_allows: { type: integer, description: "Enabled inbound allow rules that do reach ZFW-IN6." }
+                  default_deny:   { type: boolean }
+                  blind:
+                    type: boolean
+                    description: default_deny and inbound_allows == 0 — every inbound IPv6 packet hits the catch-all DROP.
+                  global_ipv6:
+                    type: boolean
+                    description: >
+                      This host holds an internet-routable IPv6 address (2000::/3). ULA ranges do not count —
+                      Tailscale (fd7a::/48) and ZeroTier hand those out and ZFW already bypasses both by
+                      interface. The UI raises its warning only when blind and global_ipv6 are both true.
+        '405': { description: Non-GET method. }
         '429': { description: Rate-limited. }
 
   /api/rules/templates:

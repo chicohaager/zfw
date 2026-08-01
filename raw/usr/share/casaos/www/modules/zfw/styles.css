@@ -226,6 +226,22 @@ h1 { line-height: 0; margin: 0; }  /* let the img drive the header height */
   font-size: 11px; font-weight: 500;
   font-family: var(--font-mono);
 }
+/* v1.0.22 — marks a rule that will not reach ip6tables. Warn-coloured, not
+   danger: the rule is doing its job on IPv4, it just says nothing about
+   IPv6, and the user has to be able to tell those two apart at a glance. */
+.v6-pill {
+  display: inline-block; margin-left: 6px;
+  padding: 1px 7px; border-radius: 999px;
+  background: var(--warn); color: #fff;
+  font-size: 11px; font-weight: 600;
+  font-family: var(--font-sans); letter-spacing: 0.2px;
+  cursor: help;
+}
+.v6-banner { margin-bottom: 14px; line-height: 1.5; }
+.v6-banner code {
+  font-family: var(--font-mono); font-size: 12px;
+  background: rgb(0 0 0 / 6%); padding: 1px 5px; border-radius: 3px;
+}
 .schedule-row { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
 .schedule-time { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--text-muted); }
 .schedule-time input { padding: 6px 8px; }

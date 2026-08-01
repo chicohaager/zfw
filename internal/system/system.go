@@ -64,6 +64,29 @@ func DetectLAN6() (lan6CIDR, hostIP6 string) {
 	return
 }
 
+// HasGlobalIPv6 reports whether this host holds an internet-routable IPv6
+// address, i.e. one inside 2000::/3.
+//
+// The ULA ranges (fc00::/7) deliberately do not count. Both overlays ZFW
+// already bypasses by interface hand out ULAs — Tailscale from fd7a::/48,
+// ZeroTier from fd00::/8 — and a host that has only those is not reachable
+// over IPv6 from the internet. Counting them would raise the IPv6 coverage
+// warning on every Tailscale user, which is noise, and noise is how a
+// warning stops being read.
+//
+// Used only to decide whether that warning is worth showing; it is never an
+// input to rule compilation.
+func HasGlobalIPv6() bool {
+	_, hostIP6 := DetectLAN6()
+	ip := net.ParseIP(hostIP6)
+	if ip == nil || ip.To4() != nil || len(ip) != net.IPv6len {
+		return false
+	}
+	// 2000::/3 — global unicast as assigned by IANA. Excludes fe80::/10
+	// (link-local), fc00::/7 (ULA), ff00::/8 (multicast) by construction.
+	return ip[0]&0xe0 == 0x20
+}
+
 // DetectLAN guesses the primary LAN CIDR and host IP by asking the kernel
 // which source IP it would pick to reach an arbitrary public address — no
 // packets are sent, the UDP dial only resolves the default-route source.

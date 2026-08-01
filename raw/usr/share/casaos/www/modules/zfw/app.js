@@ -112,12 +112,73 @@ $('#btn-revert').addEventListener('click', () => {
 /* ---------- rules ---------- */
 let ruleSet = null;
 let rulesDirty = false;
+// IPv6 coverage for the *saved* rule set, from /rules/v6. The daemon derives
+// it from the compiler's own emitters, so it describes what ip6tables will
+// actually carry — not a second guess made here in the browser. Null while
+// it has not been fetched (or when the endpoint is missing, e.g. an older
+// daemon behind a newer UI), in which case every IPv6 hint stays hidden.
+let v6Audit = null;
 
 async function loadRules() {
-  ruleSet = await api('/rules');
+  // Fetched in parallel: the audit is advisory, so a failure must not stop
+  // the rule table from rendering.
+  const [rs, audit] = await Promise.all([
+    api('/rules'),
+    api('/rules/v6').catch(() => null),
+  ]);
+  ruleSet = rs;
   if (!Array.isArray(ruleSet.rules)) ruleSet.rules = [];
+  v6Audit = audit;
   rulesDirty = false;
   renderRules();
+}
+
+// v6ReasonText maps a V6RuleStatus.reason to what the user can do about it.
+// A badge that only says "not applied to IPv6" would be a riddle; each of
+// these has a different answer.
+const V6_REASON = {
+  'ipv4-source': 'Not applied to IPv6: an IPv4 address or range cannot be matched on ip6tables. '
+    + 'Set this rule’s source to “Any” (or to an IPv6 range) if the service must be reachable over IPv6.',
+  'country-source': 'Not applied to IPv6: country matching uses IPv4-only address sets. '
+    + 'Add a second rule with source “Any” if the service must be reachable over IPv6.',
+  'docker-all-ports': 'Not applied to IPv6: “All ports” on the Docker zone is deliberately not widened '
+    + 'to the host’s IPv6 input chain, which would also expose host services. List the ports explicitly instead.',
+  'no-ports': 'Not applied to IPv6: the rule matches no port.',
+};
+
+function v6StatusFor(id) {
+  if (!v6Audit || !Array.isArray(v6Audit.rules)) return null;
+  return v6Audit.rules.find(s => s.id === id) || null;
+}
+
+// v6Badge marks a rule that will not reach ip6tables. Silence here was the
+// v1.0.21 bug: the rule table showed “Allow 443” for rules that no IPv6
+// packet ever matched, so the table looked like proof and was not.
+function v6Badge(rule) {
+  const st = v6StatusFor(rule.id);
+  if (!st || st.mirrored) return '';
+  const tip = V6_REASON[st.reason] || 'Not applied to IPv6.';
+  return ` <span class="v6-pill" title="${esc(tip)}">IPv4 only</span>`;
+}
+
+// v6Banner warns about the state where the rule table and the firewall
+// disagree completely: a deny-by-default set, a host that really is on the
+// public IPv6 internet, and not one rule that reaches ZFW-IN6. Every
+// inbound IPv6 connection is then dropped regardless of what the rows say.
+// Suppressed on IPv4-only hosts (where it would be noise) and on an empty
+// rule set (where there is nothing yet to fix).
+function v6Banner() {
+  if (!v6Audit || !v6Audit.blind || !v6Audit.global_ipv6) return '';
+  if (!ruleSet.rules.length) return '';
+  return `<div class="threat-banner v6-banner">
+    <span class="threat-icon" aria-hidden="true">&#9888;</span>
+    <b>No rule reaches IPv6 &mdash; every inbound IPv6 connection is dropped.</b>
+    This host has a public IPv6 address and the default policy is Deny, but none of the rules below
+    apply to the IPv6 chain (ZFW-IN6). A client that resolves your domain to an AAAA record is blocked
+    even though the rule reads “Allow”, while the same service stays reachable from the LAN over IPv4.
+    Rules marked <span class="v6-pill">IPv4 only</span> cannot match IPv6 &mdash; give at least one rule
+    the source “Any” or an IPv6 range. Drops are logged with the prefix <code>ZFW-IN6-DROP</code>.
+  </div>`;
 }
 
 function markDirty() { rulesDirty = true; renderRules(); }
@@ -152,7 +213,7 @@ function renderRules() {
       <td class="mono">${i + 1}</td>
       <td>${dirBadge}${esc(r.name)}${noteBadge}${schedBadge}${ctrBadge}</td>
       <td><span class="actbadge ${actCls}">${actLbl}</span></td>
-      <td class="mono">${src}</td>
+      <td class="mono">${src}${v6Badge(r)}</td>
       <td class="mono">${ports} <span class="proto">${esc(r.protocol)}</span></td>
       <td>${zone}</td>
       <td><label class="switch"><input type="checkbox" ${r.enabled ? 'checked' : ''} data-act="toggle"><span></span></label></td>
@@ -165,6 +226,7 @@ function renderRules() {
     </tr>`;
   }).join('');
   $('#rules-panel').innerHTML = `
+    ${v6Banner()}
     <div class="card defpol">
       <span class="defpol-lbl">Default action for unmatched LAN traffic:</span>
       <label><input type="radio" name="defpol" value="deny" ${dp === 'deny' ? 'checked' : ''}> Deny <small>(allowlist)</small></label>
