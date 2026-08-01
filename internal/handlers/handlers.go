@@ -403,6 +403,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/config", s.rateLimited(s.config))
 	mux.HandleFunc("/api/rules", s.rateLimited(s.rules))
 	mux.HandleFunc("/api/rules/defaults", s.rateLimited(s.rulesDefaults))
+	mux.HandleFunc("/api/rules/v6", s.rateLimitedGet(s.rulesV6))
 	mux.HandleFunc("/api/rules/templates", s.rulesTemplates)
 	mux.HandleFunc("/api/apply", s.rateLimited(s.apply))
 	mux.HandleFunc("/api/commit", s.rateLimited(s.commit))
@@ -561,6 +562,50 @@ func (s *Server) rules(w http.ResponseWriter, r *http.Request) {
 	default:
 		fail(w, http.StatusMethodNotAllowed, "GET or POST")
 	}
+}
+
+// v6AuditResponse is the /api/rules/v6 payload: the compiler's own view of
+// what the saved rule set does on IPv6, plus whether this host has an
+// internet-routable IPv6 address at all.
+//
+// GlobalIPv6 is what keeps the UI warning honest in both directions. On an
+// IPv4-only host a blind IPv6 chain is harmless and the banner would be
+// noise; on a host with a global address it is the difference between "my
+// rules say allow" and "every v6 client is being dropped".
+type v6AuditResponse struct {
+	compiler.V6Audit
+	GlobalIPv6 bool `json:"global_ipv6"`
+}
+
+// rulesV6 reports IPv6 coverage for the saved rule set (v1.0.22). Read-only;
+// it never touches the live firewall.
+//
+// It exists because the rule table cannot show this on its own: a rule reads
+// "Allow 443" whether or not it reaches ip6tables, and until v1.0.22 the
+// rules that did not reach it failed silently. The two ways a rule drops out
+// are an IPv4 source (which has no ip6tables equivalent) and — before the
+// portsForZone6 fix in this same release — a Docker-zone port.
+func (s *Server) rulesV6(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	rs, err := rules.Load(s.rulesPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			fail(w, http.StatusInternalServerError, "load rules: "+err.Error())
+			return
+		}
+		// Fresh install: no rules.json yet. An empty deny-default set is
+		// genuinely blind on IPv6, but there is nothing for the user to
+		// act on yet, so report it as-is and let the UI stay quiet until
+		// rules exist.
+		rs = rules.RuleSet{DefaultPolicy: "deny"}
+	}
+	writeJSON(w, http.StatusOK, v6AuditResponse{
+		V6Audit:    compiler.AuditV6(rs),
+		GlobalIPv6: system.HasGlobalIPv6(),
+	})
 }
 
 // rulesDefaults regenerates and persists the recommended starter rule set

@@ -188,7 +188,7 @@ func restoreV6(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPorts, extr
 	for _, c := range chains {
 		fmt.Fprintf(&b, ":%s - [0:0]\n", c)
 	}
-	writeChain(&b, "ZFW-IN6", zfwIn6Rules(rs, rl, pp.All(), extraBypass))
+	writeChain(&b, "ZFW-IN6", zfwIn6Rules(rs, rl, extraBypass))
 	writeChain(&b, "DOCKER-USER", dockerUser6Rules(rs, rl, pp, extraBypass))
 	if hasHostOut {
 		writeChain(&b, "ZFW-OUT6", zfwOut6Rules(rl))
@@ -385,7 +385,7 @@ func dockerUser6Rules(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPort
 	return out
 }
 
-func zfwIn6Rules(rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool, extraBypass []string) []string {
+func zfwIn6Rules(rs rules.RuleSet, rl []rules.Rule, extraBypass []string) []string {
 	out := []string{
 		"-m conntrack --ctstate ESTABLISHED,RELATED -j RETURN",
 		"-m conntrack --ctstate INVALID -j DROP",
@@ -409,7 +409,7 @@ func zfwIn6Rules(rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool, ex
 		if !r.Enabled {
 			continue
 		}
-		out = append(out, hostLines6(r, dockerPorts)...)
+		out = append(out, hostLines6(r)...)
 	}
 	for _, p := range rs.V6Drop {
 		out = append(out, fmt.Sprintf("-p tcp --dport %d -j DROP", p))
