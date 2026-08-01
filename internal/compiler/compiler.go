@@ -39,7 +39,7 @@ func Compile(rs rules.RuleSet, pp system.PublishedPorts, geoFiles map[string]str
 	all := pp.All()
 	emitHostChain(&b, rs, rl, all, extraBypass)
 	emitDockerChain(&b, rs, rl, pp, extraBypass)
-	emitV6Chain(&b, rs, rl, all, extraBypass)
+	emitV6Chain(&b, rs, rl, extraBypass)
 	emitDockerChain6(&b, rs, rl, pp, extraBypass)
 	emitOutboundChains(&b, rl)
 	return b.String()
@@ -189,7 +189,7 @@ func emitDockerChain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, pp s
 }
 
 // emitV6Chain writes ZFW-IN6: the IPv6 INPUT filter, always emitted.
-func emitV6Chain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool, extraBypass []string) {
+func emitV6Chain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, extraBypass []string) {
 	// ---- ZFW-IN6: IPv6 INPUT (always emitted) ----
 	// ZimaOS ships with SLAAC enabled by default, so a host is reachable on
 	// IPv6 the moment a router advertises a prefix. Pre-v0.2.15 we only
@@ -235,7 +235,7 @@ func emitV6Chain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, dockerPo
 		if !r.Enabled {
 			continue
 		}
-		for _, line := range hostLines6(r, dockerPorts) {
+		for _, line := range hostLines6(r) {
 			fmt.Fprintf(b, "  $IPT6 -A ZFW-IN6 %s\n", line)
 		}
 	}
@@ -543,16 +543,20 @@ var scheduleDayMap = map[string]string{
 }
 
 // hostLines6 is the IPv6 variant of hostLines. It returns iptables args
-// (after "-A ZFW-IN6") for a rule's host-targeted portion. Source filters
+// (after "-A ZFW-IN6") for a rule's inbound portion. Source filters
 // are applied only when the rule's source is an IPv6 CIDR/IP — IPv4
 // sources don't translate. A "country" source is skipped (ipset support
 // for IPv6 needs a separate sets, deferred to a later release).
 // Outbound rules (v0.5.6) skip this emit entirely.
-func hostLines6(r rules.Rule, dockerPorts map[int]bool) []string {
+//
+// Unlike hostLines it does NOT take the Docker port inventory: since
+// v1.0.22 the port set is resolved by portsForZone6, which deliberately
+// ignores the host/docker split. See there for why.
+func hostLines6(r rules.Rule) []string {
 	if r.IsOutbound() {
 		return nil
 	}
-	ps, ok := portsForZone(r, dockerPorts, "host")
+	ps, ok := portsForZone6(r)
 	if !ok {
 		return nil
 	}
@@ -839,6 +843,52 @@ func portsForZone(r rules.Rule, dockerPorts map[int]bool, want string) (portSpec
 			return portSpec{}, false
 		}
 		return zoned(portSpec{List: dp})
+	}
+}
+
+// portsForZone6 resolves the port set a rule contributes to ZFW-IN6. Unlike
+// portsForZone it ignores the host/docker split, because on IPv6 that split
+// does not describe the packet path.
+//
+// With Docker's ip6tables support off — the ZimaOS default, `/etc/docker/
+// daemon.json` carries no "ipv6" key — containers hold no global IPv6 address
+// and Docker publishes no IPv6 DNAT rule. Every published port is instead
+// served by the userland docker-proxy listening on [::], so an inbound IPv6
+// connection to it terminates on the *host* and is filtered in INPUT, i.e. by
+// ZFW-IN6. It never reaches FORWARD and therefore never sees DOCKER-USER.
+//
+// Before v1.0.22 this function did not exist and hostLines6 asked
+// portsForZone(…, "host"), which returns nothing for a docker-zone rule and
+// only the non-Docker half of an auto-zone rule. The consequence was that
+// every Docker-published port was silently unreachable over IPv6 while the
+// same port was open over IPv4 via DOCKER-USER — a container reached from a
+// v6-only client (a phone on mobile data resolving an AAAA record) hit the
+// ZFW-IN6 catch-all DROP no matter what the rule said. The gap was invisible
+// on hosts running ZFW <= 1.0.16, where ZFW-IN6 was written to the legacy
+// table while the live path ran through nft (fixed in v1.0.17, 856c2ba) and
+// the chain was therefore inert.
+//
+// One case is deliberately NOT mirrored: ports=all on a docker-zone rule.
+// "every port of my containers" is not the same statement as "every port of
+// this host", and honouring it here would silently switch off the IPv6
+// default-deny for host-native services (SSH, Samba, the ZimaOS UI). Such a
+// rule is reported by AuditV6 with reason "docker-all-ports" so it shows up
+// in the UI instead of vanishing quietly. An auto- or host-zone ports=all
+// rule keeps its pre-v1.0.22 meaning and does open the chain.
+func portsForZone6(r rules.Rule) (portSpec, bool) {
+	switch r.Ports.Type {
+	case "all":
+		if r.Zone == "docker" {
+			return portSpec{}, false
+		}
+		return portSpec{All: true}, true
+	case "range":
+		return portSpec{From: r.Ports.From, To: r.Ports.To}, true
+	default: // "list"
+		if len(r.Ports.List) == 0 {
+			return portSpec{}, false
+		}
+		return portSpec{List: r.Ports.List}, true
 	}
 }
 
