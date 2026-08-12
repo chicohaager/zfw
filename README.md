@@ -150,6 +150,52 @@ hosts). Override with `ARCHES="amd64" sh build.sh` to build a single arch.
 Requires `go` 1.22+ and `squashfs-tools` (`mksquashfs`). The image is packed with
 gzip — the ZimaOS kernel is built without zstd/xz squashfs support.
 
+### Building the installer image
+
+The Docker Hub image is built from the artifacts `build.sh` leaves in `dist/` — the
+`Dockerfile` copies `dist/zfw-<arch>.raw` straight in — so run a **full** `sh build.sh`
+first, without `ARCHES`, or the architecture you skipped will not have a payload to copy.
+
+Two prerequisites that are easy to trip over:
+
+```sh
+# 1. A builder with the docker-container driver. The default "docker" builder
+#    cannot produce multi-platform images at all.
+docker buildx create --name zfw-multi --driver docker-container --bootstrap
+
+# 2. arm64 emulation. The Dockerfile has RUN steps, so the arm64 layer is
+#    executed under qemu. This registration lives in the kernel's binfmt_misc
+#    and is LOST ON REBOOT — if buildx suddenly offers no linux/arm64, this is
+#    why, and it is not a broken builder.
+docker run --privileged --rm tonistiigi/binfmt --install arm64
+
+docker buildx inspect zfw-multi | grep Platforms   # must list linux/arm64
+```
+
+Then build and push both architectures under one manifest list:
+
+```sh
+docker buildx build --builder zfw-multi \
+  --platform linux/amd64,linux/arm64 \
+  -t chicohaager/zfw:<version> -t chicohaager/zfw:latest \
+  --push .
+```
+
+Afterwards, check what was actually published rather than what was built locally — pull
+each architecture back out of the registry and compare its payload against the released
+module:
+
+```sh
+for a in amd64 arm64; do
+  docker run --rm --pull=always --platform linux/$a \
+    --entrypoint sh chicohaager/zfw:<version> -c 'sha256sum /payload/zfw.raw'
+  cat dist/zfw-$a.raw.sha256
+done
+```
+
+The two checksums must match per architecture. A local `docker images` listing proves
+nothing here: it shows what the build produced, not what the registry now serves.
+
 ## Deploy
 
 `build.sh` writes one release package per arch — `dist/zfw-<version>-<arch>.tar.gz`
