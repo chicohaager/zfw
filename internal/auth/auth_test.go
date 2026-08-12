@@ -1,22 +1,25 @@
 package auth
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
 
-// signES256 builds a minimal ES256 JWT signed with key, carrying the
-// access-token issuer ("casaos") so it passes the session-scope check.
+// signES256 builds a minimal ES256 JWT signed with key, carrying an
+// accepted access-token issuer so it passes the session-scope check.
 func signES256(t *testing.T, key *ecdsa.PrivateKey, exp int64) string {
-	return signES256Iss(t, key, exp, sessionIssuer)
+	return signES256Iss(t, key, exp, sessionIssuers[0])
 }
 
 // signES256Iss is signES256 with an explicit `iss` claim so the
@@ -77,6 +80,25 @@ func TestVerifyExpiredToken(t *testing.T) {
 	}
 }
 
+// TestVerifyAcceptsBothPlatformIssuers pins the issuers by their literal
+// names, not via sessionIssuers — a test that read the list back would stay
+// green if an entry were dropped, which is exactly the failure that took the
+// UI down after the ZimaOS v1.7.1-beta1 rename ("casaos" → "zimaos").
+// Measured on .143: v1.7.0-beta1 mints "casaos", v1.7.1-beta1 mints "zimaos";
+// hosts of both generations must keep working.
+func TestVerifyAcceptsBothPlatformIssuers(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	srv := jwksServer(t, &key.PublicKey)
+	defer srv.Close()
+	v := NewVerifier(srv.URL)
+	for _, iss := range []string{"casaos", "zimaos"} {
+		tok := signES256Iss(t, key, time.Now().Add(time.Hour).Unix(), iss)
+		if err := v.Verify(tok); err != nil {
+			t.Fatalf("access token with iss %q rejected: %v", iss, err)
+		}
+	}
+}
+
 // TestVerifyRejectsNonSessionIssuer pins the R5 issuer-scoping fix: a
 // token with a valid signature, valid expiry, but a non-session `iss`
 // (the refresh token's "refresh", verified against a live .143 login)
@@ -94,6 +116,11 @@ func TestVerifyRejectsNonSessionIssuer(t *testing.T) {
 	tok = signES256Iss(t, key, time.Now().Add(time.Hour).Unix(), "")
 	if err := v.Verify(tok); err == nil {
 		t.Fatal("issuer-less token was accepted as a session")
+	}
+	// Widening the accepted set must not turn into "any issuer goes".
+	tok = signES256Iss(t, key, time.Now().Add(time.Hour).Unix(), "attacker")
+	if err := v.Verify(tok); err == nil {
+		t.Fatal("token with an unrelated issuer was accepted as a session")
 	}
 }
 
@@ -132,5 +159,67 @@ func TestMiddlewareRejectsMissingToken(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/health", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("ausgenommener Pfad: Status %d, erwartet 200", rec.Code)
+	}
+}
+
+// TestMiddlewareLogsRejection pins that a refused request leaves a trace in
+// the journal, naming the reason. Before v1.0.23 it left none: when ZimaOS
+// renamed the token issuer, every request failed and the log was silent, so
+// the outage could only be diagnosed from the browser console.
+func TestMiddlewareLogsRejection(t *testing.T) {
+	var buf bytes.Buffer
+	restore := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(restore)
+
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	srv := jwksServer(t, &key.PublicKey)
+	defer srv.Close()
+	v := NewVerifier(srv.URL)
+	h := v.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	req.Header.Set("Authorization", "Bearer "+
+		signES256Iss(t, key, time.Now().Add(time.Hour).Unix(), "refresh"))
+	req.Header.Set("X-Forwarded-For", "192.0.2.7")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	line := buf.String()
+	// slog's text handler escapes the quotes around the issuer it quotes back.
+	for _, want := range []string{"session rejected", `issuer \"refresh\"`, "/api/status", "192.0.2.7"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("log line does not mention %q:\n%s", want, line)
+		}
+	}
+	// The token itself must never reach the journal.
+	if strings.Contains(line, "eyJ") {
+		t.Errorf("log line appears to contain the token:\n%s", line)
+	}
+}
+
+// TestRejectLogRateLimits pins the counting: rejections are attacker-
+// triggerable, so only the first of a burst is written and the rest are
+// counted for the next line that gets through.
+func TestRejectLogRateLimits(t *testing.T) {
+	var l rejectLog
+	now := time.Now()
+
+	if ok, n := l.admit(now); !ok || n != 0 {
+		t.Fatalf("first rejection: admit=%v suppressed=%d, want true/0", ok, n)
+	}
+	for i := 0; i < 5; i++ {
+		if ok, _ := l.admit(now.Add(time.Second)); ok {
+			t.Fatalf("rejection %d within the interval was logged", i)
+		}
+	}
+	ok, n := l.admit(now.Add(rejectLogInterval))
+	if !ok || n != 5 {
+		t.Fatalf("after the interval: admit=%v suppressed=%d, want true/5", ok, n)
+	}
+	// The counter resets once it has been reported.
+	if ok, n := l.admit(now.Add(2 * rejectLogInterval)); !ok || n != 0 {
+		t.Fatalf("next line: admit=%v suppressed=%d, want true/0", ok, n)
 	}
 }

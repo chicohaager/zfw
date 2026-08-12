@@ -21,3 +21,4 @@ coverage.txt
 *.swp
 .idea/
 .vscode/
+__pycache__/

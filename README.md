@@ -4,7 +4,9 @@
 
 # ZFW — a host firewall for ZimaOS
 
-> **Current release:** v1.0.22 — **container ports were unreachable over IPv6, and nothing said so.** Reported from the field: a CMS published on 443 worked from the LAN and was dead from the internet, while every rule in the table read "Allow" and had been checked one by one. Cause: with Docker's ip6tables support off — the ZimaOS default — containers hold no IPv6 address and a v6 connection to a published port terminates on the host's docker-proxy listener, so it is filtered in `INPUT` (`ZFW-IN6`), never in `FORWARD`/`DOCKER-USER`. `ZFW-IN6` only ever received the *host* half of a rule's ports, so no Docker-published port had an allow there and every IPv6 client hit the catch-all DROP. IPv4 was fine the whole time via `DOCKER-USER` — which is exactly why testing from inside the LAN could not see it. The gap was invisible before v1.0.17, when `ZFW-IN6` was still written to the legacy table while the live path ran through nft and the chain was inert; upgrading across that line switches IPv6 filtering on for the first time. **Fixed:** rules now mirror their full port set into `ZFW-IN6` regardless of zone (`ports=all` on the Docker zone excepted — widening that would expose host services too, and it is reported instead). **Made visible:** a rule whose source is an IPv4 address or range cannot be matched on ip6tables at all — that is unavoidable, but it used to happen in silence, and `rules.Defaults` seeds *every* starter rule with the LAN CIDR as source. Such rules are now badged **IPv4 only** in the rule table with the reason and the fix, served by the new read-only `GET /api/rules/v6`. **Warned about:** a deny-by-default rule set on a host with a public IPv6 address where not one rule reaches `ZFW-IN6` now raises a banner on the Rules tab — that state drops every inbound IPv6 connection while the table reads green.
+> **Current release:** v1.0.23 — **ZimaOS v1.7.1-beta1 renamed the session-token issuer, and the whole UI went dark.** Every tab reported `HTTP 401` and the dashboard stayed empty on hosts that had just taken the update. Nothing about ZFW had changed: it verifies the ZimaOS session token itself (the gateway proxies module routes without authenticating them), and part of that check is the token's `iss` claim — pinned to `casaos` so that the *refresh* token, which the user-service signs with the same key, cannot be replayed as a firewall session. In v1.7.1-beta1 the access token's issuer became `zimaos`, so ZFW rejected every genuine login with `invalid session: token issuer "zimaos" not accepted (want "casaos")`. **Fixed:** both `casaos` and `zimaos` are accepted, so ZFW works on v1.7.1+ *and* on v1.7.0 and older hosts. The refresh token kept its own issuer (`refresh`) through the rename and is still refused, along with any other issuer — the scoping that the check exists for is intact, and each half now has its own test. Measured against a live login on a v1.7.1-beta1 host, not inferred. **And made findable next time:** a refused session used to produce no log line at all — the reason went into the 401 body and nowhere else, so an outage that broke every request left `journalctl -u zfw-ui` looking normal. Rejections are now logged at `WARN` with the reason, the path and the client, rate-limited to one line per 30 s with a count of what was suppressed in between. The token is never logged.
+>
+> **Previous release:** v1.0.22 — **container ports were unreachable over IPv6, and nothing said so.** Reported from the field: a CMS published on 443 worked from the LAN and was dead from the internet, while every rule in the table read "Allow" and had been checked one by one. Cause: with Docker's ip6tables support off — the ZimaOS default — containers hold no IPv6 address and a v6 connection to a published port terminates on the host's docker-proxy listener, so it is filtered in `INPUT` (`ZFW-IN6`), never in `FORWARD`/`DOCKER-USER`. `ZFW-IN6` only ever received the *host* half of a rule's ports, so no Docker-published port had an allow there and every IPv6 client hit the catch-all DROP. IPv4 was fine the whole time via `DOCKER-USER` — which is exactly why testing from inside the LAN could not see it. The gap was invisible before v1.0.17, when `ZFW-IN6` was still written to the legacy table while the live path ran through nft and the chain was inert; upgrading across that line switches IPv6 filtering on for the first time. **Fixed:** rules now mirror their full port set into `ZFW-IN6` regardless of zone (`ports=all` on the Docker zone excepted — widening that would expose host services too, and it is reported instead). **Made visible:** a rule whose source is an IPv4 address or range cannot be matched on ip6tables at all — that is unavoidable, but it used to happen in silence, and `rules.Defaults` seeds *every* starter rule with the LAN CIDR as source. Such rules are now badged **IPv4 only** in the rule table with the reason and the fix, served by the new read-only `GET /api/rules/v6`. **Warned about:** a deny-by-default rule set on a host with a public IPv6 address where not one rule reaches `ZFW-IN6` now raises a banner on the Rules tab — that state drops every inbound IPv6 connection while the table reads green.
 >
 > **Previous release:** v1.0.21 — Apply now takes effect on already-open connections, not just new ones. A conntrack-based firewall accepts `ESTABLISHED,RELATED` before it ever consults a user rule, so blocking a port that already had a live connection left that connection flowing until it closed on its own — the block bit only *new* connections, and operators reached for a full disable/enable to force it. After a successful apply ZFW now flushes the kernel connection-tracking entries for exactly the ports that switched from allowed to denied, over ctnetlink `IPCTNL_MSG_CT_DELETE` — the same netlink interface the Connections tab reads, since ZimaOS ships no `conntrack` binary — so an established connection to a freshly blocked port drops at once instead of surviving the apply. The flush is **targeted** (only newly-denied ports, computed by diffing the applied rule set against the live one; the whole table is never touched, so unrelated long-lived connections are left alone) and **best-effort** (the rules are already live, so a flush failure is logged, not surfaced as an apply failure). The first apply after a daemon start flushes nothing, since there is no prior state to diff against.
 >
@@ -174,7 +176,7 @@ an **installer image** ([`chicohaager/zfw`](https://hub.docker.com/r/chicohaager
 multi-arch: amd64 + arm64). Run it on the ZimaOS host:
 
 ```sh
-docker run --rm --privileged --pid=host -v /:/host chicohaager/zfw:1.0.22
+docker run --rm --privileged --pid=host -v /:/host chicohaager/zfw:1.0.23
 ```
 
 **The container is a delivery vehicle, not a runtime.** It stages the payload and
@@ -192,6 +194,34 @@ The flags are what they look like: `--privileged` and `--pid=host` let the
 installer enter the host's namespaces, `-v /:/host` is the filesystem it installs
 into. Uninstalling is `zfw revert` on the host, then removing
 `/var/lib/extensions/zfw.raw`.
+
+### After a ZimaOS update
+
+ZFW verifies the ZimaOS session token itself — the gateway proxies module routes
+without authenticating them — so a change to that token lands on ZFW. It has
+happened: v1.7.1-beta1 renamed the access token's `iss` claim from `casaos` to
+`zimaos`, and every tab answered `401` until v1.0.23 accepted both. The check is
+one command, and it tests the half that must pass *and* the half that must fail:
+
+```sh
+python3 tools/check-session-auth.py <host> --user <name> --password-file <file>
+```
+
+A genuine session token must be accepted; the refresh token, a missing header and
+a tampered signature must each be refused. Exit code 1 if any of that is untrue.
+The password is read from the file and never printed, and neither is any token.
+
+Since v1.0.23 a refused request also says so in the journal, which is where you
+would look first:
+
+```sh
+journalctl -u zfw-ui | grep 'session rejected'
+```
+
+The line names the reason, the path and the client. Rejections are triggerable
+from outside, so they are rate-limited to one line per 30 s — whatever is
+suppressed in between is counted and reported on the next line
+(`suppressed_since_last=`). The token is never logged.
 
 ## Configuration
 

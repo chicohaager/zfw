@@ -16,7 +16,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -34,15 +36,35 @@ const jwksMaxStale = 1 * time.Hour
 // clockSkew is the tolerance applied when checking the nbf claim.
 const clockSkew = 60 * time.Second
 
-// sessionIssuer is the `iss` claim a ZimaOS *access* token carries
-// ("casaos"). The user-service mints other tokens with the SAME signing
-// key — notably the long-lived refresh token (iss "refresh", ~7-day
-// expiry). Without an issuer check, a refresh token (or any future
-// same-key token type) would be accepted as a fully-privileged firewall
-// session. We pin the access-token issuer so only a genuine web-session
-// token authorises the control API. Verified against a live .143 login
-// 2026-06-12: access iss="casaos", refresh iss="refresh".
-const sessionIssuer = "casaos"
+// sessionIssuers are the `iss` claims a ZimaOS *access* token may carry.
+// The user-service mints other tokens with the SAME signing key — notably
+// the long-lived refresh token (iss "refresh", ~7-day expiry). Without an
+// issuer check, a refresh token (or any future same-key token type) would
+// be accepted as a fully-privileged firewall session. We pin the
+// access-token issuers so only a genuine web-session token authorises the
+// control API.
+//
+// ZimaOS renamed the access-token issuer in v1.7.1-beta1: what used to be
+// "casaos" is now "zimaos". Both are accepted so ZFW keeps working on
+// v1.7.0 and older hosts as well as on v1.7.1+. The refresh token kept its
+// own issuer through the rename and stays rejected.
+//
+// Measured with live logins against .143:
+//   - 2026-06-12, v1.7.0-beta1: access iss="casaos",  refresh iss="refresh"
+//   - 2026-08-12, v1.7.1-beta1: access iss="zimaos",  refresh iss="refresh"
+//     (POST /v1/users/refresh also returns an access token with iss="zimaos")
+var sessionIssuers = []string{"casaos", "zimaos"}
+
+// isSessionIssuer reports whether iss identifies a ZimaOS web-session
+// access token.
+func isSessionIssuer(iss string) bool {
+	for _, want := range sessionIssuers {
+		if iss == want {
+			return true
+		}
+	}
+	return false
+}
 
 // b64 is the base64url encoding (no padding) used throughout JWT/JWK.
 var b64 = base64.RawURLEncoding
@@ -62,6 +84,8 @@ type Verifier struct {
 	mu      sync.RWMutex
 	keys    []keyEntry
 	fetched time.Time
+
+	rejects rejectLog
 }
 
 // NewVerifier returns a Verifier that loads its keys from jwksURL. The HTTP
@@ -237,8 +261,8 @@ func (v *Verifier) Verify(token string) error {
 	// other token type the user-service mints with the same signing key
 	// carry a different `iss`, and must not authorise the control API
 	// (R5 open recommendation).
-	if claims.Iss != sessionIssuer {
-		return fmt.Errorf("token issuer %q not accepted (want %q)", claims.Iss, sessionIssuer)
+	if !isSessionIssuer(claims.Iss) {
+		return fmt.Errorf("token issuer %q not accepted (want one of %v)", claims.Iss, sessionIssuers)
 	}
 	// A ZimaOS session token must carry an expiry — a token without exp is
 	// rejected rather than trusted forever (ZFW-S2).
@@ -255,6 +279,75 @@ func (v *Verifier) Verify(token string) error {
 	return nil
 }
 
+// rejectLogInterval is the minimum spacing between two "session rejected"
+// log lines. Rejections are attacker-triggerable, so they are rate-limited
+// rather than logged one-for-one; everything suppressed in between is
+// counted and reported on the next line that gets through.
+const rejectLogInterval = 30 * time.Second
+
+// rejectLog rate-limits the rejection warnings of one Verifier.
+//
+// Why this exists: until v1.0.23 a rejected session produced no log line at
+// all — the reason went into the 401 body and nowhere else. When ZimaOS
+// v1.7.1-beta1 renamed the access token's issuer, every request failed and
+// `journalctl -u zfw-ui` showed nothing out of the ordinary; the cause was
+// only visible in the browser console. One line in the journal would have
+// named it outright.
+type rejectLog struct {
+	mu         sync.Mutex
+	last       time.Time
+	suppressed int
+}
+
+// admit reports whether this rejection should be logged now, and how many
+// were suppressed since the last line that was.
+func (l *rejectLog) admit(now time.Time) (bool, int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.last.IsZero() && now.Sub(l.last) < rejectLogInterval {
+		l.suppressed++
+		return false, 0
+	}
+	n := l.suppressed
+	l.last, l.suppressed = now, 0
+	return true, n
+}
+
+// logReject writes one rate-limited WARN for a refused request. The reason
+// is the verifier's own error — it never contains the token, only what was
+// wrong with it (a wrong issuer is named, which is the whole point).
+func (v *Verifier) logReject(r *http.Request, reason string) {
+	ok, suppressed := v.rejects.admit(time.Now())
+	if !ok {
+		return
+	}
+	slog.Warn("session rejected",
+		"reason", reason,
+		"path", r.URL.Path,
+		"client", clientAddr(r),
+		"suppressed_since_last", suppressed)
+}
+
+// clientAddr names the requester for the log. The daemon binds loopback
+// behind the ZimaOS gateway, so RemoteAddr is almost always 127.0.0.1 and
+// the real LAN client arrives in X-Forwarded-For. XFF is gateway-set and
+// unauthenticated — good enough to identify a machine in a log line, and it
+// grants nothing.
+func clientAddr(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if first, _, ok := strings.Cut(xff, ","); ok {
+			xff = first
+		}
+		if s := strings.TrimSpace(xff); s != "" {
+			return s
+		}
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
 // Middleware wraps next so every request must carry a valid ZimaOS bearer
 // token. exempt(path) may return true for endpoints left open (e.g. health).
 func (v *Verifier) Middleware(next http.Handler, exempt func(path string) bool) http.Handler {
@@ -265,10 +358,12 @@ func (v *Verifier) Middleware(next http.Handler, exempt func(path string) bool) 
 		}
 		token := bearerToken(r)
 		if token == "" {
+			v.logReject(r, "no bearer token")
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
 		}
 		if err := v.Verify(token); err != nil {
+			v.logReject(r, err.Error())
 			http.Error(w, "invalid session: "+err.Error(), http.StatusUnauthorized)
 			return
 		}
