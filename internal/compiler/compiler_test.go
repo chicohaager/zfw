@@ -491,6 +491,25 @@ func TestWireGuardWildcardBypassed(t *testing.T) {
 	mustContain(t, out, "$IPT6 -A ZFW-IN6 -i wg+ -j RETURN")
 }
 
+// TestZimaNetTunnelBypassed guards the tun0 entry added 2026-08-14.
+//
+// ZimaOS v1.7.1-beta1 ships its own mesh, "Zima Net" (`znet 0.2.0`, an
+// embedded EasyTier), which owns tun0 — the same role zt+ has for
+// ZeroTier. Without the bypass, a client that has built the tunnel is
+// still cut off at the last hop: measured on a ZimaCube, 125 SYNs to
+// 10.126.126.1:9527 went to ZFW-IN-DROP in a single connection attempt
+// and the client hung on "connecting" indefinitely, while tun0's tx
+// counter stayed at 668 bytes for days.
+//
+// All four emitters are asserted, not just ZFW-IN: the first fix
+// applied by hand only covered that chain and was therefore incomplete.
+func TestZimaNetTunnelBypassed(t *testing.T) {
+	out := Compile(rules.RuleSet{DefaultPolicy: "deny"}, system.PublishedPorts{}, nil)
+	mustContain(t, out, "$IPT -A ZFW-IN -i tun0 -j ACCEPT")
+	mustContain(t, out, "$IPT -A DOCKER-USER -i tun0 -j RETURN")
+	mustContain(t, out, "$IPT6 -A ZFW-IN6 -i tun0 -j RETURN")
+}
+
 // TestExtraBypassIfacesEmittedInAllChains guards the operator-
 // configured extension to the bypass list: ZFW_EXTRA_BYPASS_IFACES
 // names appear in ZFW-IN, ZFW-IN6 and DOCKER-USER so a custom-named

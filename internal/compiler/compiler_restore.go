@@ -238,6 +238,16 @@ func zfwInRules(rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool, ext
 		"-i tailscale0 -j ACCEPT",
 		"-i zt+ -j ACCEPT",
 		"-i wg+ -j ACCEPT",
+		// znet / Zima Net — ZimaOS' own mesh since v1.7.1-beta1 (`znet 0.2.0`, an
+		// embedded EasyTier that owns tun0). Same trust level as zt+ above: both
+		// are the vendor's remote-access tunnel, authenticated by the mesh itself.
+		//
+		// Measured 2026-08-14 on a ZimaCube: without this line the desktop client's
+		// SYNs to 10.126.126.1:9527 are logged by ZFW-IN-DROP and discarded (125 in
+		// one connection attempt), the client hangs on "connecting" forever, and
+		// tun0's tx counter sits at 668 bytes for days. Adding it moved tx within
+		// two seconds. Listed in BEST-PRACTICES.md and THREAT-MODEL.md.
+		"-i tun0 -j ACCEPT",
 		"-p icmp -j ACCEPT",
 		"-p udp --dport 68 -j ACCEPT",
 		"-p udp --dport 41641 -j ACCEPT",
@@ -306,7 +316,8 @@ func dockerUserRules(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPorts
 	out = append(out,
 		"-i tailscale0 -j RETURN",
 		"-i zt+ -j RETURN",
-		"-i wg+ -j RETURN")
+		"-i wg+ -j RETURN",
+		"-i tun0 -j RETURN")
 	for _, iface := range extraBypass {
 		out = append(out, "-i "+iface+" -j RETURN")
 	}
@@ -364,6 +375,7 @@ func dockerUser6Rules(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPort
 		"-i tailscale0 -j RETURN",
 		"-i zt+ -j RETURN",
 		"-i wg+ -j RETURN",
+		"-i tun0 -j RETURN",
 	}
 	for _, iface := range extraBypass {
 		out = append(out, "-i "+iface+" -j RETURN")
@@ -396,6 +408,7 @@ func zfwIn6Rules(rs rules.RuleSet, rl []rules.Rule, extraBypass []string) []stri
 		"-i tailscale0 -j RETURN",
 		"-i zt+ -j RETURN",
 		"-i wg+ -j RETURN",
+		"-i tun0 -j RETURN",
 	}
 	for _, iface := range extraBypass {
 		out = append(out, "-i "+iface+" -j RETURN")

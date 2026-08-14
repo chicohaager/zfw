@@ -100,8 +100,9 @@ A plain `INPUT` firewall is not enough: **Docker-published ports never traverse
 `INPUT`** — they are DNAT'd and routed through `FORWARD`. `DOCKER-USER` is Docker's
 official, guaranteed-untouched user hook, so ZFW filters container ports there.
 
-`localhost`, the host's own IP and the `tailscale0` / ZeroTier interfaces are always
-allowed — so VPN access and tunnel clients (e.g. Pangolin/Newt) are never affected.
+`localhost`, the host's own IP and the mesh interfaces (`tailscale0`, ZeroTier,
+WireGuard and `tun0` for ZimaOS' own Zima Net) are always allowed — so VPN access
+and tunnel clients (e.g. Pangolin/Newt) are never affected.
 ZFW governs the **LAN** boundary only.
 
 **IPv6 takes a third path, and it is not the one the table above suggests.** With

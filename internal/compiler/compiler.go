@@ -142,6 +142,12 @@ func emitHostChain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, docker
 		// WireGuard's static-key handshake, so it should be exempt from
 		// default-deny the same way tailscale0 already is.
 		"-i wg+ -j ACCEPT",
+		// znet / Zima Net — v1.7.1-beta1 shipped ZimaOS' own mesh (`znet 0.2.0`,
+		// an embedded EasyTier) which owns tun0. Same reasoning as zt+ and wg+:
+		// a peer that arrives on this interface is already authenticated by the
+		// mesh. Measured 2026-08-14: without it the client's SYNs to :9527 are
+		// dropped by ZFW-IN and it hangs on "connecting". See BEST-PRACTICES.md.
+		"-i tun0 -j ACCEPT",
 		"-p icmp -j ACCEPT",
 		"-p udp --dport 68 -j ACCEPT",
 		"-p udp --dport 41641 -j ACCEPT",
@@ -213,6 +219,7 @@ func emitV6Chain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, extraByp
 	b.WriteString("  $IPT6 -A ZFW-IN6 -i tailscale0 -j RETURN\n")
 	b.WriteString("  $IPT6 -A ZFW-IN6 -i zt+ -j RETURN\n")
 	b.WriteString("  $IPT6 -A ZFW-IN6 -i wg+ -j RETURN\n")
+	b.WriteString("  $IPT6 -A ZFW-IN6 -i tun0 -j RETURN\n")
 	for _, iface := range extraBypass {
 		fmt.Fprintf(b, "  $IPT6 -A ZFW-IN6 -i %s -j RETURN\n", iface)
 	}
