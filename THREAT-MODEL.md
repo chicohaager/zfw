@@ -173,7 +173,7 @@ to a finding in `SECURITY-REPORT.md`.
 | Docker-published ports filtered at `DOCKER-USER`, not INPUT — published ports bypass INPUT via DNAT and would otherwise be ungated | (architectural) | `internal/compiler.dockerLines` |
 | Container-bound rules resolve to the *current* host-published ports at every Recompile — a container that swaps ports does not silently lose its rule | (v0.5.7) | `internal/handlers.Server.Recompile` |
 | Outbound rules for `Zone=docker|auto` emit on a `ZFW-FWD-OUT` chain hooked into FORWARD — a compromised container's egress can be blocked at the host level without the container needing to cooperate | (v0.5.6) | `internal/compiler/compiler.go` |
-| Container bypass list (lo, docker0, br-+, virbr0, tailscale0, zt+, wg+) does not include the LAN — a container that wants to phone home outbound still hits ZFW-FWD-OUT user rules | (v0.5.4) | `internal/compiler/compiler.go` |
+| Container bypass list (lo, docker0, br-+, virbr0, tailscale0, zt+, wg+, tun0) does not include the LAN — a container that wants to phone home outbound still hits ZFW-FWD-OUT user rules | (v0.5.4) | `internal/compiler/compiler.go` |
 
 ### 5.5 Multi-host & outbound trust (A5)
 
