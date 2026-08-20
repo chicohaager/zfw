@@ -175,6 +175,15 @@ docker run --privileged --rm tonistiigi/binfmt --install arm64
 docker buildx inspect zfw-multi | grep Platforms   # must list linux/arm64
 ```
 
+A builder that was already running when you (re-)registered binfmt keeps the
+platform list it detected at start, so step 2 alone is not enough — the inspect
+above will still show no `linux/arm64`. Restart it, then re-check:
+
+```sh
+docker buildx stop zfw-multi
+docker buildx inspect --bootstrap zfw-multi | grep Platforms
+```
+
 Then build and push both architectures under one manifest list:
 
 ```sh
@@ -225,7 +234,7 @@ an **installer image** ([`chicohaager/zfw`](https://hub.docker.com/r/chicohaager
 multi-arch: amd64 + arm64). Run it on the ZimaOS host:
 
 ```sh
-docker run --rm --privileged --pid=host -v /:/host chicohaager/zfw:1.0.23
+docker run --rm --privileged --pid=host -v /:/host chicohaager/zfw:1.0.24
 ```
 
 **The container is a delivery vehicle, not a runtime.** It stages the payload and
