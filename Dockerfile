@@ -16,7 +16,7 @@
 #
 # Usage (on the ZimaOS host):
 #
-#   docker run --rm --privileged --pid=host -v /:/host chicohaager/zfw:1.0.23
+#   docker run --rm --privileged --pid=host -v /:/host chicohaager/zfw:1.0.24
 #
 #   --privileged  the payload is installed as root and drives systemd-sysext
 #   --pid=host    lets nsenter find PID 1 to enter the host's namespaces
