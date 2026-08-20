@@ -80,7 +80,7 @@ tunnelled or host-local client cannot be cut off:
 | Established / related connections | Your current session is never dropped |
 | `tailscale0` interface + UDP 41641 | Tailscale mesh — out-of-band access |
 | `zt+` interfaces + UDP 9993 | ZeroTier mesh |
-| `tun0` interface | znet / Zima Net — ZimaOS' own mesh since v1.7.1-beta1 |
+| `tun0` interface | znet / Zima Net — ZimaOS' own mesh, shipped and preset-enabled since at least v1.7.0 |
 | `virbr0` | libvirt / ZimaOS VM networking |
 | ICMP | ping / path-MTU |
 | UDP 68 | DHCP client |
