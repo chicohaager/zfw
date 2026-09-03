@@ -74,17 +74,29 @@ entire class of exposure at once. That is what ZFW provides.
 
 ## What ZFW does
 
-A standalone ZimaOS module — a tile in the ZimaOS dashboard — with five sections:
+A standalone ZimaOS module — a tile in the ZimaOS dashboard — with seven tabs:
 
 - **Firewall** — live status; **Safe-Apply** with a 120-second dead-man switch: if you do
   not Confirm in time, ZFW **removes the firewall entirely** (all ZFW rules dropped, host
   back to its unprotected stock state — *not* a restore of the previously committed rules).
   A bad rule can never lock you out, but an unattended Safe-Apply leaves the host
   unprotected; Commit; Revert.
-- **Allowlist** — edit which ports are reachable from the LAN by clicking — no SSH,
-  no file editing.
+- **Rules** — the rule list, evaluated top to bottom, first match wins. A rule is
+  allow/deny on a source (any / IP / CIDR range / ISO-3166 country codes, max 32),
+  a port list or range, TCP/UDP/both, and a zone (auto / host / docker, or bound to a
+  specific container). Optional per rule: inbound or outbound direction, a time
+  schedule (from–to, weekdays), a connection rate limit (*n* connections per window),
+  and logging. Edited by clicking — no SSH, no file editing.
 - **Exposure** — every listening TCP port, live, classified: reachable from the LAN /
   blocked by ZFW / loopback-only.
+- **Events** — packets ZFW dropped, `host` (chain `ZFW-IN`) and `docker` (`DOCKER-USER`)
+  separately, with top sources and top targeted ports for the last hour. A source is
+  tagged `port_scan` after 10 distinct destination ports within a minute, and
+  `brute_force` after 20 hits on one credential port (22, 445, 3389, 8888) — the tags
+  flag, they do not block. Logging is rate-limited to 60/min per chain so a scan
+  cannot flood the journal.
+- **Connections** — the live kernel conntrack table: which flows are open right now,
+  original direction only, read over ctnetlink.
 - **Audit** — a catalogue of security findings, each re-evaluated live against the
   current firewall configuration (open / LAN-blocked / fixed).
 - **Versions** — the host's key components with their known-CVE status.
@@ -305,6 +317,15 @@ accepted first.
 
 For a full operating guide — staying reachable, rule ordering, geo-blocking
 limits and recovery — see **[BEST-PRACTICES.md](BEST-PRACTICES.md)**.
+
+---
+
+## License
+
+ISC — see [LICENSE](LICENSE). You may use, modify and redistribute ZFW, including
+in derived or commercial work, as long as the copyright and permission notice stay
+in place. Contributions are welcome as pull requests against `master`; for anything
+touching the rule model or the apply path, please open an issue first.
 
 ---
 
