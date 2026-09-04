@@ -11,7 +11,7 @@ import (
 // ParseIP but would abort the apply mid-script in the IPv4 chains.
 func TestValidate(t *testing.T) {
 	base := Config{
-		LAN: "192.168.1.0/24", HostIP: "192.168.50.23",
+		LAN: "192.168.1.0/24", HostIP: "192.168.50.100",
 		HostTCPLAN: []string{"22", "443"},
 		HostUDPLAN: []string{"5353"},
 	}
