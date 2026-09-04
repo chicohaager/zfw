@@ -25,12 +25,12 @@ func mustNotContain(t *testing.T, haystack, needle string) {
 
 func TestEmptyDefaultDeny(t *testing.T) {
 	out := Compile(rules.RuleSet{
-		LAN: "192.168.1.0/24", HostIP: "192.168.1.143", DefaultPolicy: "deny",
+		LAN: "192.168.1.0/24", HostIP: "192.168.1.100", DefaultPolicy: "deny",
 	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT -A ZFW-IN -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT")
 	mustContain(t, out, "$IPT -A ZFW-IN -j DROP")
 	mustContain(t, out, "$IPT -C INPUT -j ZFW-IN")
-	mustContain(t, out, "$IPT -A DOCKER-USER -s 192.168.1.143 -j RETURN")
+	mustContain(t, out, "$IPT -A DOCKER-USER -s 192.168.1.100 -j RETURN")
 	// Default-deny is now scoped to published ports, not to the LAN source.
 	// With no published ports there is nothing to drop, but container-egress
 	// bridge RETURNs are still emitted, and the old source-scoped drop is gone.
@@ -43,7 +43,7 @@ func TestEmptyDefaultDeny(t *testing.T) {
 // trust-inversion where a non-LAN origin reached every container).
 func TestDockerPublishedPortDefaultDeny(t *testing.T) {
 	out := Compile(rules.RuleSet{
-		LAN: "192.168.1.0/24", HostIP: "192.168.1.143", DefaultPolicy: "deny",
+		LAN: "192.168.1.0/24", HostIP: "192.168.1.100", DefaultPolicy: "deny",
 	}, tcpOnly(map[int]bool{3050: true}), nil)
 	mustContain(t, out, `$IPT -A DOCKER-USER -p tcp -m conntrack --ctorigdstport 3050 --ctstate NEW -j DROP`)
 	mustContain(t, out, "$IPT -A DOCKER-USER -i docker0 -j RETURN")
@@ -176,7 +176,7 @@ func TestCountryDenyMultiple(t *testing.T) {
 // case without producing 100 multiport entries.
 func TestHostPortRange(t *testing.T) {
 	out := Compile(rules.RuleSet{
-		LAN: "192.168.1.0/24", HostIP: "192.168.1.143", DefaultPolicy: "deny",
+		LAN: "192.168.1.0/24", HostIP: "192.168.1.100", DefaultPolicy: "deny",
 		Rules: []rules.Rule{{
 			ID: "r1", Order: 10, Enabled: true,
 			Name: "Block VNC range", Action: "deny",
@@ -193,7 +193,7 @@ func TestHostPortRange(t *testing.T) {
 // must be expressed with conntrack's range syntax.
 func TestDockerPortRange(t *testing.T) {
 	out := Compile(rules.RuleSet{
-		LAN: "192.168.1.0/24", HostIP: "192.168.1.143", DefaultPolicy: "deny",
+		LAN: "192.168.1.0/24", HostIP: "192.168.1.100", DefaultPolicy: "deny",
 		Rules: []rules.Rule{{
 			ID: "r1", Order: 10, Enabled: true,
 			Name: "Allow container range", Action: "allow",
@@ -210,7 +210,7 @@ func TestDockerPortRange(t *testing.T) {
 // LAN gap stays closed by default.
 func TestIPv6ChainAlwaysEmitted(t *testing.T) {
 	out := Compile(rules.RuleSet{
-		LAN: "192.168.1.0/24", HostIP: "192.168.1.143", DefaultPolicy: "deny",
+		LAN: "192.168.1.0/24", HostIP: "192.168.1.100", DefaultPolicy: "deny",
 	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT6 -N ZFW-IN6")
 	mustContain(t, out, "$IPT6 -A ZFW-IN6 -p ipv6-icmp -j RETURN")
@@ -224,7 +224,7 @@ func TestIPv6ChainAlwaysEmitted(t *testing.T) {
 // killed (mDNS / DNS / etc.).
 func TestDockerBridgeBypass(t *testing.T) {
 	out := Compile(rules.RuleSet{
-		LAN: "192.168.1.0/24", HostIP: "192.168.1.143", DefaultPolicy: "deny",
+		LAN: "192.168.1.0/24", HostIP: "192.168.1.100", DefaultPolicy: "deny",
 	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT -A ZFW-IN -i docker0 -j ACCEPT")
 	mustContain(t, out, "$IPT -A ZFW-IN -i br-+ -j ACCEPT")
@@ -237,7 +237,7 @@ func TestDockerBridgeBypass(t *testing.T) {
 // turning an IPv6 rule into a silent show-stopper.
 func TestIPv6SourceRoutesToIPv6Chain(t *testing.T) {
 	out := Compile(rules.RuleSet{
-		LAN: "192.168.1.0/24", HostIP: "192.168.1.143", DefaultPolicy: "deny",
+		LAN: "192.168.1.0/24", HostIP: "192.168.1.100", DefaultPolicy: "deny",
 		Rules: []rules.Rule{{
 			Order: 10, Enabled: true, Name: "Allow SSH from SLAAC prefix",
 			Action:   "allow",
@@ -497,7 +497,7 @@ func TestWireGuardWildcardBypassed(t *testing.T) {
 // embedded EasyTier), which owns tun0 — the same role zt+ has for
 // ZeroTier. Without the bypass, a client that has built the tunnel is
 // still cut off at the last hop: measured on a ZimaCube, 125 SYNs to
-// 10.126.126.1:9527 went to ZFW-IN-DROP in a single connection attempt
+// 10.126.126.10:9527 went to ZFW-IN-DROP in a single connection attempt
 // and the client hung on "connecting" indefinitely, while tun0's tx
 // counter stayed at 668 bytes for days.
 //

@@ -11,7 +11,7 @@ import (
 func denyRuleSet() rules.RuleSet {
 	return rules.RuleSet{
 		LAN:           "192.168.1.0/24",
-		HostIP:        "192.168.1.143",
+		HostIP:        "192.168.1.100",
 		DefaultPolicy: "deny",
 	}
 }

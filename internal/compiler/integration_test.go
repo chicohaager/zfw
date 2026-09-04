@@ -81,7 +81,7 @@ func runInNetns(t *testing.T, script, queryChain string) string {
 func TestEngineApplyAllowsExpectedHostPort(t *testing.T) {
 	requireNetns(t)
 	rs := rules.RuleSet{
-		LAN: "192.168.1.0/24", HostIP: "192.168.1.143", DefaultPolicy: "deny",
+		LAN: "192.168.1.0/24", HostIP: "192.168.1.100", DefaultPolicy: "deny",
 		Rules: []rules.Rule{{
 			Order: 10, Enabled: true, Name: "SSH from LAN", Action: "allow",
 			Source:   rules.Source{Type: "range", Value: "192.168.1.0/24"},

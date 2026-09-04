@@ -53,7 +53,7 @@ func restoreChainRules(doc string) map[string][]string {
 // scheduled + rate-limited, plus HostIP / LAN / V6Drop / extraBypass.
 func comprehensiveRuleSet() rules.RuleSet {
 	return rules.RuleSet{
-		DefaultPolicy: "deny", LAN: "192.168.1.0/24", HostIP: "192.168.1.143",
+		DefaultPolicy: "deny", LAN: "192.168.1.0/24", HostIP: "192.168.1.100",
 		V6Drop: []int{5900, 23},
 		Rules: []rules.Rule{
 			{ID: "a", Order: 10, Enabled: true, Name: "SSH", Action: "allow", Source: rules.Source{Type: "range", Value: "192.168.1.0/24"}, Ports: rules.Ports{Type: "list", List: []int{22, 80, 443}}, Protocol: "tcp", Zone: "host", Log: true},

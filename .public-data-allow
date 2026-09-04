@@ -1,0 +1,38 @@
+# Exemptions for check-public-data.py — decided once, recorded here.
+# Keep every entry as narrow as the case allows: an allowance as wide as
+# the rule deletes the rule. Own host addresses are NEVER listed here;
+# they get anonymised instead.
+
+# --- invented addresses in the test suite and API examples ---
+# None of these is a real host of anyone's; they exercise LAN semantics,
+# which RFC 5737 documentation addresses cannot express (they are public).
+10.0.0.1
+10.0.0.2
+10.0.0.5
+10.0.0.7
+10.0.0.8
+10.1.2.3
+192.168.1.1
+192.168.1.10
+192.168.1.42
+192.168.1.46
+192.168.1.50
+192.168.1.77
+192.168.1.100
+192.168.1.101
+192.168.1.175
+10.126.126.10
+10.126.126.20
+
+# --- maintainer identity where it is required to be public ---
+# ISC needs the copyright holder; a disclosure policy needs a contact.
+LICENSE:Kuehn
+BUG-BOUNTY.md:Kuehn
+BUG-BOUNTY.md:holger.kuehn
+BUG-BOUNTY.md:holger.kuehn@virtual-services.info
+SECURITY-REPORT.md:Kuehn
+THREAT-MODEL.md:Kuehn
+BEST-PRACTICES.md:Kuehn
+mod-store/zfw.yaml:Kuehn
+mod-store/zfw.yaml:holger.kuehn
+mod-store/zfw.yaml:holger.kuehn@virtual-services.info

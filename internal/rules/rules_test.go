@@ -447,7 +447,7 @@ func TestValidateRejectsIPv6LANAndHostIP(t *testing.T) {
 	if err := Validate(rs); err == nil {
 		t.Error("Validate accepted an IPv6 host_ip")
 	}
-	rs = RuleSet{DefaultPolicy: "deny", LAN: "192.168.1.0/24", HostIP: "192.168.1.143"}
+	rs = RuleSet{DefaultPolicy: "deny", LAN: "192.168.1.0/24", HostIP: "192.168.1.100"}
 	if err := Validate(rs); err != nil {
 		t.Errorf("Validate rejected valid IPv4 LAN/host_ip: %v", err)
 	}

@@ -243,7 +243,7 @@ func zfwInRules(rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool, ext
 		// are the vendor's remote-access tunnel, authenticated by the mesh itself.
 		//
 		// Measured 2026-08-14 on a ZimaCube: without this line the desktop client's
-		// SYNs to 10.126.126.1:9527 are logged by ZFW-IN-DROP and discarded (125 in
+		// SYNs to 10.126.126.10:9527 are logged by ZFW-IN-DROP and discarded (125 in
 		// one connection attempt), the client hangs on "connecting" forever, and
 		// tun0's tx counter sits at 668 bytes for days. Adding it moved tx within
 		// two seconds. Listed in BEST-PRACTICES.md and THREAT-MODEL.md.
