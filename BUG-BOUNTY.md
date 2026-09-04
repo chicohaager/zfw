@@ -104,10 +104,11 @@ A useful report contains:
 - **Disclosure timeline** if your default is shorter than the 90
   days above
 
-A PoC against a host you own is fine. A PoC against
-`192.168.1.167` (the maintainer's test ZimaCube) without explicit
-prior agreement is not — that's testing in production. Same
-applies to any host you do not own.
+A PoC against a host you own is fine. A PoC against a host you do
+not own — the maintainer's test ZimaCube included — is not without
+explicit prior agreement: that's testing in production. No address
+of the maintainer's is published here, and asking for one is not
+part of the process.
 
 ---
 
