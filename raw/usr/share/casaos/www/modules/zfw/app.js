@@ -1122,9 +1122,14 @@ async function loadEvents() {
     return;
   }
   const zoneMap = {
-    host:   ['badge-blocked', 'host'],
-    host6:  ['badge-blocked', 'host (v6)'],
-    docker: ['badge-lan',     'docker'],
+    host:    ['badge-blocked', 'host'],
+    host6:   ['badge-blocked', 'host (v6)'],
+    docker:  ['badge-lan',     'docker'],
+    docker6: ['badge-lan',     'docker (v6)'],
+    // A per-rule LOG line ("Log when this rule fires") is a match, not a
+    // drop — the packet went on to the rule's own action. Labelled with the
+    // rule id so the operator can tell which rule fired.
+    rule:    ['badge-local',   'rule'],
   };
   // Threat banner: counts events that the server-side classifier
   // flagged with port_scan / brute_force tags in the visible window.
@@ -1157,7 +1162,8 @@ async function loadEvents() {
     // parseDropLine constrains zone to host|host6|docker today, so this is not
     // reachable — but every other sink in this file escapes, and frontend safety
     // must not quietly depend on a backend validator staying strict.
-    const [cls, lbl] = zoneMap[e.zone] || ['badge-local', esc(e.zone || '?')];
+    let [cls, lbl] = zoneMap[e.zone] || ['badge-local', esc(e.zone || '?')];
+    if (e.zone === 'rule' && e.rule) lbl = 'rule ' + esc(e.rule);
     const pills = (e.threats || []).map(tag =>
       `<span class="threat-pill threat-${esc(tag)}" title="Classifier flagged this event with ${esc(tag)}">${esc(threatLabel[tag] || tag)}</span>`
     ).join('');

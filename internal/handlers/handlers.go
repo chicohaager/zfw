@@ -86,6 +86,10 @@ type Server struct {
 	// Default to the real system probes in NewServer.
 	dockerPorts      func(context.Context) (system.PublishedPorts, error)
 	dockerContainers func(context.Context) ([]system.DockerContainer, error)
+	// listening is the host socket probe behind /api/exposure, injected for
+	// the same reason: the reach verdicts can then be tested against a fixed
+	// socket list instead of whatever the build host happens to listen on.
+	listening func(context.Context) ([]system.Socket, error)
 
 	// lastCompiled is the (binding-resolved) rule set the most recent
 	// recompileLocked produced; lastApplied is the one the last successful
@@ -133,7 +137,53 @@ func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string,
 		readRL:           newKeyedLimiter(5, 60, 15, 180),
 		dockerPorts:      system.DockerPorts,
 		dockerContainers: system.DockerContainers,
+		listening:        system.Listening,
 	}
+}
+
+// rulesPolicy answers the Exposure/Audit reachability questions from the rule
+// model — the file the firewall is compiled from. See rules.Disposition for
+// the matching semantics and for why the legacy allowlist.conf was the wrong
+// oracle.
+type rulesPolicy struct{ rs rules.RuleSet }
+
+func (p rulesPolicy) HostOpen(port int) bool {
+	return rules.Disposition(p.rs, "host", "tcp", port) == "allow"
+}
+
+func (p rulesPolicy) DockerOpen(port int) bool {
+	return rules.Disposition(p.rs, "docker", "tcp", port) == "allow"
+}
+
+// portPolicy returns the reachability oracle for the dashboard views.
+// rules.json wins whenever it exists; a host that still only has the legacy
+// allowlist.conf (pre-migration) falls back to it, and a host with neither
+// gets an empty rule set — deny-default, which is also what such a host would
+// compile to.
+func (s *Server) portPolicy() audit.PortPolicy {
+	rs, err := rules.Load(s.rulesPath)
+	if err == nil {
+		return rulesPolicy{rs}
+	}
+	if !os.IsNotExist(err) {
+		slog.Warn("dashboard reach verdicts: rules.json unreadable, falling back to allowlist.conf", "err", err)
+	}
+	if cfg, cerr := s.fw.LoadConfig(); cerr == nil {
+		return legacyPolicy{cfg}
+	}
+	return rulesPolicy{rules.RuleSet{DefaultPolicy: "deny"}}
+}
+
+// legacyPolicy is the allowlist.conf reading, kept only for hosts that have
+// not migrated to rules.json yet.
+type legacyPolicy struct{ cfg firewall.Config }
+
+func (p legacyPolicy) HostOpen(port int) bool {
+	return toSet(p.cfg.HostTCPLAN)[strconv.Itoa(port)]
+}
+
+func (p legacyPolicy) DockerOpen(port int) bool {
+	return !toSet(p.cfg.DockerDropLAN)[strconv.Itoa(port)]
 }
 
 // emitEvent fires a webhook with the given type + details. Fire-and-
@@ -853,15 +903,18 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 func (s *Server) exposure(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx()
 	defer cancel()
-	socks, err := system.Listening(ctx)
+	socks, err := s.listening(ctx)
 	if err != nil {
 		fail(w, http.StatusInternalServerError, "ss: "+err.Error())
 		return
 	}
 	st := s.fw.Status(ctx)
-	cfg, _ := s.fw.LoadConfig()
-	tcpAllow := toSet(cfg.HostTCPLAN)
-	dockerDrop := toSet(cfg.DockerDropLAN)
+	// Reach is judged by the rule model, not the legacy allowlist.conf: the
+	// UI has not written that file since the rules tab replaced it, so on a
+	// v1.x install it is absent, the old code read an empty config, and every
+	// LAN-facing socket rendered "blocked" the moment the firewall was active
+	// — including the ones the rules explicitly allow.
+	pol := s.portPolicy()
 
 	type entry struct {
 		system.Socket
@@ -874,11 +927,11 @@ func (s *Server) exposure(w http.ResponseWriter, r *http.Request) {
 		case sk.Scope == "local":
 			reach = "local"
 		case st.Active && sk.Proc == "docker-proxy":
-			if dockerDrop[strconv.Itoa(sk.Port)] {
+			if !pol.DockerOpen(sk.Port) {
 				reach = "blocked"
 			}
 		case st.Active:
-			if !tcpAllow[strconv.Itoa(sk.Port)] {
+			if !pol.HostOpen(sk.Port) {
 				reach = "blocked"
 			}
 		}
@@ -891,8 +944,10 @@ func (s *Server) auditHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx()
 	defer cancel()
 	st := s.fw.Status(ctx)
-	cfg, _ := s.fw.LoadConfig()
-	findings := audit.Findings(st, cfg)
+	// Same oracle as /api/exposure — see portPolicy. With the legacy config
+	// read here, every port-based finding flipped to "mitigated" as soon as
+	// the firewall was active, regardless of the rules.
+	findings := audit.FindingsWith(st, s.portPolicy())
 
 	// Load + update the audit-finding history under a dedicated mutex
 	// so concurrent /api/audit requests don't race the file. When

@@ -3,7 +3,11 @@
 // current firewall configuration.
 package audit
 
-import "github.com/chicohaager/zfw/internal/firewall"
+import (
+	"strconv"
+
+	"github.com/chicohaager/zfw/internal/firewall"
+)
 
 // Finding is one audit item with a live status.
 type Finding struct {
@@ -23,21 +27,49 @@ func contains(set []string, port string) bool {
 	return false
 }
 
-// Findings recomputes the catalog against the current firewall state.
+// PortPolicy answers whether a TCP port is reachable from the LAN once the
+// firewall is active. The rule model (rules.json) is the production
+// implementation; the legacy allowlist.conf adapter below is kept for the
+// migration path and for tests that build a Config by hand.
+type PortPolicy interface {
+	HostOpen(port int) bool   // a host-native listener on port is reachable
+	DockerOpen(port int) bool // a Docker-published port is reachable
+}
+
+// configPolicy adapts the legacy v0.1 tier config: host ports are open only
+// when listed, docker ports are closed only when listed.
+type configPolicy struct{ cfg firewall.Config }
+
+func (p configPolicy) HostOpen(port int) bool {
+	return contains(p.cfg.HostTCPLAN, strconv.Itoa(port))
+}
+
+func (p configPolicy) DockerOpen(port int) bool {
+	return !contains(p.cfg.DockerDropLAN, strconv.Itoa(port))
+}
+
+// Findings recomputes the catalog against the current firewall state, judged
+// by the legacy allowlist.conf tiers. Production callers use FindingsWith
+// and a rules.json-backed policy — see PortPolicy.
+func Findings(st firewall.Status, cfg firewall.Config) []Finding {
+	return FindingsWith(st, configPolicy{cfg})
+}
+
+// FindingsWith recomputes the catalog against the current firewall state.
 // "mitigated" = the LAN path is closed but the underlying config still
 // needs hardening; "fixed" = fully resolved; "open" = untouched.
-func Findings(st firewall.Status, cfg firewall.Config) []Finding {
-	// A host-native port is LAN-blocked when the firewall is active and the
-	// port is not on the host allowlist (default-drop closes it).
+func FindingsWith(st firewall.Status, pol PortPolicy) []Finding {
+	// A host-native port is LAN-blocked when the firewall is active and no
+	// rule lets it through (default-drop closes it).
 	hostBlocked := func(port string) string {
-		if st.Active && !contains(cfg.HostTCPLAN, port) {
+		if n, err := strconv.Atoi(port); err == nil && st.Active && !pol.HostOpen(n) {
 			return "mitigated"
 		}
 		return "open"
 	}
-	// A Docker-published port is LAN-blocked when it is on the drop list.
+	// A Docker-published port is LAN-blocked when the rules deny it.
 	dockerBlocked := func(port string) string {
-		if st.Active && contains(cfg.DockerDropLAN, port) {
+		if n, err := strconv.Atoi(port); err == nil && st.Active && !pol.DockerOpen(n) {
 			return "mitigated"
 		}
 		return "open"
