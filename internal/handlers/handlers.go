@@ -23,6 +23,7 @@ import (
 	"github.com/chicohaager/zfw/internal/compiler"
 	"github.com/chicohaager/zfw/internal/conntrack"
 	"github.com/chicohaager/zfw/internal/events"
+	"github.com/chicohaager/zfw/internal/feeds"
 	"github.com/chicohaager/zfw/internal/firewall"
 	"github.com/chicohaager/zfw/internal/geo"
 	"github.com/chicohaager/zfw/internal/notify"
@@ -61,6 +62,7 @@ type Server struct {
 	peerToken    string   // shared secret for inbound /api/peers/receive; empty = disabled
 	extraBypass  []string // v0.5.4 — extra inbound-bypass iface names appended to every chain
 	geo          *geo.Manager
+	feeds        *feeds.Manager
 	upd          *update.Checker // nil = self-update polling disabled
 	hook         *notify.Hook    // v0.5.5 — nil = webhook disabled
 	httpClient   *http.Client    // reusable client for outbound peer pushes
@@ -113,7 +115,7 @@ func (s *Server) SetLogLevel(lv *slog.LevelVar) { s.logLevel = lv }
 // /api/peers list+push endpoints; peerToken may be "" to disable the
 // follower-side /api/peers/receive endpoint. The two are independent —
 // a host can be a leader, a follower, both, or neither.
-func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string, upd *update.Checker, peersPath, peerToken string, extraBypass []string, hook *notify.Hook) *Server {
+func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, feedsDir, historyPath string, upd *update.Checker, peersPath, peerToken string, extraBypass []string, hook *notify.Hook) *Server {
 	return &Server{
 		fw:           fw,
 		rulesPath:    rulesPath,
@@ -123,6 +125,7 @@ func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string,
 		peerToken:    peerToken,
 		extraBypass:  extraBypass,
 		geo:          geo.New(geoDir),
+		feeds:        feeds.New(feedsDir),
 		upd:          upd,
 		hook:         hook,
 		httpClient:   peers.DefaultClient(),
@@ -259,11 +262,25 @@ func (s *Server) prefetchForCompile(ctx context.Context, rsHint *rules.RuleSet) 
 		rs = loaded
 	}
 	ccSet := map[string]bool{}
+	feedSet := map[string]bool{}
 	for _, r := range rs.Rules {
-		if r.Source.Type == "country" {
+		switch r.Source.Type {
+		case "country":
 			for _, cc := range rules.SplitCountries(r.Source.Value) {
 				ccSet[strings.ToLower(cc)] = true
 			}
+		case "feed":
+			feedSet[r.Source.Value] = true
+		}
+	}
+	if len(feedSet) > 0 {
+		ids := make([]string, 0, len(feedSet))
+		for id := range feedSet {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		if err := s.feeds.Ensure(ctx, ids, func(f string, a ...any) { slog.Warn(fmt.Sprintf(f, a...)) }); err != nil {
+			return nil, system.PublishedPorts{}, err
 		}
 	}
 	if len(ccSet) > maxGeoCountries {
@@ -367,11 +384,14 @@ func (s *Server) recompileLocked(containers []system.DockerContainer, dockerPort
 	}
 	geoFiles := map[string]string{}
 	for _, r := range rs.Rules {
-		if r.Source.Type == "country" {
+		switch r.Source.Type {
+		case "country":
 			for _, cc := range rules.SplitCountries(r.Source.Value) {
 				lc := strings.ToLower(cc)
 				geoFiles[lc] = s.geo.IpsetPath(lc)
 			}
+		case "feed":
+			geoFiles["feed:"+r.Source.Value] = s.feeds.IpsetPath(r.Source.Value)
 		}
 	}
 	script := compiler.Compile(rs, dockerPorts, geoFiles, s.extraBypass...)
@@ -465,6 +485,7 @@ func (s *Server) Routes() http.Handler {
 	// list, openapi, update snapshot, rules GET, templates) stay
 	// uncapped — they hit memory + a small JSON encode at worst.
 	mux.HandleFunc("/api/exposure", s.rateLimitedGet(s.exposure))
+	mux.HandleFunc("/api/feeds", s.rateLimitedGet(s.feedsList))
 	mux.HandleFunc("/api/audit", s.rateLimitedGet(s.auditHandler))
 	mux.HandleFunc("/api/versions", s.rateLimitedGet(s.versions))
 	mux.HandleFunc("/api/update", s.updateStatus)
@@ -1215,6 +1236,33 @@ func (s *Server) geoLookup(w http.ResponseWriter, r *http.Request) {
 		ips = ips[:500]
 	}
 	writeJSON(w, http.StatusOK, s.geo.LookupBatch(ips))
+}
+
+// feedEntry is one catalogue feed plus what this host has cached of it.
+type feedEntry struct {
+	feeds.Feed
+	SetName string      `json:"set_name"`
+	Cached  bool        `json:"cached"`
+	Meta    *feeds.Meta `json:"meta,omitempty"`
+}
+
+// feedsList serves the blocklist catalogue with per-feed cache state. The
+// catalogue is fixed in code, so the UI offers a choice, never a URL field.
+func (s *Server) feedsList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	out := make([]feedEntry, 0, len(feeds.Catalogue))
+	for _, f := range feeds.Catalogue {
+		e := feedEntry{Feed: f, SetName: feeds.SetName(f.ID)}
+		if m, ok := s.feeds.Info(f.ID); ok {
+			mm := m
+			e.Meta, e.Cached = &mm, true
+		}
+		out = append(out, e)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // updateStatus returns the cached self-update check result so the UI can

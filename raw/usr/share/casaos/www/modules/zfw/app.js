@@ -120,6 +120,7 @@ let rulesDirty = false;
 let v6Audit = null;
 
 async function loadRules() {
+  ensureFeedOptions().catch(() => {});
   // Fetched in parallel: the audit is advisory, so a failure must not stop
   // the rule table from rendering.
   const [rs, audit] = await Promise.all([
@@ -192,7 +193,7 @@ function renderRules() {
   const rows = ruleSet.rules.map((r, i) => {
     const actCls = r.action === 'allow' ? 'act-allow' : 'act-deny';
     const actLbl = r.action === 'allow' ? 'Allow' : 'Deny';
-    const src = r.source && r.source.type !== 'any' ? esc(r.source.value) : 'Any';
+    const src = sourceText(r.source);
     let ports = 'All';
     if (r.ports && r.ports.type === 'list') ports = esc((r.ports.list || []).join(', '));
     else if (r.ports && r.ports.type === 'range') ports = esc(r.ports.from + '–' + r.ports.to);
@@ -489,7 +490,7 @@ async function loadContainerOptions(selected) {
 function ruleSummary(r) {
   const verb = r.action === 'deny' ? 'Deny' : 'Allow';
   const src = (r.source && r.source.type && r.source.type !== 'any')
-    ? `from ${r.source.value || r.source.type}`
+    ? `from ${r.source.type === 'feed' ? feedName(r.source.value) : (r.source.value || r.source.type)}`
     : 'from any';
   let ports;
   if (!r.ports || r.ports.type === 'all') ports = 'all ports';
@@ -675,6 +676,9 @@ function openRuleEditor(rule) {
   $('#rm-action').value = r.action || 'allow';
   $('#rm-srctype').value = (r.source && r.source.type) || 'any';
   $('#rm-srcval').value = (r.source && r.source.value) || '';
+  ensureFeedOptions().then(() => {
+    if (r.source && r.source.type === 'feed') $('#rm-feed').value = r.source.value || '';
+  });
   $('#rm-porttype').value = (r.ports && r.ports.type) || 'list';
   $('#rm-portval').value = ((r.ports && r.ports.list) || []).join(', ');
   $('#rm-portfrom').value = (r.ports && r.ports.from) || '';
@@ -741,15 +745,47 @@ function openDenyEditorForPort(port) {
   });
 }
 
+/* ---------- blocklist feeds (fixed catalogue, GET /api/feeds) ---------- */
+let feedCatalogue = null;
+async function ensureFeedOptions() {
+  if (feedCatalogue) return feedCatalogue;
+  try {
+    feedCatalogue = await api('/feeds');
+  } catch (e) {
+    feedCatalogue = [];
+  }
+  const sel = $('#rm-feed');
+  sel.innerHTML = feedCatalogue.map(f => {
+    const state = f.cached && f.meta ? ` — ${f.meta.entries} networks cached` : ' — not fetched yet';
+    return `<option value="${esc(f.id)}">${esc(f.name)}${esc(state)}</option>`;
+  }).join('');
+  return feedCatalogue;
+}
+function feedName(id) {
+  const f = (feedCatalogue || []).find(x => x.id === id);
+  return f ? f.name : id;
+}
+// Source column text for the rules table.
+function sourceText(src) {
+  if (!src || src.type === 'any') return 'Any';
+  if (src.type === 'feed') return 'Feed: ' + esc(feedName(src.value));
+  return esc(src.value);
+}
+
 function updateModalFields() {
   const st = $('#rm-srctype').value;
   const isGeo = st === 'country';
+  const isFeed = st === 'feed';
   const pt = $('#rm-porttype').value;
   const isOut = $('#rm-direction').value === 'outbound';
-  $('#rm-srcval-fld').hidden = st === 'any';
+  $('#rm-srcval-fld').hidden = st === 'any' || isFeed;
+  $('#rm-feed-fld').hidden = !isFeed;
   $('#rm-portval-fld').hidden = pt !== 'list';
   $('#rm-portrange-fld').hidden = pt !== 'range';
   $('#rm-geo-hint').hidden = !isGeo;
+  $('#rm-feed-hint').hidden = !isFeed;
+  $('#rm-feed-label').textContent = isOut ? 'Destination feed (block egress to)' : 'Feed (block sources on)';
+  if (isFeed) ensureFeedOptions();
   // Source label semantics flip with direction: outbound rules apply
   // against the destination peer, not the source.
   $('#rm-source-label').textContent = isOut ? 'Destination / peer' : 'Source';
@@ -786,6 +822,10 @@ function saveRuleFromEditor() {
   let srcval = $('#rm-srcval').value.trim();
   if (srctype === 'ip' && !isIP(srcval)) return modalError('Source IP is invalid.');
   if (srctype === 'range' && !isCIDR(srcval)) return modalError('Source range must be a CIDR (e.g. 192.168.1.0/24).');
+  if (srctype === 'feed') {
+    srcval = $('#rm-feed').value;
+    if (!srcval) return modalError('Choose a blocklist feed.');
+  }
   if (srctype === 'country') {
     const codes = srcval.split(/[\s,]+/).filter(Boolean);
     if (!codes.length) return modalError('Enter at least one country code.');

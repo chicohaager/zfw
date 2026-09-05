@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/chicohaager/zfw/internal/feeds"
 	"github.com/chicohaager/zfw/internal/geo"
 	"github.com/chicohaager/zfw/internal/rules"
 	"github.com/chicohaager/zfw/internal/system"
@@ -18,8 +19,10 @@ import (
 
 // Compile returns the bash ruleset script.
 //   - dockerPorts marks which TCP ports are Docker-published (resolves zone "auto").
-//   - geoFiles maps a lowercase country code to its ipset-restore file path;
-//     these sets are loaded before the rules that reference them.
+//   - geoFiles maps an ipset key to its ipset-restore file path; the key is a
+//     lowercase country code for a country source and "feed:<id>" for a
+//     blocklist feed. Only the file matters (the set name is inside it);
+//     the key orders and de-duplicates. All sets load before the rules.
 //   - extraBypass appends additional inbound-bypass interface names to every
 //     emitted chain (ZFW-IN, ZFW-IN6, DOCKER-USER). Strings may include the
 //     iptables wildcard suffix "+" (e.g. "wg+", "vpn+"). The caller is
@@ -96,13 +99,14 @@ func emitHeader(b *strings.Builder) {
 	b.WriteString("modprobe xt_LOG nf_log_syslog xt_recent xt_time 2>/dev/null || true\n\n")
 }
 
-// emitGeoSets loads the country ipsets referenced by country-source
-// rules, sorted for deterministic output. No-op when none are used.
+// emitGeoSets loads every ipset the rules reference — country sets and
+// blocklist feeds alike — sorted for deterministic output. No-op when none
+// are used.
 func emitGeoSets(b *strings.Builder, geoFiles map[string]string) {
 	if len(geoFiles) == 0 {
 		return
 	}
-	b.WriteString("# ===== geo country sets (ipset) =====\n")
+	b.WriteString("# ===== ipsets: geo country sets + blocklist feeds =====\n")
 	b.WriteString("modprobe ip_set ip_set_hash_net xt_set 2>/dev/null || true\n")
 	ccs := make([]string, 0, len(geoFiles))
 	for cc := range geoFiles {
@@ -419,6 +423,11 @@ func outboundLines(r rules.Rule) []string {
 			lines = append(lines, emitOutboundPortLines(r, match, target)...)
 		}
 		return lines
+	case "feed":
+		// Outbound feed = "no egress to anything on this list" — the case
+		// that catches a compromised container phoning home.
+		match := joinArgs("-m", "set", "--match-set", feeds.SetName(r.Source.Value), "dst", sch)
+		return emitOutboundPortLines(r, match, target)
 	default:
 		return nil
 	}
@@ -914,6 +923,8 @@ func sourceArgs(s rules.Source) []string {
 			return []string{""}
 		}
 		return out
+	case "feed":
+		return []string{"-m set --match-set " + feeds.SetName(s.Value) + " src"}
 	default: // any
 		return []string{""}
 	}

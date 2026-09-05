@@ -154,12 +154,17 @@
             <option value="ip">Single IP</option>
             <option value="range">IP range (CIDR)</option>
             <option value="country">Country</option>
+            <option value="feed">Blocklist feed</option>
           </select>
         </label>
         <label class="fld" id="rm-srcval-fld"><span id="rm-srcval-label">Source address</span>
           <input id="rm-srcval" type="text" placeholder="192.168.1.0/24">
         </label>
+        <label class="fld" id="rm-feed-fld" hidden><span id="rm-feed-label">Feed</span>
+          <select id="rm-feed"></select>
+        </label>
         <p id="rm-geo-hint" class="rm-hint" hidden>Geo-blocking only works with direct port-forwarding &mdash; not behind a Pangolin/Cloudflare tunnel (filter at the VPS there).</p>
+        <p id="rm-feed-hint" class="rm-hint" hidden>Feeds come from a fixed catalogue and are refreshed from the source on apply. Private, link-local, CGNAT (Tailscale) and multicast ranges are always removed before a feed is loaded, so a feed can never block your LAN. Like geo-blocking, a feed only sees real source addresses with direct port-forwarding &mdash; not behind a tunnel.</p>
         <label class="fld">Ports
           <select id="rm-porttype">
             <option value="all">All ports</option>
