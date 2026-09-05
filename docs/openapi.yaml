@@ -42,7 +42,7 @@ components:
     Source:
       type: object
       properties:
-        type:  { type: string, enum: [any, ip, range, country] }
+        type:  { type: string, enum: [any, ip, range, country, feed] }
         value: { type: string, example: "192.168.1.0/24" }
     Ports:
       type: object
@@ -297,7 +297,8 @@ paths:
                             "docker-all-ports" — ports=all on the Docker zone is not widened to the host's IPv6
                             input chain, which would also expose host-native services.
                             "no-ports" — the rule matches no port.
-                          enum: [ipv4-source, country-source, docker-all-ports, no-ports, not-mirrored]
+                            "feed-source" — blocklist feeds are IPv4-only ipsets, like geo sets.
+                          enum: [ipv4-source, country-source, feed-source, docker-all-ports, no-ports, not-mirrored]
                   inbound_allows: { type: integer, description: "Enabled inbound allow rules that do reach ZFW-IN6." }
                   default_deny:   { type: boolean }
                   blind:
@@ -363,6 +364,66 @@ paths:
         '200': { description: Reverted. }
         '429': { description: Rate-limited. }
 
+  /api/feeds:
+    get:
+      summary: "Blocklist feed catalogue with per-host cache state"
+      description: >
+        The catalogue is fixed in the daemon; there is no way to add a URL. Each entry carries
+        the ipset name a rule with source.type=feed matches, and — once the feed has been
+        fetched on this host — the counts of the last render: networks loaded, and entries
+        removed because they overlap a special-use range (RFC 1918, loopback, link-local,
+        CGNAT, multicast, 0/8). That removal is unconditional: measured on 2026-09-05,
+        firehol_level1 ships 10/8, 172.16/12, 192.168/16 and 100.64/10, which loaded verbatim
+        would drop every LAN and Tailscale packet.
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:          { type: string, example: spamhaus_drop }
+                    name:        { type: string }
+                    url:         { type: string }
+                    license:     { type: string }
+                    min_entries: { type: integer }
+                    max_entries: { type: integer }
+                    set_name:    { type: string, example: zfw-feed-spamhaus_drop }
+                    cached:      { type: boolean }
+                    rules:       { type: array, items: { type: string }, description: "Names of the rules that reference this feed" }
+                    live:
+                      type: object
+                      nullable: true
+                      description: "Present when the feed's set is loaded in the kernel (rules applied)"
+                      properties:
+                        entries: { type: integer, description: "Networks in the live set" }
+                        packets: { type: integer, description: "Packets matched by rules on this set across the ZFW chains" }
+                        bytes:   { type: integer }
+                    next_refresh: { type: string, format: date-time, description: "When the background refresh is due; absent when disabled or never fetched" }
+                    meta:
+                      type: object
+                      nullable: true
+                      properties:
+                        id:       { type: string }
+                        fetched:  { type: string, format: date-time }
+                        rendered: { type: string, format: date-time }
+                        entries:   { type: integer }
+                        dropped:   { type: integer, description: "Removed: overlaps a built-in special-use range" }
+                        protected: { type: integer, description: "Removed: overlaps the host's own LAN, address or a sync peer" }
+  /api/feeds/refresh:
+    post:
+      summary: "Re-fetch every feed the rules reference and swap the live sets in place"
+      description: >
+        Same operation the daemon runs every ZFW_FEEDS_REFRESH (default 12h). Never recompiles,
+        never applies: compiled.sh and the iptables chains are unchanged afterwards; only the
+        ipset contents moved (temporary set, swap, destroy). A feed whose set is not live —
+        rules never applied — only gets its file updated. Returns the catalogue as GET /api/feeds.
+      responses:
+        '200': { description: OK }
+        '502': { description: "A feed could not be refreshed (the message names it); others may have succeeded" }
   /api/exposure:
     get:
       summary: Listening TCP/UDP sockets on the host with their LAN-reachability classification.

@@ -73,6 +73,55 @@ async function loadFirewall() {
     fwItem('INPUT rules', fw.input_rules || 0) +
     fwItem('DOCKER-USER DROPs', fw.docker_drops || 0) +
     fwItem('Dead-man armed', !!fw.deadman, 'warn');
+  loadFeedsCard().catch(() => {});
+}
+
+/* ---------- blocklist feeds card (Firewall tab) ---------- */
+// Only feeds a rule actually uses are shown; a host without feed rules
+// keeps the card hidden. "Live" means the set is loaded in the kernel —
+// i.e. the rules were applied — and the counters are what those rules
+// have matched so far. The switch for a feed is its rule: disable the
+// rule on the Rules tab, then apply.
+async function loadFeedsCard() {
+  const card = $('#fw-feeds');
+  let list;
+  try { list = await api('/feeds'); } catch (e) { card.hidden = true; return; }
+  feedCatalogue = list;
+  const used = list.filter(f => (f.rules || []).length);
+  if (!used.length) { card.hidden = true; return; }
+  const fmtBytes = b => b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + ' GB' : b >= 1 << 20 ? (b / (1 << 20)).toFixed(1) + ' MB' : b >= 1024 ? (b / 1024).toFixed(1) + ' KB' : b + ' B';
+  const rel = iso => {
+    if (!iso) return '';
+    const d = (new Date(iso) - Date.now()) / 60000;
+    if (Math.abs(d) < 1) return 'now';
+    const h = Math.round(Math.abs(d) / 60), m = Math.round(Math.abs(d));
+    const s = h >= 1 ? h + ' h' : m + ' min';
+    return d > 0 ? 'in ' + s : s + ' ago';
+  };
+  const rows = used.map(f => {
+    const m = f.meta || {};
+    let state, cls;
+    if (f.live) { state = `live — ${f.live.entries} networks, ${f.live.packets} packets blocked (${fmtBytes(f.live.bytes)})`; cls = 'ok'; }
+    else if (f.cached) { state = `cached, ${m.entries} networks — not live until the rules are applied`; cls = 'warn'; }
+    else { state = 'not fetched yet — apply the rules to load it'; cls = 'warn'; }
+    const removed = f.cached ? `${m.dropped} special-use and ${m.protected || 0} host-specific entries removed` : '';
+    const when = f.cached ? `fetched ${rel(m.fetched)}${f.next_refresh ? ', next refresh ' + rel(f.next_refresh) : ''}` : '';
+    return `<div class="feed-row">
+      <div class="feed-main"><span class="feed-name">${esc(f.name)}</span>
+        <span class="feed-state ${cls}">${esc(state)}</span>
+        <span class="feed-sub">${esc([removed, when].filter(Boolean).join(' · '))}</span>
+        <span class="feed-sub">used by: ${esc(f.rules.join(', '))}</span></div>
+    </div>`;
+  }).join('');
+  card.innerHTML = `<div class="feed-head"><span class="sg-label">Blocklist feeds</span>
+    <button id="btn-feeds-refresh" class="btn-secondary btn-small">Update now</button></div>${rows}`;
+  card.hidden = false;
+  $('#btn-feeds-refresh').addEventListener('click', async () => {
+    const b = $('#btn-feeds-refresh'); b.disabled = true; setStatus('Refreshing feeds…');
+    try { await api('/feeds/refresh', { method: 'POST', body: '{}' }); setStatus('Feeds refreshed', 'ok'); }
+    catch (e) { setStatus('Feed refresh failed: ' + e.message, 'err'); }
+    b.disabled = false; loadFeedsCard().catch(() => {});
+  });
 }
 
 async function doFw(path, body, msg) {
@@ -120,6 +169,7 @@ let rulesDirty = false;
 let v6Audit = null;
 
 async function loadRules() {
+  ensureFeedOptions().catch(() => {});
   // Fetched in parallel: the audit is advisory, so a failure must not stop
   // the rule table from rendering.
   const [rs, audit] = await Promise.all([
@@ -192,7 +242,7 @@ function renderRules() {
   const rows = ruleSet.rules.map((r, i) => {
     const actCls = r.action === 'allow' ? 'act-allow' : 'act-deny';
     const actLbl = r.action === 'allow' ? 'Allow' : 'Deny';
-    const src = r.source && r.source.type !== 'any' ? esc(r.source.value) : 'Any';
+    const src = sourceText(r.source);
     let ports = 'All';
     if (r.ports && r.ports.type === 'list') ports = esc((r.ports.list || []).join(', '));
     else if (r.ports && r.ports.type === 'range') ports = esc(r.ports.from + '–' + r.ports.to);
@@ -489,7 +539,7 @@ async function loadContainerOptions(selected) {
 function ruleSummary(r) {
   const verb = r.action === 'deny' ? 'Deny' : 'Allow';
   const src = (r.source && r.source.type && r.source.type !== 'any')
-    ? `from ${r.source.value || r.source.type}`
+    ? `from ${r.source.type === 'feed' ? feedName(r.source.value) : (r.source.value || r.source.type)}`
     : 'from any';
   let ports;
   if (!r.ports || r.ports.type === 'all') ports = 'all ports';
@@ -675,6 +725,9 @@ function openRuleEditor(rule) {
   $('#rm-action').value = r.action || 'allow';
   $('#rm-srctype').value = (r.source && r.source.type) || 'any';
   $('#rm-srcval').value = (r.source && r.source.value) || '';
+  ensureFeedOptions().then(() => {
+    if (r.source && r.source.type === 'feed') $('#rm-feed').value = r.source.value || '';
+  });
   $('#rm-porttype').value = (r.ports && r.ports.type) || 'list';
   $('#rm-portval').value = ((r.ports && r.ports.list) || []).join(', ');
   $('#rm-portfrom').value = (r.ports && r.ports.from) || '';
@@ -741,15 +794,47 @@ function openDenyEditorForPort(port) {
   });
 }
 
+/* ---------- blocklist feeds (fixed catalogue, GET /api/feeds) ---------- */
+let feedCatalogue = null;
+async function ensureFeedOptions() {
+  if (feedCatalogue) return feedCatalogue;
+  try {
+    feedCatalogue = await api('/feeds');
+  } catch (e) {
+    feedCatalogue = [];
+  }
+  const sel = $('#rm-feed');
+  sel.innerHTML = feedCatalogue.map(f => {
+    const state = f.cached && f.meta ? ` — ${f.meta.entries} networks cached` : ' — not fetched yet';
+    return `<option value="${esc(f.id)}">${esc(f.name)}${esc(state)}</option>`;
+  }).join('');
+  return feedCatalogue;
+}
+function feedName(id) {
+  const f = (feedCatalogue || []).find(x => x.id === id);
+  return f ? f.name : id;
+}
+// Source column text for the rules table.
+function sourceText(src) {
+  if (!src || src.type === 'any') return 'Any';
+  if (src.type === 'feed') return 'Feed: ' + esc(feedName(src.value));
+  return esc(src.value);
+}
+
 function updateModalFields() {
   const st = $('#rm-srctype').value;
   const isGeo = st === 'country';
+  const isFeed = st === 'feed';
   const pt = $('#rm-porttype').value;
   const isOut = $('#rm-direction').value === 'outbound';
-  $('#rm-srcval-fld').hidden = st === 'any';
+  $('#rm-srcval-fld').hidden = st === 'any' || isFeed;
+  $('#rm-feed-fld').hidden = !isFeed;
   $('#rm-portval-fld').hidden = pt !== 'list';
   $('#rm-portrange-fld').hidden = pt !== 'range';
   $('#rm-geo-hint').hidden = !isGeo;
+  $('#rm-feed-hint').hidden = !isFeed;
+  $('#rm-feed-label').textContent = isOut ? 'Destination feed (block egress to)' : 'Feed (block sources on)';
+  if (isFeed) ensureFeedOptions();
   // Source label semantics flip with direction: outbound rules apply
   // against the destination peer, not the source.
   $('#rm-source-label').textContent = isOut ? 'Destination / peer' : 'Source';
@@ -786,6 +871,10 @@ function saveRuleFromEditor() {
   let srcval = $('#rm-srcval').value.trim();
   if (srctype === 'ip' && !isIP(srcval)) return modalError('Source IP is invalid.');
   if (srctype === 'range' && !isCIDR(srcval)) return modalError('Source range must be a CIDR (e.g. 192.168.1.0/24).');
+  if (srctype === 'feed') {
+    srcval = $('#rm-feed').value;
+    if (!srcval) return modalError('Choose a blocklist feed.');
+  }
   if (srctype === 'country') {
     const codes = srcval.split(/[\s,]+/).filter(Boolean);
     if (!codes.length) return modalError('Enter at least one country code.');

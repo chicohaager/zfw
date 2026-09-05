@@ -78,13 +78,15 @@ entire class of exposure at once. That is what ZFW provides.
 
 A standalone ZimaOS module — a tile in the ZimaOS dashboard — with seven tabs:
 
-- **Firewall** — live status; **Safe-Apply** with a 120-second dead-man switch: if you do
+- **Firewall** — live status, a card for the blocklist feeds your rules use (live entry
+  count, packets matched, next refresh, *Update now*); **Safe-Apply** with a 120-second dead-man switch: if you do
   not Confirm in time, ZFW **removes the firewall entirely** (all ZFW rules dropped, host
   back to its unprotected stock state — *not* a restore of the previously committed rules).
   A bad rule can never lock you out, but an unattended Safe-Apply leaves the host
   unprotected; Commit; Revert.
 - **Rules** — the rule list, evaluated top to bottom, first match wins. A rule is
-  allow/deny on a source (any / IP / CIDR range / ISO-3166 country codes, max 32),
+  allow/deny on a source (any / IP / CIDR range / ISO-3166 country codes, max 32 / a
+  blocklist feed from a fixed catalogue — see below),
   a port list or range, TCP/UDP/both, and a zone (auto / host / docker, or bound to a
   specific container). Optional per rule: inbound or outbound direction, a time
   schedule (from–to, weekdays), a connection rate limit (*n* connections per window),
@@ -310,6 +312,45 @@ file too.
 once: a host that still has it and no `rules.json` gets it migrated into
 `rules.json` on the daemon's next start (a backup of the original stays). Nothing
 writes it any more.
+
+### Blocklist feeds
+
+A rule can take a **blocklist feed** as its source: a third-party list of
+networks known for abuse, kept in `/DATA/zfw/feeds/` and loaded as an ipset
+the rule matches. The catalogue is fixed in the daemon — currently
+[FireHOL Level 1](https://iplists.firehol.org/) and
+[Spamhaus DROP](https://www.spamhaus.org/drop/) — and there is deliberately no
+URL field: a feed decides what your firewall drops, and a URL you can edit
+would hand that decision to whoever controls the far end.
+
+Three things to know before you use one:
+
+- **A feed adds nothing on a default-deny host chain.** Everything not
+  explicitly allowed is dropped anyway. Feeds earn their keep on ports you
+  open to the world, on published container ports, and **outbound** — a deny
+  rule with direction *outbound* and a feed source stops a compromised
+  container from reaching known bad infrastructure.
+- **Special-use ranges are always removed** before a feed is loaded — RFC 1918,
+  loopback, link-local, CGNAT (`100.64.0.0/10`, which Tailscale uses), multicast
+  and `0.0.0.0/8`. Measured on 2026-09-05, FireHOL Level 1 ships all of them; loaded
+  verbatim it would drop every LAN and Tailscale packet. On top of that, the LAN
+  and host address from `rules.json` and every sync peer are removed too — a feed
+  that lists your own public range cannot lock you out. `GET /api/feeds` reports
+  how many entries were removed on each account.
+- **Behind a tunnel a feed sees only the tunnel's address**, exactly like
+  geo-blocking. It works with direct port-forwarding.
+
+A fetched list must parse to a plausible number of entries before it may
+replace the cached one (a captive-portal page or a truncated download is
+refused, the cache stays); if the network is down, the cached list is used.
+
+Feeds are refreshed in the background every 12 hours (`ZFW_FEEDS_REFRESH`,
+`0` disables) and on demand via `POST /api/feeds/refresh`. A refresh **never
+touches the rules**: the new content is loaded into a temporary set and
+swapped in, so `compiled.sh` and the live iptables chains stay byte for byte
+what they were — the same line `dockerwatch` follows, which recompiles but
+never applies. The swap matters: loading into the live set directly leaves it
+half-filled for a moment (measured: 111 000 of 200 000 entries mid-load).
 
 After any change, run **Safe-Apply** from the Firewall tab (or `sudo /DATA/zfw/zfw apply` on the host).
 
