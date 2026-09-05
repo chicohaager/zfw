@@ -632,3 +632,40 @@ func TestMultiportChunkOfOneFallsBackToDport(t *testing.T) {
 	mustContain(t, out, "--dport 2015 ")
 	mustNotContain(t, out, "--dports 2015")
 }
+
+// A feed source compiles exactly like a country source, against the feed's
+// own ipset: src for inbound (host and docker zones), dst for outbound, and
+// the set is loaded before the rules — on both the bash and the restore path.
+func TestFeedRuleInboundOutboundAndRestoreParity(t *testing.T) {
+	rs := rules.RuleSet{
+		LAN: "192.168.1.0/24", DefaultPolicy: "allow",
+		Rules: []rules.Rule{
+			{ID: "fh", Order: 10, Enabled: true, Name: "host in", Action: "deny",
+				Source: rules.Source{Type: "feed", Value: "spamhaus_drop"},
+				Ports:  rules.Ports{Type: "all"}, Protocol: "both", Zone: "host"},
+			{ID: "fd", Order: 20, Enabled: true, Name: "docker in", Action: "deny",
+				Source: rules.Source{Type: "feed", Value: "firehol_level1"},
+				Ports:  rules.Ports{Type: "list", List: []int{8096}}, Protocol: "tcp", Zone: "docker"},
+			{ID: "fo", Order: 30, Enabled: true, Name: "egress", Action: "deny", Direction: "outbound",
+				Source: rules.Source{Type: "feed", Value: "spamhaus_drop"},
+				Ports:  rules.Ports{Type: "all"}, Protocol: "both", Zone: "host"},
+		},
+	}
+	pp := system.PublishedPorts{TCP: map[int]bool{8096: true}}
+	files := map[string]string{"feed:spamhaus_drop": "/DATA/zfw/feeds/spamhaus_drop.ipset", "feed:firehol_level1": "/DATA/zfw/feeds/firehol_level1.ipset"}
+	out := Compile(rs, pp, files)
+	mustContain(t, out, "modprobe ip_set ip_set_hash_net xt_set")
+	mustContain(t, out, `ipset restore -exist -f "/DATA/zfw/feeds/spamhaus_drop.ipset"`)
+	mustContain(t, out, `ipset restore -exist -f "/DATA/zfw/feeds/firehol_level1.ipset"`)
+	mustContain(t, out, "$IPT -A ZFW-IN -m set --match-set zfw-feed-spamhaus_drop src -j DROP")
+	mustContain(t, out, "-m set --match-set zfw-feed-firehol_level1 src")
+	mustContain(t, out, "--match-set zfw-feed-spamhaus_drop dst")
+	// The set must be loaded before any rule references it.
+	if strings.Index(out, "ipset restore") > strings.Index(out, "--match-set zfw-feed-") {
+		t.Fatal("feed ipset is loaded after the rule that references it")
+	}
+	// Restore path carries the same DOCKER-USER match.
+	rest := CompileRestoreScript(rs, pp, files)
+	mustContain(t, rest, `ipset restore -exist -f "/DATA/zfw/feeds/firehol_level1.ipset"`)
+	mustContain(t, rest, "--match-set zfw-feed-firehol_level1 src")
+}

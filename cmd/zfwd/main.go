@@ -70,7 +70,7 @@ func main() {
 	// signal-aware context is constructed below.
 	upd := update.New(buildinfo.Version, cfg.UpdateURL)
 	hook := notify.New(cfg.WebhookURL)
-	srv := handlers.NewServer(fw, cfg.RulesFile, cfg.CompiledFile, cfg.GeoDir, cfg.HistoryFile, upd, cfg.PeersFile, cfg.PeerToken, cfg.ExtraBypassIfaces, hook)
+	srv := handlers.NewServer(fw, cfg.RulesFile, cfg.CompiledFile, cfg.GeoDir, cfg.FeedsDir, cfg.HistoryFile, upd, cfg.PeersFile, cfg.PeerToken, cfg.ExtraBypassIfaces, hook)
 	srv.SetLogLevel(logLevel) // enable runtime debug toggle via /api/debug
 
 	seedRulesIfMissing(cfg, fw)

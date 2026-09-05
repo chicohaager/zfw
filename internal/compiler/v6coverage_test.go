@@ -271,3 +271,13 @@ func ruleByID(rs rules.RuleSet, id string) rules.Rule {
 	}
 	return rules.Rule{}
 }
+
+func TestV6AuditNamesFeedSourceReason(t *testing.T) {
+	a := AuditV6(rules.RuleSet{DefaultPolicy: "deny", Rules: []rules.Rule{{
+		ID: "f", Order: 10, Enabled: true, Name: "feed", Action: "deny",
+		Source: rules.Source{Type: "feed", Value: "spamhaus_drop"},
+		Ports:  rules.Ports{Type: "all"}, Protocol: "both", Zone: "host"}}})
+	if len(a.Rules) != 1 || a.Rules[0].Reason != "feed-source" {
+		t.Errorf("want feed-source, got %+v", a.Rules)
+	}
+}
