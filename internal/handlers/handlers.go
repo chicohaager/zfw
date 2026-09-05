@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -279,6 +281,7 @@ func (s *Server) prefetchForCompile(ctx context.Context, rsHint *rules.RuleSet) 
 			ids = append(ids, id)
 		}
 		sort.Strings(ids)
+		s.feeds.Protect(s.feedProtection(rs))
 		if err := s.feeds.Ensure(ctx, ids, func(f string, a ...any) { slog.Warn(fmt.Sprintf(f, a...)) }); err != nil {
 			return nil, system.PublishedPorts{}, err
 		}
@@ -1236,6 +1239,27 @@ func (s *Server) geoLookup(w http.ResponseWriter, r *http.Request) {
 		ips = ips[:500]
 	}
 	writeJSON(w, http.StatusOK, s.geo.LookupBatch(ips))
+}
+
+// feedProtection lists the host-specific ranges a feed must never block:
+// the LAN and host address from rules.json, and every sync peer given as a
+// literal address. Names are not resolved — a DNS answer is not something
+// to build a firewall exception on. The built-in special-use list in
+// internal/feeds covers the private ranges regardless of what is here.
+func (s *Server) feedProtection(rs rules.RuleSet) []string {
+	out := []string{rs.LAN, rs.HostIP}
+	if s.peersPath != "" {
+		if ps, err := peers.Load(s.peersPath); err == nil {
+			for _, p := range ps {
+				if u, err := url.Parse(p.URL); err == nil {
+					if ip := net.ParseIP(u.Hostname()); ip != nil {
+						out = append(out, ip.String())
+					}
+				}
+			}
+		}
+	}
+	return out
 }
 
 // feedEntry is one catalogue feed plus what this host has cached of it.

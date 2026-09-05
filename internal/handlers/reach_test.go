@@ -300,3 +300,39 @@ func TestRulesPostRejectsUnknownFeed(t *testing.T) {
 		t.Fatal("a fetch was attempted for a rejected feed id")
 	}
 }
+
+// The host's own LAN and address from rules.json must never end up in a
+// rendered feed set, even when a feed lists them.
+func TestRulesPostProtectsOwnLANAndHostFromFeeds(t *testing.T) {
+	var body strings.Builder
+	body.WriteString("203.0.113.0/24\n198.51.100.7\n")
+	for i := 0; i < 300; i++ {
+		fmt.Fprintf(&body, "45.%d.%d.0/24\n", i/256, i%256)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body.String()))
+	}))
+	defer srv.Close()
+	s, _ := newTestServer(t, &fakeFirewall{})
+	s.feeds.Source = func(f feeds.Feed) string { return srv.URL + "/" + f.ID }
+	rs := rules.RuleSet{DefaultPolicy: "allow", LAN: "203.0.113.0/24", HostIP: "198.51.100.7",
+		Rules: []rules.Rule{{
+			ID: "f1", Order: 10, Enabled: true, Name: "feed", Action: "deny",
+			Source: rules.Source{Type: "feed", Value: "spamhaus_drop"},
+			Ports:  rules.Ports{Type: "all"}, Protocol: "both", Zone: "host"}}}
+	if w := do(s, http.MethodPost, "/api/rules", rs); w.Code != http.StatusOK {
+		t.Fatalf("rules POST: HTTP %d (body=%s)", w.Code, w.Body.String())
+	}
+	set, err := os.ReadFile(s.feeds.IpsetPath("spamhaus_drop"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, own := range []string{" 203.0.113.0/24\n", " 198.51.100.7/32\n"} {
+		if strings.Contains(string(set), own) {
+			t.Errorf("own range %q rendered into the feed set", strings.TrimSpace(own))
+		}
+	}
+	if meta, ok := s.feeds.Info("spamhaus_drop"); !ok || meta.Protected != 2 {
+		t.Fatalf("meta = %+v ok=%v, want protected=2", meta, ok)
+	}
+}

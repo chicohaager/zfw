@@ -332,8 +332,10 @@ Three things to know before you use one:
 - **Special-use ranges are always removed** before a feed is loaded — RFC 1918,
   loopback, link-local, CGNAT (`100.64.0.0/10`, which Tailscale uses), multicast
   and `0.0.0.0/8`. Measured on 2026-09-05, FireHOL Level 1 ships all of them; loaded
-  verbatim it would drop every LAN and Tailscale packet. `GET /api/feeds` reports
-  how many entries were removed.
+  verbatim it would drop every LAN and Tailscale packet. On top of that, the LAN
+  and host address from `rules.json` and every sync peer are removed too — a feed
+  that lists your own public range cannot lock you out. `GET /api/feeds` reports
+  how many entries were removed on each account.
 - **Behind a tunnel a feed sees only the tunnel's address**, exactly like
   geo-blocking. It works with direct port-forwarding.
 

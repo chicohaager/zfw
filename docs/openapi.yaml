@@ -400,8 +400,9 @@ paths:
                         id:       { type: string }
                         fetched:  { type: string, format: date-time }
                         rendered: { type: string, format: date-time }
-                        entries:  { type: integer }
-                        dropped:  { type: integer }
+                        entries:   { type: integer }
+                        dropped:   { type: integer, description: "Removed: overlaps a built-in special-use range" }
+                        protected: { type: integer, description: "Removed: overlaps the host's own LAN, address or a sync peer" }
   /api/exposure:
     get:
       summary: Listening TCP/UDP sockets on the host with their LAN-reachability classification.
