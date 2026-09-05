@@ -106,9 +106,13 @@ components:
       properties:
         active:          { type: boolean }
         hooked:          { type: boolean }
+        input_position:  { type: integer, description: "1-based position of the ZFW-IN jump among the INPUT rules; 0 when not hooked. ZFW inserts itself first and never re-asserts it, so >1 means another tool runs ahead of ZFW." }
+        input_before:    { type: array, items: { type: string }, description: "Rule specs (after '-A INPUT') that run ahead of ZFW-IN, at most 32" }
         input_rules:     { type: integer }
         docker_drops:    { type: integer }
         ipv6_active:     { type: boolean }
+        ipv6_input_position: { type: integer, description: "Same as input_position for ZFW-IN6 in the IPv6 INPUT chain" }
+        ipv6_input_before:   { type: array, items: { type: string } }
         deadman:         { type: boolean, description: "Safe-Apply auto-revert timer is armed (true) / cancelled or fired (false)" }
         service_enabled: { type: boolean, description: "Boot-persistence zfw.service is enabled" }
     Status:

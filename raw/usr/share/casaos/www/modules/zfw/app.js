@@ -71,8 +71,25 @@ async function loadFirewall() {
     fwItem('IPv6 protection', !!fw.ipv6_active) +
     fwItem('Boot-persistent', !!fw.service_enabled) +
     fwItem('INPUT rules', fw.input_rules || 0) +
+    fwPosition('INPUT position', fw.hooked, fw.input_position, fw.input_before) +
+    fwPosition('IPv6 INPUT position', fw.ipv6_active, fw.ipv6_input_position, fw.ipv6_input_before) +
     fwItem('DOCKER-USER DROPs', fw.docker_drops || 0) +
     fwItem('Dead-man armed', !!fw.deadman, 'warn');
+}
+
+// Where ZFW's chain sits in INPUT. ZFW inserts itself first and never
+// re-asserts that, so a tool that later inserts ahead of it runs before ZFW —
+// harmless for a stricter chain, a silent bypass for a permissive one. Show
+// the number, colour it, and list what runs ahead so the operator can judge.
+function fwPosition(label, hooked, pos, before) {
+  if (!hooked) return fwItem(label, 'not hooked');
+  const ahead = Array.isArray(before) ? before : [];
+  const cls = pos === 1 ? 'num ok' : 'num warn';
+  const title = ahead.length ? ' title="Ahead of ZFW: ' + esc(ahead.join(' · ')) + '"' : '';
+  const note = ahead.length
+    ? `<span class="sg-note">${ahead.length} rule${ahead.length === 1 ? '' : 's'} ahead: ${esc(ahead.map(r => r.replace(/^-j /, '')).join(', '))}</span>`
+    : '';
+  return `<div class="sg-item"${title}><span class="sg-label">${esc(label)}${note}</span><span class="${cls}">#${esc(pos)}</span></div>`;
 }
 
 async function doFw(path, body, msg) {
