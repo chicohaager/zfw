@@ -93,7 +93,7 @@ func newTestServer(t *testing.T, fw *fakeFirewall) (*Server, string) {
 	compiledPath := filepath.Join(dir, "compiled.sh")
 	geoDir := filepath.Join(dir, "geo")
 	historyPath := filepath.Join(dir, "audit-history.json")
-	s := NewServer(fw, rulesPath, compiledPath, geoDir, historyPath, nil, "", "", nil, nil)
+	s := NewServer(fw, rulesPath, compiledPath, geoDir, filepath.Join(filepath.Dir(geoDir), "feeds"), historyPath, nil, "", "", nil, nil)
 	// Pin the docker inventory to a healthy stub. Left on the real probes the
 	// suite would shell out to the build host's docker and change behaviour with
 	// it — a box whose docker daemon is down would now (correctly) refuse to
@@ -723,7 +723,7 @@ func TestUpdateEndpointReturnsCheckerSnapshot(t *testing.T) {
 
 	chk := update.New("0.3.9", manifest.URL)
 	chk.CheckOnce(context.Background())
-	s := NewServer(&fakeFirewall{}, rulesPath, compiledPath, geoDir, historyPath, chk, "", "", nil, nil)
+	s := NewServer(&fakeFirewall{}, rulesPath, compiledPath, geoDir, filepath.Join(filepath.Dir(geoDir), "feeds"), historyPath, chk, "", "", nil, nil)
 
 	w := do(s, http.MethodGet, "/api/update", nil)
 	if w.Code != http.StatusOK {
@@ -761,7 +761,7 @@ func newTestServerWithPeers(t *testing.T, fw *fakeFirewall, peersList []peers.Pe
 			t.Fatal(err)
 		}
 	}
-	return NewServer(fw, rulesPath, compiledPath, geoDir, historyPath, nil, peersPath, peerToken, nil, nil), rulesPath
+	return NewServer(fw, rulesPath, compiledPath, geoDir, filepath.Join(filepath.Dir(geoDir), "feeds"), historyPath, nil, peersPath, peerToken, nil, nil), rulesPath
 }
 
 // TestPeersListStripsTokens guards the UI-facing list contract: tokens
