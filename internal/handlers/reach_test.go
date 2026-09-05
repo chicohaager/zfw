@@ -336,3 +336,89 @@ func TestRulesPostProtectsOwnLANAndHostFromFeeds(t *testing.T) {
 		t.Fatalf("meta = %+v ok=%v, want protected=2", meta, ok)
 	}
 }
+
+// RefreshFeeds swaps the live sets and leaves compiled.sh byte for byte as it
+// was: the rules never move, only the set contents.
+func TestRefreshFeedsSwapsLiveSetsAndNeverRecompiles(t *testing.T) {
+	var body strings.Builder
+	body.WriteString("203.0.113.0/24\n")
+	for i := 0; i < 300; i++ {
+		fmt.Fprintf(&body, "45.%d.%d.0/24\n", i/256, i%256)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body.String()))
+	}))
+	defer srv.Close()
+	s, _ := newTestServer(t, &fakeFirewall{})
+	s.feeds.Source = func(f feeds.Feed) string { return srv.URL + "/" + f.ID }
+	var calls [][]string
+	s.ipsetRun = func(_ context.Context, args ...string) (string, error) {
+		calls = append(calls, append([]string(nil), args...))
+		return "", nil
+	}
+	rs := rules.RuleSet{DefaultPolicy: "allow", LAN: "203.0.113.0/24",
+		Rules: []rules.Rule{{
+			ID: "f1", Order: 10, Enabled: true, Name: "feed", Action: "deny",
+			Source: rules.Source{Type: "feed", Value: "spamhaus_drop"},
+			Ports:  rules.Ports{Type: "all"}, Protocol: "both", Zone: "host"}}}
+	if w := do(s, http.MethodPost, "/api/rules", rs); w.Code != http.StatusOK {
+		t.Fatalf("rules POST: HTTP %d", w.Code)
+	}
+	before, _ := os.ReadFile(s.compiledPath)
+	if len(calls) != 0 {
+		t.Fatalf("a rules POST must not touch live sets, got %v", calls)
+	}
+
+	if err := s.RefreshFeeds(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := os.ReadFile(s.compiledPath)
+	if string(before) != string(after) {
+		t.Fatal("compiled.sh changed during a feed refresh")
+	}
+	var swapped bool
+	for _, c := range calls {
+		if c[0] == "swap" && c[2] == "zfw-feed-spamhaus_drop" {
+			swapped = true
+		}
+	}
+	if !swapped {
+		t.Fatalf("live set not swapped; ipset calls: %v", calls)
+	}
+	// Protection from rules.json applies on refresh too, not only on POST.
+	set, _ := os.ReadFile(s.feeds.IpsetPath("spamhaus_drop"))
+	if strings.Contains(string(set), " 203.0.113.0/24\n") {
+		t.Fatal("own LAN rendered into the set on refresh")
+	}
+
+	// The manual trigger returns the catalogue with fresh cache state.
+	w := do(s, http.MethodPost, "/api/feeds/refresh", nil)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"cached":true`) {
+		t.Fatalf("POST /api/feeds/refresh: HTTP %d body=%s", w.Code, w.Body.String())
+	}
+}
+
+// Without a feed rule a refresh is a no-op: no download, no ipset call.
+func TestRefreshFeedsNoopWithoutFeedRules(t *testing.T) {
+	s, _ := newTestServer(t, &fakeFirewall{})
+	fetched := false
+	s.feeds.Source = func(f feeds.Feed) string { fetched = true; return "http://127.0.0.1:1/never" }
+	called := false
+	s.ipsetRun = func(_ context.Context, _ ...string) (string, error) { called = true; return "", nil }
+	if err := s.RefreshFeeds(context.Background()); err != nil {
+		t.Fatalf("no rules file: %v", err)
+	}
+	rs := rules.RuleSet{DefaultPolicy: "deny", Rules: []rules.Rule{{
+		ID: "a1", Order: 10, Enabled: true, Name: "lan ssh", Action: "allow",
+		Source: rules.Source{Type: "range", Value: "192.168.1.0/24"},
+		Ports:  rules.Ports{Type: "list", List: []int{22}}, Protocol: "tcp", Zone: "host"}}}
+	if w := do(s, http.MethodPost, "/api/rules", rs); w.Code != http.StatusOK {
+		t.Fatalf("rules POST: HTTP %d", w.Code)
+	}
+	if err := s.RefreshFeeds(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fetched || called {
+		t.Fatalf("refresh without feed rules did work: fetched=%v ipset=%v", fetched, called)
+	}
+}

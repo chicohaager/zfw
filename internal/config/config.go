@@ -5,27 +5,29 @@ package config
 import (
 	"os"
 	"strings"
+	"time"
 )
 
 // Config holds the resolved daemon settings.
 type Config struct {
 	BindAddr       string // loopback only — never expose the daemon directly
 	Port           string
-	RoutePath      string // gateway route prefix, e.g. /v2/zfw
-	GatewayURLFile string // file holding the gateway management base URL
-	StaticDir      string // directory served as the web UI
-	ZfwBin         string // the firewall engine script (/DATA/zfw/zfw)
-	ZfwConf        string // legacy v0.1 tier allowlist (/DATA/zfw/allowlist.conf)
-	RulesFile      string // v0.2 rule model — source of truth (/DATA/zfw/rules.json)
-	CompiledFile   string // daemon-compiled ruleset the engine applies
-	GeoDir         string // per-country IP data + ipset files (/DATA/zfw/geo)
-	FeedsDir       string // cached blocklist feeds + ipset files (/DATA/zfw/feeds)
-	HistoryFile    string // audit-finding status timeline (/DATA/zfw/audit-history.json)
-	DataDir        string // module state directory
-	JWKSURL        string // ZimaOS JWKS endpoint for session-token validation
-	UpdateURL      string // optional manifest URL polled for new releases; empty disables the check
-	PeersFile      string // opt-in peers list for multi-host rule sync (leader-side)
-	PeerToken      string // shared bearer accepted by /api/peers/receive (follower-side); empty disables inbound receive
+	RoutePath      string        // gateway route prefix, e.g. /v2/zfw
+	GatewayURLFile string        // file holding the gateway management base URL
+	StaticDir      string        // directory served as the web UI
+	ZfwBin         string        // the firewall engine script (/DATA/zfw/zfw)
+	ZfwConf        string        // legacy v0.1 tier allowlist (/DATA/zfw/allowlist.conf)
+	RulesFile      string        // v0.2 rule model — source of truth (/DATA/zfw/rules.json)
+	CompiledFile   string        // daemon-compiled ruleset the engine applies
+	GeoDir         string        // per-country IP data + ipset files (/DATA/zfw/geo)
+	FeedsDir       string        // cached blocklist feeds + ipset files (/DATA/zfw/feeds)
+	FeedsRefresh   time.Duration // background feed refresh cadence; 0 disables (ZFW_FEEDS_REFRESH, default 12h)
+	HistoryFile    string        // audit-finding status timeline (/DATA/zfw/audit-history.json)
+	DataDir        string        // module state directory
+	JWKSURL        string        // ZimaOS JWKS endpoint for session-token validation
+	UpdateURL      string        // optional manifest URL polled for new releases; empty disables the check
+	PeersFile      string        // opt-in peers list for multi-host rule sync (leader-side)
+	PeerToken      string        // shared bearer accepted by /api/peers/receive (follower-side); empty disables inbound receive
 	// ExtraBypassIfaces (v0.5.4) — additional inbound-bypass interface
 	// names appended to every chain on top of the built-in list
 	// (lo / docker0 / br-+ / tailscale0 / zt+ / wg+). Strings may use
@@ -60,6 +62,7 @@ func Load() Config {
 		CompiledFile:      env("ZFW_COMPILED", "/DATA/zfw/compiled.sh"),
 		GeoDir:            env("ZFW_GEO", "/DATA/zfw/geo"),
 		FeedsDir:          env("ZFW_FEEDS", "/DATA/zfw/feeds"),
+		FeedsRefresh:      envDuration("ZFW_FEEDS_REFRESH", 12*time.Hour),
 		HistoryFile:       env("ZFW_HISTORY", "/DATA/zfw/audit-history.json"),
 		DataDir:           env("DATA_DIR", "/DATA/AppData/zfw"),
 		JWKSURL:           env("ZFW_JWKS_URL", "http://127.0.0.1:37815/.well-known/jwks.json"),
@@ -119,4 +122,18 @@ func isSafeIfaceName(s string) bool {
 		}
 	}
 	return true
+}
+
+// envDuration reads a Go duration ("12h", "90m") from the environment; an
+// unset or unparsable value yields def. "0" disables whatever it governs.
+func envDuration(key string, def time.Duration) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		return def
+	}
+	return d
 }

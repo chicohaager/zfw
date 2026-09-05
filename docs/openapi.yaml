@@ -403,6 +403,17 @@ paths:
                         entries:   { type: integer }
                         dropped:   { type: integer, description: "Removed: overlaps a built-in special-use range" }
                         protected: { type: integer, description: "Removed: overlaps the host's own LAN, address or a sync peer" }
+  /api/feeds/refresh:
+    post:
+      summary: "Re-fetch every feed the rules reference and swap the live sets in place"
+      description: >
+        Same operation the daemon runs every ZFW_FEEDS_REFRESH (default 12h). Never recompiles,
+        never applies: compiled.sh and the iptables chains are unchanged afterwards; only the
+        ipset contents moved (temporary set, swap, destroy). A feed whose set is not live —
+        rules never applied — only gets its file updated. Returns the catalogue as GET /api/feeds.
+      responses:
+        '200': { description: OK }
+        '502': { description: "A feed could not be refreshed (the message names it); others may have succeeded" }
   /api/exposure:
     get:
       summary: Listening TCP/UDP sockets on the host with their LAN-reachability classification.

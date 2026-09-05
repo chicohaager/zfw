@@ -343,6 +343,14 @@ A fetched list must parse to a plausible number of entries before it may
 replace the cached one (a captive-portal page or a truncated download is
 refused, the cache stays); if the network is down, the cached list is used.
 
+Feeds are refreshed in the background every 12 hours (`ZFW_FEEDS_REFRESH`,
+`0` disables) and on demand via `POST /api/feeds/refresh`. A refresh **never
+touches the rules**: the new content is loaded into a temporary set and
+swapped in, so `compiled.sh` and the live iptables chains stay byte for byte
+what they were — the same line `dockerwatch` follows, which recompiles but
+never applies. The swap matters: loading into the live set directly leaves it
+half-filled for a moment (measured: 111 000 of 200 000 entries mid-load).
+
 After any change, run **Safe-Apply** from the Firewall tab (or `sudo /DATA/zfw/zfw apply` on the host).
 
 ## Safety

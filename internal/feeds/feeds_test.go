@@ -294,3 +294,133 @@ func TestProtectRemovesHostRangesAndReplaces(t *testing.T) {
 		t.Error("a range dropped from Protect stayed protected")
 	}
 }
+
+// recorder is a Runner that records every ipset invocation and answers from
+// a script keyed by the first argument ("-q" list probes are keyed "list").
+type recorder struct {
+	calls [][]string
+	fail  map[string]string // verb -> error text; absent = success
+	docs  []string          // restore documents as seen at call time
+}
+
+func (r *recorder) run(_ context.Context, args ...string) (string, error) {
+	r.calls = append(r.calls, append([]string(nil), args...))
+	verb := args[0]
+	if verb == "-q" {
+		verb = args[1]
+	}
+	if verb == "restore" {
+		b, _ := os.ReadFile(args[len(args)-1])
+		r.docs = append(r.docs, string(b))
+	}
+	if msg, ok := r.fail[verb]; ok {
+		return msg, fmt.Errorf("ipset %s failed", verb)
+	}
+	return "", nil
+}
+
+func (r *recorder) verbs() []string {
+	var out []string
+	for _, c := range r.calls {
+		v := c[0]
+		if v == "-q" {
+			v = c[1]
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+func TestRefreshSwapsLiveSetWithoutTouchingRules(t *testing.T) {
+	body, status := bigFeed(300), http.StatusOK
+	srv, hits := feedServer(t, &body, &status)
+	m := newTestManager(t, srv)
+	rec := &recorder{}
+	if err := m.Refresh(context.Background(), []string{"spamhaus_drop"}, rec.run, nil); err != nil {
+		t.Fatal(err)
+	}
+	if *hits != 1 {
+		t.Fatalf("refresh fetched %d times, want 1 (a refresh always re-fetches)", *hits)
+	}
+	if got, want := strings.Join(rec.verbs(), " "), "list restore swap destroy"; got != want {
+		t.Fatalf("ipset sequence = %q, want %q", got, want)
+	}
+	if c := rec.calls[2]; c[1] != "zfw-tmp-spamhaus_drop" || c[2] != "zfw-feed-spamhaus_drop" {
+		t.Fatalf("swap args = %v, want tmp then live", c)
+	}
+	if c := rec.calls[3]; c[1] != "zfw-tmp-spamhaus_drop" {
+		t.Fatalf("destroy args = %v, want the temporary set", c)
+	}
+	// The document loaded live targets the temporary set only — the live set
+	// is never flushed, which is the whole point of the swap.
+	doc := rec.docs[0]
+	if !strings.HasPrefix(doc, "create zfw-tmp-spamhaus_drop hash:net") || !strings.Contains(doc, "add zfw-tmp-spamhaus_drop 20.0.0.0/24\n") {
+		t.Fatalf("live document:\n%s", doc[:min(len(doc), 200)])
+	}
+	if strings.Contains(doc, "zfw-feed-spamhaus_drop") {
+		t.Fatal("live document names the live set")
+	}
+	// The temporary document is removed afterwards; the apply-path file stays.
+	if entries, _ := os.ReadDir(m.dir); len(entries) != 3 {
+		names := []string{}
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("dir after refresh: %v, want list + ipset + meta only", names)
+	}
+}
+
+func TestRefreshSkipsSwapWhenSetNotLive(t *testing.T) {
+	body, status := bigFeed(300), http.StatusOK
+	srv, _ := feedServer(t, &body, &status)
+	m := newTestManager(t, srv)
+	rec := &recorder{fail: map[string]string{"list": "The set with the given name does not exist"}}
+	var logged []string
+	if err := m.Refresh(context.Background(), []string{"spamhaus_drop"}, rec.run, func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(rec.verbs(), " "); got != "list" {
+		t.Fatalf("ipset sequence = %q, want a single probe", got)
+	}
+	if _, err := os.Stat(m.IpsetPath("spamhaus_drop")); err != nil {
+		t.Fatal("apply-path file not rendered when the set is not live")
+	}
+	if !strings.Contains(strings.Join(logged, "\n"), "not live") {
+		t.Errorf("skip not logged: %q", logged)
+	}
+}
+
+func TestRefreshDestroysTmpOnSwapFailure(t *testing.T) {
+	body, status := bigFeed(300), http.StatusOK
+	srv, _ := feedServer(t, &body, &status)
+	m := newTestManager(t, srv)
+	rec := &recorder{fail: map[string]string{"swap": "Sets cannot be swapped: their type does not match"}}
+	err := m.Refresh(context.Background(), []string{"spamhaus_drop"}, rec.run, nil)
+	if err == nil || !strings.Contains(err.Error(), "swap") {
+		t.Fatalf("err = %v, want the swap failure surfaced", err)
+	}
+	if got := strings.Join(rec.verbs(), " "); got != "list restore swap destroy" {
+		t.Fatalf("ipset sequence = %q, want the temporary set destroyed after a failed swap", got)
+	}
+}
+
+func TestRefreshKeepsCacheAndSwapsOnDownloadFailure(t *testing.T) {
+	body, status := bigFeed(300), http.StatusOK
+	srv, _ := feedServer(t, &body, &status)
+	m := newTestManager(t, srv)
+	if err := m.Ensure(context.Background(), []string{"spamhaus_drop"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	status = http.StatusServiceUnavailable
+	rec := &recorder{}
+	var logged []string
+	if err := m.Refresh(context.Background(), []string{"spamhaus_drop"}, rec.run, func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) }); err != nil {
+		t.Fatalf("cache present, download failed: %v", err)
+	}
+	if got := strings.Join(rec.verbs(), " "); got != "list restore swap destroy" {
+		t.Fatalf("ipset sequence = %q — the cached list must still be swapped in", got)
+	}
+	if !strings.Contains(strings.Join(logged, "\n"), "keeping cache") {
+		t.Errorf("download failure not logged: %q", logged)
+	}
+}
