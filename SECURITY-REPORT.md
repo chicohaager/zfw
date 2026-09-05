@@ -237,10 +237,14 @@ script.
   with "not a go module" — invisibly, because its stderr was discarded.
   Fixed in `build.sh` (`-main cmd/zfwd`, stderr shown); the CI build job
   has the tool installed, so tarballs built there carry the SBOM.
-- The Exposure and Audit dashboards derive reachability from the legacy
-  `allowlist.conf`; on an install that never had one the reachability
-  column can read conservatively. This is a display limitation, not a
-  filtering one — the firewall itself always compiles from `rules.json`.
+- ~~The Exposure and Audit dashboards derive reachability from the legacy
+  `allowlist.conf`.~~ Fixed in v1.0.25: both now judge from `rules.json`
+  with the compiler's first-match semantics (`rules.Disposition`). The
+  earlier wording understated the effect — with the file absent, which is
+  the normal state of a v1.x install, the empty fallback config reported
+  every LAN-facing socket as blocked and every port-based finding as
+  mitigated while the firewall was active. Display only; the filtering
+  itself always compiled from `rules.json`.
 
 ---
 

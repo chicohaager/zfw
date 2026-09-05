@@ -12,6 +12,13 @@
 #   - dist/zfw-<v>-<arch>.tar.gz         + dist/zfw-<v>-<arch>.tar.gz.sha256
 # Override the arch list with:  ARCHES="amd64" sh build.sh
 set -eu
+# Reproducibility does not stop at timestamps: file modes inside the squashfs
+# and the tarball come from the build host's umask (a checkout under umask
+# 002 has group-writable files, CI under 022 does not), and the two builds
+# then differ in every checksum while every byte of content is identical —
+# measured while cutting v1.0.25. Fix the umask here and normalise the modes
+# of everything packed below, so the artifacts depend on the source alone.
+umask 022
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 DIST="$ROOT/dist"
@@ -94,7 +101,7 @@ if command -v cyclonedx-gomod >/dev/null 2>&1; then
     rm -f "$DIST/sbom.json" "$DIST/sbom.err"
   fi
 else
-  echo "[2/4] SBOM skipped (install with: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest)"
+  echo "[2/4] SBOM skipped (install with: go install -trimpath github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0 — same pin and flag as ci.yml, or the SBOM's tool hash differs from CI's)"
 fi
 
 # 3/4. Per-arch build + pack loop.
@@ -141,7 +148,11 @@ $RAW/usr/bin/zfwd
   [ $missing -eq 0 ] || { echo "Layout incomplete, aborting."; exit 1; }
 
   # Lock every file in the squashfs payload to SOURCE_DATE_EPOCH so the
-  # resulting raw image hashes identically across rebuilds.
+  # resulting raw image hashes identically across rebuilds — and to a fixed
+  # mode (dirs 755, files 644, the daemon 755), see the umask note above.
+  find "$RAW" -type d -exec chmod 755 {} +
+  find "$RAW" -type f -exec chmod 644 {} +
+  chmod 755 "$RAW/usr/bin/zfwd"
   find "$RAW" -exec touch -d "@$SOURCE_DATE_EPOCH" {} +
 
   # Pack as squashfs. ZimaOS kernel 6.12.x has no zstd/xz — gzip is mandatory.
@@ -173,6 +184,9 @@ $RAW/usr/bin/zfwd
      "$ROOT/THREAT-MODEL.md" "$ROOT/BUG-BOUNTY.md" \
      "$DIST/$PKG/"
   [ -f "$DIST/sbom.json" ] && cp "$DIST/sbom.json" "$DIST/$PKG/sbom.json"
+  # Same mode normalisation as for the squashfs payload, same reason.
+  chmod 0755 "$DIST/$PKG"
+  find "$DIST/$PKG" -type f -exec chmod 0644 {} +
   chmod 0755 "$DIST/$PKG/install.sh" "$DIST/$PKG/zfw"
   # Lock mtimes on every file we just copied so the tar entries are identical
   # across rebuilds.
