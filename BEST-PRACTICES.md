@@ -154,6 +154,16 @@ They do **not** work behind a reverse tunnel (Pangolin, Cloudflare Tunnel,
 client, so every packet carries the tunnel's IP, not the visitor's. Filter by
 country **at the VPS / tunnel edge** in that case, not on the ZimaOS host.
 
+**Blocklist feeds share that limit** — they match source addresses the same
+way. Two more things to know before you add one: on a default-deny host chain
+a feed adds nothing (everything not allowed is dropped anyway; a feed earns
+its keep on ports you open to the world, on published container ports, and as
+an *outbound* deny that stops a compromised container from reaching known bad
+infrastructure). And a feed can never block your own LAN, Tailscale or the
+host itself: private, link-local, CGNAT and multicast ranges are removed from
+every feed before it is loaded, as are your LAN and host address from
+`rules.json`. The Firewall tab shows what a feed has actually matched.
+
 ---
 
 ## 8. Do not forget IPv6
