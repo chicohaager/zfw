@@ -381,6 +381,21 @@ button:focus-visible, input:focus-visible, select:focus-visible {
 .num.warn { color: var(--warn); }
 .sg-note  { font-size: 11px; color: var(--warn); font-weight: 500; overflow-wrap: anywhere; }
 
+.feeds-card {
+  background: var(--card-bg); border: 1px solid var(--card-border);
+  border-radius: var(--card-radius-sm); padding: 12px 16px; margin-bottom: 12px;
+  box-shadow: var(--card-shadow);
+}
+.feed-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.feed-row  { padding: 8px 0; border-top: 1px solid var(--card-border); }
+.feed-main { display: flex; flex-direction: column; gap: 2px; }
+.feed-name { font-weight: 600; }
+.feed-state { font-size: 13px; }
+.feed-state.ok   { color: var(--success); }
+.feed-state.warn { color: var(--warn); }
+.feed-sub  { font-size: 12px; color: var(--text-muted); }
+.btn-small { padding: 4px 12px; font-size: 12px; }
+
 .action-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 16px 0; }
 .save-hint { color: var(--text-muted); font-size: 12px; }
 .output {

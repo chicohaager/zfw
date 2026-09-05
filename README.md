@@ -78,7 +78,8 @@ entire class of exposure at once. That is what ZFW provides.
 
 A standalone ZimaOS module — a tile in the ZimaOS dashboard — with seven tabs:
 
-- **Firewall** — live status; **Safe-Apply** with a 120-second dead-man switch: if you do
+- **Firewall** — live status, a card for the blocklist feeds your rules use (live entry
+  count, packets matched, next refresh, *Update now*); **Safe-Apply** with a 120-second dead-man switch: if you do
   not Confirm in time, ZFW **removes the firewall entirely** (all ZFW rules dropped, host
   back to its unprotected stock state — *not* a restore of the previously committed rules).
   A bad rule can never lock you out, but an unattended Safe-Apply leaves the host

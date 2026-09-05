@@ -29,6 +29,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -546,4 +547,21 @@ func (m *Manager) Info(id string) (Meta, bool) {
 		return Meta{}, false
 	}
 	return meta, true
+}
+
+// LiveEntries asks the kernel how many networks the feed's set holds right
+// now (ok=false when the set is not loaded). "Number of entries" is the
+// line `ipset list -t` prints for every set type.
+func LiveEntries(ctx context.Context, run Runner, id string) (int, bool) {
+	out, err := run(ctx, "-q", "list", "-t", SetName(id))
+	if err != nil {
+		return 0, false
+	}
+	for _, ln := range strings.Split(out, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(ln), "Number of entries:"); ok {
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			return n, err == nil
+		}
+	}
+	return 0, false
 }
