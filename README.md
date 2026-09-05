@@ -295,17 +295,19 @@ suppressed in between is counted and reported on the next line
 
 ## Configuration
 
-The allowlist is edited from the UI, or directly in `/DATA/zfw/allowlist.conf`:
+The rule set lives in **`/DATA/zfw/rules.json`** — the single source of truth
+the daemon compiles into `/DATA/zfw/compiled.sh`. It is edited on the Rules tab
+(or by `POST /api/rules`, see `docs/openapi.yaml`); the file carries the LAN
+CIDR, the host IP, the default policy (`deny` = allowlist, `allow` = blocklist)
+and the ordered rules. The Exposure and Audit tabs judge reachability from this
+file too.
 
-| Key | Meaning |
-|-----|---------|
-| `LAN` | the local subnet, e.g. `192.168.1.0/24` |
-| `HOST_IP` | the host's LAN IP |
-| `HOST_TCP_LAN` / `HOST_UDP_LAN` | host-native ports left reachable from the LAN; everything else is dropped (still reachable via Tailscale / loopback) |
-| `DOCKER_DROP_LAN` | published container ports to block from the LAN |
-| `V6_DROP` | ports to block on IPv6 |
+`/DATA/zfw/allowlist.conf` is the **legacy v0.1 format**. It is read exactly
+once: a host that still has it and no `rules.json` gets it migrated into
+`rules.json` on the daemon's next start (a backup of the original stays). Nothing
+writes it any more.
 
-After any change, run **Safe-Apply** from the Firewall tab (or `zfw apply` on the host).
+After any change, run **Safe-Apply** from the Firewall tab (or `sudo /DATA/zfw/zfw apply` on the host).
 
 ## Safety
 
