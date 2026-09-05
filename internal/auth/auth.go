@@ -145,14 +145,11 @@ func (v *Verifier) refreshKeys(ctx context.Context) error {
 		if errX != nil || errY != nil {
 			continue
 		}
-		keys = append(keys, keyEntry{
-			kid: k.Kid,
-			pub: &ecdsa.PublicKey{
-				Curve: elliptic.P256(),
-				X:     new(big.Int).SetBytes(x),
-				Y:     new(big.Int).SetBytes(y),
-			},
-		})
+		pub, err := p256PublicKey(x, y)
+		if err != nil {
+			continue
+		}
+		keys = append(keys, keyEntry{kid: k.Kid, pub: pub})
 	}
 	if len(keys) == 0 {
 		return errors.New("JWKS contains no EC/P-256 key")
@@ -161,6 +158,25 @@ func (v *Verifier) refreshKeys(ctx context.Context) error {
 	v.keys, v.fetched = keys, time.Now()
 	v.mu.Unlock()
 	return nil
+}
+
+// p256PublicKey builds a P-256 key from JWK "x"/"y" coordinate bytes. RFC 7518
+// §6.2.1.2 fixes both at the curve size (32 bytes); a coordinate that was
+// serialised without its leading zero bytes is left-padded, as the earlier
+// big.Int-based construction implicitly did, and anything longer is refused.
+// Unlike that construction, ParseUncompressedPublicKey also verifies that the
+// point lies on the curve, so a malformed JWKS entry is skipped rather than
+// installed as a verifier key.
+func p256PublicKey(x, y []byte) (*ecdsa.PublicKey, error) {
+	const size = 32
+	if len(x) > size || len(y) > size {
+		return nil, errors.New("coordinate longer than the curve size")
+	}
+	raw := make([]byte, 1+2*size)
+	raw[0] = 4 // uncompressed point marker
+	copy(raw[1+size-len(x):], x)
+	copy(raw[1+2*size-len(y):], y)
+	return ecdsa.ParseUncompressedPublicKey(elliptic.P256(), raw)
 }
 
 // Warm loads the key set once so the first request is not slowed by a fetch.

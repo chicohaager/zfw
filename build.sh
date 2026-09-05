@@ -1,7 +1,8 @@
 #!/bin/sh
 # Build zfw.raw sysext modules + release tarballs for one or more arches.
 # Requirements on the build host:
-#   - go 1.22+
+#   - go 1.27.1 (pinned by the go directive in go.mod; an older go in PATH
+#     downloads and switches to it automatically, GOTOOLCHAIN=auto)
 #   - squashfs-tools (mksquashfs)
 #   - GNU tar (for the reproducible packaging flags)
 # Optional (degrades gracefully if missing):
@@ -33,8 +34,20 @@ if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
 fi
 export SOURCE_DATE_EPOCH
 
+# Pin every go invocation in this script — including the ones cyclonedx-gomod
+# makes on its own — to the exact toolchain named in go.mod. GOTOOLCHAIN=auto
+# gets the daemon build right, but when the go in PATH is older it fails on
+# the SBOM step: cyclonedx-gomod runs `go list -m` inside GOROOT/src, whose
+# go.mod says `go 1.27` (no patch level), and the older go then tries to
+# download a toolchain called "go1.27", which does not exist. Naming the
+# version explicitly makes the switch unconditional and the build
+# independent of what happens to be installed on the host.
+GOTOOLCHAIN="go$(awk '/^go /{print $2; exit}' "$ROOT/go.mod")"
+export GOTOOLCHAIN
+
 echo "=== zfw module build ==="
 echo "Version:           $VERSION"
+echo "Toolchain:         $GOTOOLCHAIN ($(go version))"
 echo "Arches:            $ARCHES"
 echo "SOURCE_DATE_EPOCH: $SOURCE_DATE_EPOCH"
 
@@ -61,9 +74,25 @@ go test ./...
 rm -f "$DIST"/*.tar.gz "$DIST"/*.tar.gz.sha256 "$DIST"/zfw-*.raw "$DIST"/zfw-*.raw.sha256
 if command -v cyclonedx-gomod >/dev/null 2>&1; then
   echo "[2/4] Generating CycloneDX SBOM..."
-  cyclonedx-gomod app -json -licenses -output "$DIST/sbom.json" ./cmd/zfwd >/dev/null 2>&1 \
-    && echo "  SBOM -> $DIST/sbom.json" \
-    || { echo "  WARN: cyclonedx-gomod failed; skipping SBOM"; rm -f "$DIST/sbom.json"; }
+  # The positional argument is the MODULE directory; the main package is
+  # named with -main, relative to it. Passing ./cmd/zfwd as the module dir
+  # made every run fail with "not a go module" — silently, because stderr
+  # went to /dev/null and the WARN line scrolled by — so no release up to
+  # v1.0.24 actually shipped an SBOM. -noserial/-notimestamp keep the file
+  # byte-identical across rebuilds; it travels inside the tarball, and the
+  # CI reproducibility check hashes the tarball.
+  # CGO_ENABLED/GOOS are recorded in the SBOM as build properties, so set
+  # them to what the daemon is really built with below (GOARCH stays the
+  # host's: one SBOM serves both arches, the module graph is identical).
+  if CGO_ENABLED=0 GOOS=linux cyclonedx-gomod app -json -licenses -noserial -notimestamp \
+       -main cmd/zfwd -output "$DIST/sbom.json" "$ROOT" 2>"$DIST/sbom.err"; then
+    rm -f "$DIST/sbom.err"
+    echo "  SBOM -> $DIST/sbom.json"
+  else
+    echo "  WARN: cyclonedx-gomod failed; skipping SBOM:" >&2
+    sed 's/^/    /' "$DIST/sbom.err" >&2
+    rm -f "$DIST/sbom.json" "$DIST/sbom.err"
+  fi
 else
   echo "[2/4] SBOM skipped (install with: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest)"
 fi

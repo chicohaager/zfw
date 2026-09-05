@@ -44,9 +44,14 @@ func signES256Iss(t *testing.T, key *ecdsa.PrivateKey, exp int64, iss string) st
 // jwksServer serves a JWKS containing pub as its only EC/P-256 key.
 func jwksServer(t *testing.T, pub *ecdsa.PublicKey) *httptest.Server {
 	t.Helper()
-	x, y := make([]byte, 32), make([]byte, 32)
-	pub.X.FillBytes(x)
-	pub.Y.FillBytes(y)
+	// Bytes() is the uncompressed SEC 1 encoding: 0x04 || X || Y, each
+	// coordinate exactly 32 bytes for P-256 — the same shape RFC 7518 fixes
+	// for the JWK "x"/"y" members.
+	raw, err := pub.Bytes()
+	if err != nil {
+		t.Fatalf("encode public key: %v", err)
+	}
+	x, y := raw[1:33], raw[33:65]
 	body, _ := json.Marshal(map[string]any{
 		"keys": []map[string]string{{
 			"kty": "EC", "crv": "P-256",
@@ -221,5 +226,50 @@ func TestRejectLogRateLimits(t *testing.T) {
 	// The counter resets once it has been reported.
 	if ok, n := l.admit(now.Add(2 * rejectLogInterval)); !ok || n != 0 {
 		t.Fatalf("next line: admit=%v suppressed=%d, want true/0", ok, n)
+	}
+}
+
+// A JWK whose coordinate lost its leading zero byte(s) on the wire must still
+// yield the same key the big.Int-based construction produced, and a point
+// that is not on the curve must be refused rather than installed.
+func TestP256PublicKeyPadsShortCoordinatesAndRejectsOffCurve(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	raw, err := key.PublicKey.Bytes()
+	if err != nil {
+		t.Fatalf("encode public key: %v", err)
+	}
+	x, y := raw[1:33], raw[33:65]
+
+	full, err := p256PublicKey(x, y)
+	if err != nil {
+		t.Fatalf("full-length coordinates rejected: %v", err)
+	}
+	if !full.Equal(&key.PublicKey) {
+		t.Fatal("full-length coordinates yielded a different key")
+	}
+
+	// Strip leading zero bytes the way an encoder working from a big.Int would.
+	trim := func(b []byte) []byte {
+		for len(b) > 1 && b[0] == 0 {
+			b = b[1:]
+		}
+		return b
+	}
+	short, err := p256PublicKey(trim(x), trim(y))
+	if err != nil {
+		t.Fatalf("leading-zero-stripped coordinates rejected: %v", err)
+	}
+	if !short.Equal(&key.PublicKey) {
+		t.Fatal("padding changed the key")
+	}
+
+	// Positive control for the on-curve check: flip a bit of y.
+	bad := append([]byte(nil), y...)
+	bad[31] ^= 1
+	if _, err := p256PublicKey(x, bad); err == nil {
+		t.Fatal("off-curve point accepted")
+	}
+	if _, err := p256PublicKey(append([]byte{0}, raw[1:]...), y); err == nil {
+		t.Fatal("33-byte coordinate accepted")
 	}
 }
