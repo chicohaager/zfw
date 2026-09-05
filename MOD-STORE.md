@@ -33,14 +33,43 @@ manifest URL on every host so v0.3.9's update banner starts firing.
    on the first push by construction — lint + test + reproducible
    build + arm64 smoke.
 
-2. **First tagged release.** Mod-Store consumes GitHub releases as
-   the artifact source. After a clean `bash build.sh` produces the
-   two tarballs in `dist/`:
+2. **Cut the release so that the tag reproduces the assets.** Two inputs
+   besides the source decide the bytes, and both must be settled *before*
+   the build that produces the published assets: `SOURCE_DATE_EPOCH`
+   (build.sh takes it from the last commit's committer date) and the
+   nearest git tag (cyclonedx-gomod stamps the SBOM's main component with
+   it; `sbom.json` travels inside the tarball). The checksums, in turn,
+   live in `mod-store/zfw.yaml`, which is part of the release commit — so
+   the commit is created with a chosen date, tagged, built, amended with
+   the checksums *under the same date*, re-tagged, and rebuilt once more
+   as the positive control. Done this way for v1.0.25:
+
+   ```sh
+   X=$(date +%s)                                   # the release instant
+   # …bump VERSION, README block, cache-busters, openapi, Dockerfile, yaml version…
+   GIT_AUTHOR_DATE=@$X GIT_COMMITTER_DATE=@$X git commit -a -m "release: vX.Y.Z …"
+   git tag -a "v$(cat VERSION)" -m "ZFW v$(cat VERSION)"
+   sh build.sh                                     # epoch = $X, SBOM version = the tag
+   # copy dist/*.tar.gz.sha256 into mod-store/zfw.yaml, then:
+   GIT_AUTHOR_DATE=@$X GIT_COMMITTER_DATE=@$X git commit -a --amend --no-edit
+   git tag -d "v$(cat VERSION)"; git tag -a "v$(cat VERSION)" -m "ZFW v$(cat VERSION)"
+   rm -rf dist; sh build.sh                        # must reproduce every .sha256
+   ```
+
+   Have `cyclonedx-gomod` on `PATH` for this, installed exactly as CI does
+   (`go install -trimpath …@v1.12.0`): the SBOM records the tool's own
+   binary hash, and without `-trimpath` that hash carries the install
+   host's paths. build.sh takes care of the other host-dependent input
+   (file modes via umask) itself.
+
+   The tarballs do not contain `mod-store/zfw.yaml`, so the amend changes
+   no shipped byte — the rebuild is the proof. Then push branch and tag,
+   let CI build the tag (its artifact must carry the same checksums), and
+   publish:
 
    ```sh
    VERSION=$(cat VERSION)
-   git tag -s "v${VERSION}" -m "ZFW v${VERSION}"
-   git push origin "v${VERSION}"
+   git push origin "release/v${VERSION}" "v${VERSION}"
    gh release create "v${VERSION}" \
      dist/zfw-${VERSION}-amd64.tar.gz \
      dist/zfw-${VERSION}-amd64.tar.gz.sha256 \
@@ -48,16 +77,16 @@ manifest URL on every host so v0.3.9's update banner starts firing.
      dist/zfw-${VERSION}-arm64.tar.gz.sha256 \
      dist/sbom.json \
      --title "ZFW v${VERSION}" \
-     --notes-file <(git log -1 --format=%B)
+     --notes-file <(git log -1 --format=%B "v${VERSION}")
    ```
 
    The release notes come straight from the body of the release
    commit — keep the commit message tight and reader-facing so
    `gh release create` ships a coherent change-summary without a
-   second authoring pass.
+   second authoring pass. A release must never be re-cut from a later
+   commit (the epoch moves, every byte moves); rebuild from the tag.
 
-3. **Fill in `mod-store/zfw.yaml`.** Replace the two `sha256: TBD`
-   lines with the actual values from `dist/*.tar.gz.sha256`. The
+3. **`mod-store/zfw.yaml`** carries the checksums pinned in step 2. The
    manifest stays in this repo as source-of-truth between releases;
    the submitted copy in `IceWhaleTech/Mod-Store` is generated from it.
 
@@ -177,8 +206,12 @@ Before pushing a release tag:
 - [ ] `README.md` "Current release" badge bumped
 - [ ] `mod-store/zfw.yaml` `version` bumped + new SHAs filled in
 - [ ] `go test ./...` green
+- [ ] `Dockerfile` usage comment + README "Install from Docker Hub" tag bumped
 - [ ] `bash build.sh` produces both arches reproducibly (re-run +
-      compare `dist/*.tar.gz.sha256` across runs)
+      compare `dist/*.tar.gz.sha256` across runs) — **from the tagged
+      release commit**, see step 2 above
+- [ ] Docker Hub image pushed and its payload verified against
+      `dist/zfw-<arch>.raw.sha256` per arch (README, "Building the installer image")
 - [ ] Browser-test the UI changes the release introduces
 
 That list is encoded in the project's memory entry
