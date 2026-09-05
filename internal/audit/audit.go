@@ -59,7 +59,7 @@ func Findings(st firewall.Status, cfg firewall.Config) []Finding {
 		{"M5", "MED", "Kernel CVE 2026-31431", "Kernel 6.12.25 — local root; patchable only via a ZimaOS firmware update.", "open"},
 		{"M6", "MED", "NFS/RPC LAN-exposed", "nfsd :2049 + rpcbind :111 open, but no exports configured.", hostBlocked("2049")},
 		{"M7", "MED", "Docker Engine 27.5.1", "< 29.3.1 → docker cp host-root escapes conditionally applicable.", "open"},
-		{"M8", "MED", "SSH password auth + full sudo", "PasswordAuthentication yes; Holgi (ALL:ALL) ALL → SSH password = root.", "open"},
+		{"M8", "MED", "SSH password auth + full sudo", "PasswordAuthentication yes; the admin user holds full sudo (ALL:ALL) → SSH password = root.", "open"},
 		{"L1", "LOW", "ttyd web terminal LAN-open", ":7681 login-gated but brute-forceable, no rate limit.", hostBlocked("7681")},
 		{"L2", "LOW", "zima-cron-watchdog failed", "Watchdog looks for zima-cron.service (does not exist; unit is named cron.service).", "open"},
 		{"L3", "LOW", "/DATA shares 0777", "AppData/Backup/Documents and others are world-writable.", "open"},
