@@ -171,10 +171,16 @@ control rather than a runtime control:
   `SOURCE_DATE_EPOCH`-driven timestamps. Two clean builds of the same tree
   produce byte-identical `zfw-<v>.tar.gz` and `.raw` (verified live —
   same `sha256` twice in a row).
-- Optional CycloneDX SBOM (`cyclonedx-gomod`) is fetched at build-time
-  via `go install ...@latest`. **This is the one new supply-chain trust
-  link** — pinning to a specific tag (e.g. `@v1.7.0`) is recommended once
-  CI lands on a real GitHub remote.
+- Optional CycloneDX SBOM (`cyclonedx-gomod`): `build.sh` uses whatever
+  binary is on `PATH` and skips the step, loudly, when none is; CI installs
+  it pinned (`@v1.12.0`, `.github/workflows/ci.yml`), never `@latest`.
+  **This is the one supply-chain trust link beyond the Go toolchain**, and
+  it runs in the job that produces the release tarball — bump the pin
+  deliberately, not automatically.
+- The Go toolchain itself is pinned by the `go` directive in `go.mod`
+  (1.27.1 as of this revision) and CI reads it from there
+  (`go-version-file`), so the vulnerability scan, the tests and the
+  release build all run on the toolchain the binary ships with.
 - The CI workflow file (`.github/workflows/ci.yml`) is committed but
   inactive while the repo has no remote — it asserts reproducibility on
   every build (two builds, SHA compare) and includes an arm64 smoke
@@ -224,9 +230,13 @@ script.
   Production installs use exactly those paths; dev checkouts that override
   `ZFW_COMPILED` will not survive a reboot. Not a security flaw — a
   product-policy choice — but worth flagging.
-- **`build.sh` fetches `cyclonedx-gomod` via `go install …@latest`** when
-  the SBOM step runs. Pinning to a tagged version is recommended once CI
-  is live; today the SBOM step is opt-in (build succeeds without it).
+- **The SBOM step is opt-in** (build succeeds without `cyclonedx-gomod` on
+  `PATH`), so a release cut on a host without the tool ships no
+  `sbom.json`. Up to v1.0.24 no release shipped one at all: the tool was
+  handed `./cmd/zfwd` as the *module* directory and failed on every run
+  with "not a go module" — invisibly, because its stderr was discarded.
+  Fixed in `build.sh` (`-main cmd/zfwd`, stderr shown); the CI build job
+  has the tool installed, so tarballs built there carry the SBOM.
 - The Exposure and Audit dashboards derive reachability from the legacy
   `allowlist.conf`; on an install that never had one the reachability
   column can read conservatively. This is a display limitation, not a
