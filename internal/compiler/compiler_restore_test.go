@@ -162,7 +162,8 @@ func TestCompileRestoreScriptShape(t *testing.T) {
 	for _, want := range []string{
 		"#!/bin/bash",
 		"set -eu",
-		`"$IPTR" --test --noflush "$T4"`, // pre-validate v4 before apply
+		`trap 'rm -f "${T4:-}" "${T6:-}"' EXIT`, // a failed --test must not leak the temp docs
+		`"$IPTR" --test --noflush "$T4"`,        // pre-validate v4 before apply
 		`"$IPTR" --noflush "$T4"`,
 		`"$IPT6R" --test --noflush "$T6"`,
 		"<<'ZFW_RESTORE_V4'",

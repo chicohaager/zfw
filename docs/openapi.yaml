@@ -157,7 +157,14 @@ components:
         source:   { type: string, example: "192.168.1.46" }
         port:     { type: integer }
         protocol: { type: string, enum: [tcp, udp, icmp] }
-        zone:     { type: string, enum: [host, host6, docker] }
+        zone:
+          type: string
+          enum: [host, host6, docker, docker6, rule]
+          description: "Chain that logged the packet. host/host6/docker/docker6 are drops (ZFW-IN, ZFW-IN6, DOCKER-USER, IPv6 DOCKER-USER). rule is a per-rule LOG match from the 'Log when this rule fires' toggle — the packet then went on to that rule's own action, allow or deny — and is excluded from the threat classifier."
+        rule:
+          type: string
+          description: "Rule id for zone=rule (the rule whose LOG line fired); absent otherwise."
+          example: "rabcd1234"
         threats:
           type: array
           description: "Server-side classifier tags. Stamped on events whose source crossed a port-scan (≥10 distinct ports in 60s) or brute-force (≥20 hits against an auth-relevant port in 60s) threshold. Empty/absent for normal drops."

@@ -76,14 +76,38 @@ func collectCandidates(rs RuleSet, set map[PortProto]struct{}) {
 // following the compiler's first-match-wins ordering and DefaultPolicy
 // fallthrough. Source narrowing is intentionally not considered (see file doc).
 func disposition(rs RuleSet, pp PortProto) string {
+	return Disposition(rs, "", pp.Proto, pp.Port)
+}
+
+// Disposition reports "allow" or "deny" for an inbound packet to port/proto
+// arriving in zone ("host" for a host-native listener, "docker" for a
+// Docker-published port, "" for either), under the compiler's first-match-wins
+// ordering with DefaultPolicy as the fallthrough. A rule takes part when its
+// zone is "auto" or equals the packet's zone — the same split portsForZone
+// makes when it decides which chain a rule lands in.
+//
+// It exists so the dashboard's Exposure and Audit views can answer "is this
+// port reachable" from rules.json, the file the firewall is actually compiled
+// from. Until v1.0.25 both views read the legacy allowlist.conf, which nothing
+// has written since the rule model replaced it: on every install made since,
+// an active firewall showed every host socket as "blocked" and every
+// port-based audit finding as "mitigated", whatever the rules said.
+//
+// Source narrowing (-s) is ignored, as in NewlyBlocked: a port that any one
+// source may reach counts as reachable, which errs towards reporting exposure
+// rather than hiding it.
+func Disposition(rs RuleSet, zone, proto string, port int) string {
 	for _, r := range rs.Rules {
 		if !inbound(r) {
 			continue
 		}
-		if !protoMatch(r.Protocol, pp.Proto) {
+		if zone != "" && r.Zone != "auto" && r.Zone != zone {
 			continue
 		}
-		if !portMatch(r.Ports, pp.Port) {
+		if !protoMatch(r.Protocol, proto) {
+			continue
+		}
+		if !portMatch(r.Ports, port) {
 			continue
 		}
 		return r.Action // "allow" | "deny" — first match wins

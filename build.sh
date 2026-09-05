@@ -160,7 +160,7 @@ $RAW/usr/bin/zfwd
 
   # Pack the complete hand-off package: module + engine + installer + docs.
   PKG="$NAME-$VERSION-$arch"
-  rm -rf "$DIST/$PKG"
+  rm -rf "${DIST:?}/${PKG:?}"
   mkdir -p "$DIST/$PKG"
   # install.sh expects a generic filename (zfw.raw, zfw.raw.sha256); the
   # arch suffix lives in the tarball name, not inside the payload. So we
@@ -186,7 +186,7 @@ $RAW/usr/bin/zfwd
       --mtime="@$SOURCE_DATE_EPOCH" \
       --pax-option=exthdr.name=%d/PaxHeaders/%f,delete=atime,delete=ctime \
       -czf "$PKG.tar.gz" "$PKG" )
-  rm -rf "$DIST/$PKG"
+  rm -rf "${DIST:?}/${PKG:?}"
   ( cd "$DIST" && sha256sum "$PKG.tar.gz" > "$PKG.tar.gz.sha256" )
 done
 

@@ -105,10 +105,10 @@ A useful report contains:
   days above
 
 A PoC against a host you own is fine. A PoC against a host you do
-not own — the maintainer's test ZimaCube included — is not without
-explicit prior agreement: that's testing in production. No address
-of the maintainer's is published here, and asking for one is not
-part of the process.
+not own — the maintainer's test ZimaCube included — requires
+explicit prior agreement; without it, that's testing in production.
+Agreement is requested by e-mail, at the same address as reports.
+This document publishes no host address of the maintainer's.
 
 ---
 
