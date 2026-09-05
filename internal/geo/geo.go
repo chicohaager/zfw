@@ -366,8 +366,25 @@ func (m *Manager) renderIpset(cc string) error {
 	if n == 0 {
 		return fmt.Errorf("no valid CIDR entries")
 	}
-	tmp := m.ipsetPath(cc) + ".tmp"
-	if err := os.WriteFile(tmp, []byte(sb.String()), 0o600); err != nil {
+	// Unique temp file per render, for the same reason fetch() uses one: two
+	// concurrent Ensure calls for the same country (dockerwatch recompile +
+	// rules POST) otherwise interleave into a single fixed "<cc>.ipset.tmp"
+	// and rename a torn file into place.
+	f, err := os.CreateTemp(m.dir, cc+".ipset.*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // no-op once the rename below succeeded
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.WriteString(sb.String()); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
 		return err
 	}
 	return os.Rename(tmp, m.ipsetPath(cc))

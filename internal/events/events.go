@@ -27,8 +27,16 @@ type Event struct {
 	Source   string    `json:"source"`
 	Port     int       `json:"port"`
 	Protocol string    `json:"protocol"`
-	Zone     string    `json:"zone"` // "host" | "docker"
-	Threats  []string  `json:"threats,omitempty"`
+	// Zone names the chain that logged the packet: "host" (ZFW-IN),
+	// "host6" (ZFW-IN6), "docker" (DOCKER-USER), "docker6" (IPv6
+	// DOCKER-USER) — all of them drops — or "rule" for a per-rule LOG line,
+	// which is a *match*, not a drop: the packet went on to the rule's own
+	// action, allow or deny.
+	Zone string `json:"zone"`
+	// Rule carries the rule id for zone "rule" (the "Log when this rule
+	// fires" toggle) and is empty otherwise.
+	Rule    string   `json:"rule,omitempty"`
+	Threats []string `json:"threats,omitempty"`
 }
 
 // Threat classifier thresholds. Externalised as consts so the tests use
@@ -166,6 +174,12 @@ func Classify(events []Event) []Event {
 	// the keyspace into one false-positive scan.
 	bySource := map[string][]int{}
 	for i, e := range events {
+		// Per-rule LOG lines record matches, most of them on allow rules. A
+		// client that is *allowed* to reach ten ports is not scanning them,
+		// so those lines must not feed the drop-based classifiers.
+		if e.Zone == "rule" {
+			continue
+		}
 		bySource[e.Source] = append(bySource[e.Source], i)
 	}
 	for _, idxs := range bySource {
@@ -236,15 +250,30 @@ func addThreat(e *Event, t string) {
 // Returns ok=false for any message that did not originate in a ZFW chain
 // so the caller can skip it without further filtering.
 func parseDropLine(msg, ts string) (Event, bool) {
-	var zone string
+	var zone, rule string
 	switch {
 	case strings.HasPrefix(msg, "ZFW-IN6-DROP"):
 		// Match before "ZFW-IN-DROP" so the longer prefix wins.
 		zone = "host6"
 	case strings.HasPrefix(msg, "ZFW-IN-DROP"):
 		zone = "host"
+	case strings.HasPrefix(msg, "ZFW-DOCK6-DROP"):
+		// Same ordering rule: the v6 chain's prefix contains the v4 one's.
+		zone = "docker6"
 	case strings.HasPrefix(msg, "ZFW-DOCK-DROP"):
 		zone = "docker"
+	case strings.HasPrefix(msg, "ZFW-RULE-"):
+		// Per-rule LOG (the "Log when this rule fires" toggle, v0.4.4). The
+		// prefix is "ZFW-RULE-<id> " and the id is a validated
+		// [A-Za-z0-9_-]{1,16} token, so it ends at the first space. Until
+		// v1.0.25 this prefix was not recognised here at all: the toggle
+		// promised "appears in the Events tab" and every such line was
+		// dropped on the floor by this switch.
+		zone = "rule"
+		rule = strings.TrimPrefix(msg, "ZFW-RULE-")
+		if i := strings.IndexByte(rule, ' '); i >= 0 {
+			rule = rule[:i]
+		}
 	default:
 		return Event{}, false
 	}
@@ -264,6 +293,7 @@ func parseDropLine(msg, ts string) (Event, bool) {
 		Source:   fields["SRC"],
 		Protocol: strings.ToLower(fields["PROTO"]),
 		Zone:     zone,
+		Rule:     rule,
 	}
 	if p, err := strconv.Atoi(fields["DPT"]); err == nil {
 		ev.Port = p
