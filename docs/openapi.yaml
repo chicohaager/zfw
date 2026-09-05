@@ -97,7 +97,7 @@ components:
       properties:
         version:        { type: integer, example: 3, description: "On-disk schema version (current = 3, v0.5.6+). Daemon-owned; clients should pass it through unchanged on POST. An older rules.json on disk is migrated transparently on Load (a .bak.v<old> file is preserved). A rules.json from a newer daemon is refused." }
         lan:            { type: string, example: "192.168.1.0/24" }
-        host_ip:        { type: string, example: "192.168.1.167" }
+        host_ip:        { type: string, example: "192.168.1.100" }
         default_policy: { type: string, enum: [deny, allow] }
         v6_drop:        { type: array, items: { type: integer } }
         rules:          { type: array, items: { $ref: '#/components/schemas/Rule' } }
@@ -167,7 +167,7 @@ components:
       description: "A configured follower host (token-stripped view served to the UI)."
       properties:
         name: { type: string, example: "zima-2" }
-        url:  { type: string, example: "http://192.168.1.147:8489/api/peers/receive" }
+        url:  { type: string, example: "http://192.168.1.101:8489/api/peers/receive" }
     PeerResult:
       type: object
       description: "Per-peer outcome of a /api/peers/push fanout."
@@ -185,7 +185,7 @@ components:
         state:    { type: string, example: ESTABLISHED }
         src_ip:   { type: string, example: "192.168.1.42" }
         src_port: { type: integer, example: 33124 }
-        dst_ip:   { type: string, example: "192.168.1.167" }
+        dst_ip:   { type: string, example: "192.168.1.100" }
         dst_port: { type: integer, example: 22 }
         age_sec:  { type: integer, description: "Kernel timeout countdown — seconds until the entry expires if no further traffic." }
     UpdateStatus:

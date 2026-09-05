@@ -57,7 +57,7 @@ def call_zfw(host, authorization=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("host", help="ZimaOS host, e.g. 192.168.1.143")
+    ap.add_argument("host", help="ZimaOS host, e.g. 192.168.1.100")
     ap.add_argument("--user", required=True)
     ap.add_argument("--password-file", required=True,
                     help="file holding the password (mode 0600); never printed")

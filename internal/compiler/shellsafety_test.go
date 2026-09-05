@@ -64,7 +64,7 @@ func TestCompiledScriptCarriesNoShellMetaChar(t *testing.T) {
 	rs := rules.RuleSet{
 		DefaultPolicy: "deny",
 		LAN:           "192.168.1.0/24",
-		HostIP:        "192.168.1.143",
+		HostIP:        "192.168.1.100",
 		Rules: []rules.Rule{
 			{
 				ID: "allow-ssh", Name: "SSH from LAN", Enabled: true, Action: "allow",

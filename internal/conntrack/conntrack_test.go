@@ -29,7 +29,7 @@ func TestParseLineProcShape(t *testing.T) {
 // the original-direction src/dst (not the reply direction) and the
 // ESTABLISHED state.
 func TestParseLineEstablishedTCP(t *testing.T) {
-	line := "tcp      6 431999 ESTABLISHED src=192.168.1.42 dst=192.168.1.167 sport=33124 dport=22 src=192.168.1.167 dst=192.168.1.42 sport=22 dport=33124 [ASSURED] mark=0 zone=0 use=1"
+	line := "tcp      6 431999 ESTABLISHED src=192.168.1.42 dst=192.168.1.100 sport=33124 dport=22 src=192.168.1.100 dst=192.168.1.42 sport=22 dport=33124 [ASSURED] mark=0 zone=0 use=1"
 	e, ok := parseLine(line)
 	if !ok {
 		t.Fatal("parseLine returned ok=false on a valid TCP line")
@@ -40,8 +40,8 @@ func TestParseLineEstablishedTCP(t *testing.T) {
 	if e.State != "ESTABLISHED" {
 		t.Errorf("State = %q, want ESTABLISHED", e.State)
 	}
-	if e.SrcIP != "192.168.1.42" || e.DstIP != "192.168.1.167" {
-		t.Errorf("Src/Dst = %s→%s, want 192.168.1.42→192.168.1.167 (original direction)", e.SrcIP, e.DstIP)
+	if e.SrcIP != "192.168.1.42" || e.DstIP != "192.168.1.100" {
+		t.Errorf("Src/Dst = %s→%s, want 192.168.1.42→192.168.1.100 (original direction)", e.SrcIP, e.DstIP)
 	}
 	if e.SrcPort != 33124 || e.DstPort != 22 {
 		t.Errorf("Ports = %d→%d, want 33124→22", e.SrcPort, e.DstPort)

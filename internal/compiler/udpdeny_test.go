@@ -74,7 +74,7 @@ func TestDenyLinesOrderIsDeterministic(t *testing.T) {
 // fix: extending the deny to UDP without also generating the matching allow
 // rule would make every published UDP port unreachable, LAN included.
 func TestDefaultsAllowsPublishedUDPPort(t *testing.T) {
-	rs := rules.Defaults("192.168.1.0/24", "192.168.1.143", pp8181())
+	rs := rules.Defaults("192.168.1.0/24", "192.168.1.100", pp8181())
 
 	byPort := map[int]rules.Rule{}
 	for _, r := range rs.Rules {

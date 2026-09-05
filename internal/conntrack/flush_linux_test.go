@@ -31,7 +31,7 @@ func TestBuildCTDeleteV4(t *testing.T) {
 		Protocol: "tcp",
 		SrcIP:    "192.168.1.175",
 		SrcPort:  59377,
-		DstIP:    "192.168.1.143",
+		DstIP:    "192.168.1.100",
 		DstPort:  7070,
 	}
 	msg, err := buildCTDelete(42, e)
@@ -75,7 +75,7 @@ func TestBuildCTDeleteV4(t *testing.T) {
 	if want := []byte{192, 168, 1, 175}; string(src) != string(want) {
 		t.Errorf("src ip = % d, want % d", src, want)
 	}
-	if want := []byte{192, 168, 1, 143}; string(dst) != string(want) {
+	if want := []byte{192, 168, 1, 100}; string(dst) != string(want) {
 		t.Errorf("dst ip = % d, want % d", dst, want)
 	}
 
