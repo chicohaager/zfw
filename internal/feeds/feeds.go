@@ -144,7 +144,8 @@ type Manager struct {
 	Source func(Feed) string
 
 	mu        sync.Mutex
-	protected []*net.IPNet // host-specific never-block ranges, see Protect
+	protected []*net.IPNet            // host-specific never-block ranges, see Protect
+	lastKept  map[string][]*net.IPNet // per feed, what the last render put in the set
 }
 
 // Protect sets the host-specific ranges that are removed from every feed on
@@ -195,7 +196,7 @@ func New(dir string) *Manager {
 			}
 			return nil
 		},
-	}, Source: func(f Feed) string { return f.URL }}
+	}, Source: func(f Feed) string { return f.URL }, lastKept: map[string][]*net.IPNet{}}
 }
 
 func (m *Manager) listPath(id string) string  { return filepath.Join(m.dir, id+".list") }
@@ -368,16 +369,12 @@ func (m *Manager) render(f Feed) (Meta, error) {
 		return Meta{}, fmt.Errorf("no usable entries after filtering")
 	}
 	sort.Slice(kept, func(i, j int) bool { return kept[i].String() < kept[j].String() })
-	set := SetName(f.ID)
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "create %s hash:net family inet hashsize 4096 maxelem 262144 -exist\n", set)
-	fmt.Fprintf(&sb, "flush %s\n", set)
-	for _, n := range kept {
-		fmt.Fprintf(&sb, "add %s %s\n", set, n.String())
-	}
-	if err := writeAtomic(m.dir, f.ID+".ipset", m.ipsetPath(f.ID), []byte(sb.String())); err != nil {
+	if err := writeAtomic(m.dir, f.ID+".ipset", m.ipsetPath(f.ID), []byte(restoreText(SetName(f.ID), kept))); err != nil {
 		return Meta{}, err
 	}
+	m.mu.Lock()
+	m.lastKept[f.ID] = kept
+	m.mu.Unlock()
 	meta := Meta{ID: f.ID, Rendered: time.Now(), Entries: len(kept), Dropped: dropped, Protected: protected}
 	if fi != nil {
 		meta.Fetched = fi.ModTime()
@@ -387,6 +384,131 @@ func (m *Manager) render(f Feed) (Meta, error) {
 		return Meta{}, err
 	}
 	return meta, nil
+}
+
+// restoreText is the ipset-restore document for set holding kept: create,
+// flush, add. The apply path loads it with `ipset restore -exist`, where
+// the flush+add window does not matter (an apply is a disruption anyway);
+// the live refresh loads it under a temporary name and swaps, because a
+// flush+add on the live set is not atomic — measured: 111 000 of 200 000
+// entries present mid-restore.
+func restoreText(set string, kept []*net.IPNet) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "create %s hash:net family inet hashsize 4096 maxelem 262144 -exist\n", set)
+	fmt.Fprintf(&sb, "flush %s\n", set)
+	for _, n := range kept {
+		fmt.Fprintf(&sb, "add %s %s\n", set, n.String())
+	}
+	return sb.String()
+}
+
+// tmpSetName is the scratch set a live refresh loads into before the swap.
+// ipset names are capped at 31 bytes; "zfw-tmp-" is 8, the id at most 22.
+func tmpSetName(id string) string {
+	if len(id) > 22 {
+		id = id[:22]
+	}
+	return "zfw-tmp-" + id
+}
+
+// Runner executes one ipset invocation (args without the binary) and returns
+// its combined output. Injected so tests can record the sequence instead
+// of needing root and a kernel.
+type Runner func(ctx context.Context, args ...string) (string, error)
+
+// Refresh re-fetches each feed (tolerating a failure when a cache exists),
+// re-renders its ipset file for the next apply, and — when the feed's set is
+// live in the kernel — replaces the live content without touching a single
+// iptables rule: load into a temporary set, swap, destroy the temporary
+// one. Nothing here recompiles or applies; the firewall's rules are exactly
+// what they were before. A feed whose set is not live (rules never applied)
+// only gets its file updated.
+func (m *Manager) Refresh(ctx context.Context, ids []string, run Runner, logf func(string, ...any)) error {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	if err := os.MkdirAll(m.dir, 0o700); err != nil {
+		return err
+	}
+	var firstErr error
+	note := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	for _, id := range ids {
+		f, ok := Lookup(strings.TrimSpace(id))
+		if !ok {
+			note(fmt.Errorf("feed %q: not in the catalogue", id))
+			continue
+		}
+		if err := m.fetch(ctx, f); err != nil {
+			if _, statErr := os.Stat(m.listPath(f.ID)); statErr != nil {
+				note(fmt.Errorf("feed %s: no cache and download failed: %w", f.ID, err))
+				continue
+			}
+			logf("feeds: %s — refresh download failed, keeping cache: %v", f.ID, err)
+		}
+		meta, err := m.render(f)
+		if err != nil {
+			note(fmt.Errorf("feed %s: %w", f.ID, err))
+			continue
+		}
+		if err := m.swapLive(ctx, f.ID, run, logf); err != nil {
+			note(fmt.Errorf("feed %s: %w", f.ID, err))
+			continue
+		}
+		logf("feeds: %s refreshed — %d networks (%d special-use and %d host-specific entries removed)",
+			f.ID, meta.Entries, meta.Dropped, meta.Protected)
+	}
+	return firstErr
+}
+
+// swapLive replaces the live set's content via a temporary set. Skips
+// silently when the set is not loaded.
+func (m *Manager) swapLive(ctx context.Context, id string, run Runner, logf func(string, ...any)) error {
+	set, tmp := SetName(id), tmpSetName(id)
+	if _, err := run(ctx, "-q", "list", "-n", set); err != nil {
+		logf("feeds: %s — set %s not live, file updated for the next apply", id, set)
+		return nil
+	}
+	m.mu.Lock()
+	kept := m.lastKept[id]
+	m.mu.Unlock()
+	if len(kept) == 0 {
+		return fmt.Errorf("nothing rendered to swap in")
+	}
+	doc, err := os.CreateTemp(m.dir, id+".swap.*.tmp")
+	if err != nil {
+		return err
+	}
+	docPath := doc.Name()
+	defer os.Remove(docPath)
+	if err := doc.Chmod(0o600); err != nil {
+		doc.Close()
+		return err
+	}
+	if _, err := doc.WriteString(restoreText(tmp, kept)); err != nil {
+		doc.Close()
+		return err
+	}
+	if err := doc.Close(); err != nil {
+		return err
+	}
+	if out, err := run(ctx, "restore", "-exist", "-f", docPath); err != nil {
+		_, _ = run(ctx, "-q", "destroy", tmp)
+		return fmt.Errorf("load temporary set: %w (%s)", err, strings.TrimSpace(out))
+	}
+	if out, err := run(ctx, "swap", tmp, set); err != nil {
+		_, _ = run(ctx, "-q", "destroy", tmp)
+		return fmt.Errorf("swap: %w (%s)", err, strings.TrimSpace(out))
+	}
+	if out, err := run(ctx, "destroy", tmp); err != nil {
+		// The swap already succeeded; the leftover set only holds the old
+		// content. Say so rather than fail the refresh.
+		logf("feeds: %s — temporary set %s not destroyed after swap: %v (%s)", id, tmp, err, strings.TrimSpace(out))
+	}
+	return nil
 }
 
 // writeAtomic publishes content at dst via a unique temp file and rename,

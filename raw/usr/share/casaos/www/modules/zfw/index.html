@@ -164,7 +164,7 @@
           <select id="rm-feed"></select>
         </label>
         <p id="rm-geo-hint" class="rm-hint" hidden>Geo-blocking only works with direct port-forwarding &mdash; not behind a Pangolin/Cloudflare tunnel (filter at the VPS there).</p>
-        <p id="rm-feed-hint" class="rm-hint" hidden>Feeds come from a fixed catalogue and are refreshed from the source on apply. Private, link-local, CGNAT (Tailscale) and multicast ranges are always removed before a feed is loaded, so a feed can never block your LAN. Like geo-blocking, a feed only sees real source addresses with direct port-forwarding &mdash; not behind a tunnel.</p>
+        <p id="rm-feed-hint" class="rm-hint" hidden>Feeds come from a fixed catalogue, are refreshed on apply and every 12 hours in the background (the refresh swaps the set in place and never changes your rules). Private, link-local, CGNAT (Tailscale) and multicast ranges are always removed before a feed is loaded, so a feed can never block your LAN. Like geo-blocking, a feed only sees real source addresses with direct port-forwarding &mdash; not behind a tunnel.</p>
         <label class="fld">Ports
           <select id="rm-porttype">
             <option value="all">All ports</option>
