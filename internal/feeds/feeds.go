@@ -30,6 +30,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -141,6 +142,42 @@ type Manager struct {
 	// Source maps a catalogue entry to the URL fetched. Defaults to the
 	// entry's own URL; tests point it at an httptest server.
 	Source func(Feed) string
+
+	mu        sync.Mutex
+	protected []*net.IPNet // host-specific never-block ranges, see Protect
+}
+
+// Protect sets the host-specific ranges that are removed from every feed on
+// top of the built-in special-use list: the host's own LAN and address, and
+// the peers it syncs rules with. A feed that happened to list the operator's
+// own public /24 would otherwise lock the operator out with a green apply.
+// Entries are CIDRs or bare IPs; anything else is ignored. The list is
+// replaced, not merged, so a LAN that changed in rules.json does not keep
+// its predecessor protected forever. Safe for concurrent use: the periodic
+// refresh and a rules POST may render at the same time.
+func (m *Manager) Protect(cidrs []string) {
+	var nets []*net.IPNet
+	for _, s := range cidrs {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if !strings.Contains(s, "/") {
+			s += "/32"
+		}
+		if ip, n, err := net.ParseCIDR(s); err == nil && ip.To4() != nil {
+			nets = append(nets, n)
+		}
+	}
+	m.mu.Lock()
+	m.protected = nets
+	m.mu.Unlock()
+}
+
+func (m *Manager) protectedNets() []*net.IPNet {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]*net.IPNet(nil), m.protected...)
 }
 
 // New returns a Manager rooted at dir (created on first Ensure, mode 0700).
@@ -175,7 +212,10 @@ type Meta struct {
 	Fetched  time.Time `json:"fetched"`  // mtime of the cached list
 	Rendered time.Time `json:"rendered"` // when the ipset file was written
 	Entries  int       `json:"entries"`  // networks in the set
-	Dropped  int       `json:"dropped"`  // entries removed by neverBlock
+	Dropped  int       `json:"dropped"`  // entries removed by the built-in special-use list
+	// Protected counts entries removed because they overlap a host-specific
+	// range set via Protect (own LAN, own address, peers).
+	Protected int `json:"protected"`
 }
 
 // Ensure makes sure each feed's list is cached and its ipset-restore file is
@@ -292,23 +332,26 @@ func overlaps(a, b *net.IPNet) bool {
 	return a.Contains(b.IP) || b.Contains(a.IP)
 }
 
-// filtered drops every entry that overlaps a neverBlock range.
-func filtered(nets []*net.IPNet) (kept []*net.IPNet, dropped int) {
+// filtered drops every entry that overlaps a neverBlock range (counted in
+// dropped) or one of the extra host-specific ranges (counted in protected).
+func filtered(nets []*net.IPNet, extra ...*net.IPNet) (kept []*net.IPNet, dropped, protected int) {
+next:
 	for _, n := range nets {
-		bad := false
 		for _, nb := range neverBlock {
 			if overlaps(n, nb) {
-				bad = true
-				break
+				dropped++
+				continue next
 			}
 		}
-		if bad {
-			dropped++
-			continue
+		for _, ex := range extra {
+			if overlaps(n, ex) {
+				protected++
+				continue next
+			}
 		}
 		kept = append(kept, n)
 	}
-	return kept, dropped
+	return kept, dropped, protected
 }
 
 // render turns the cached list into an ipset-restore file for the apply
@@ -320,7 +363,7 @@ func (m *Manager) render(f Feed) (Meta, error) {
 		return Meta{}, err
 	}
 	fi, _ := os.Stat(m.listPath(f.ID))
-	kept, dropped := filtered(parseEntries(body))
+	kept, dropped, protected := filtered(parseEntries(body), m.protectedNets()...)
 	if len(kept) == 0 {
 		return Meta{}, fmt.Errorf("no usable entries after filtering")
 	}
@@ -335,7 +378,7 @@ func (m *Manager) render(f Feed) (Meta, error) {
 	if err := writeAtomic(m.dir, f.ID+".ipset", m.ipsetPath(f.ID), []byte(sb.String())); err != nil {
 		return Meta{}, err
 	}
-	meta := Meta{ID: f.ID, Rendered: time.Now(), Entries: len(kept), Dropped: dropped}
+	meta := Meta{ID: f.ID, Rendered: time.Now(), Entries: len(kept), Dropped: dropped, Protected: protected}
 	if fi != nil {
 		meta.Fetched = fi.ModTime()
 	}

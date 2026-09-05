@@ -66,7 +66,7 @@ func TestParseEntriesHandlesBothRealFormats(t *testing.T) {
 // The property the whole package rests on: every bogon firehol_level1 ships
 // must be gone after filtering, whatever else the feed contains.
 func TestFilteredDropsEveryBogonFireholShips(t *testing.T) {
-	kept, dropped := filtered(parseEntries([]byte(fireholExcerpt)))
+	kept, dropped, _ := filtered(parseEntries([]byte(fireholExcerpt)))
 	if dropped != 8 {
 		t.Fatalf("dropped %d, want the 8 special-use entries", dropped)
 	}
@@ -83,7 +83,7 @@ func TestFilteredDropsEveryBogonFireholShips(t *testing.T) {
 	}
 	// Both directions: an entry inside a protected range and one that
 	// contains a protected range are dropped alike.
-	kept, dropped = filtered(parseEntries([]byte("192.168.1.0/24\n0.0.0.0/0\n100.100.0.0/16\n198.51.100.0/24\n")))
+	kept, dropped, _ = filtered(parseEntries([]byte("192.168.1.0/24\n0.0.0.0/0\n100.100.0.0/16\n198.51.100.0/24\n")))
 	if dropped != 3 || len(kept) != 1 || kept[0].String() != "198.51.100.0/24" {
 		t.Fatalf("partial/containing entries: kept=%v dropped=%d", kept, dropped)
 	}
@@ -254,5 +254,43 @@ func TestCatalogueIsWellFormed(t *testing.T) {
 	}
 	if IsValidID("not_there") {
 		t.Error("IsValidID accepted an id outside the catalogue")
+	}
+}
+
+// Host-specific protection: the operator's own (possibly public) LAN, the
+// host address and sync peers are removed too, counted separately, and a
+// later Protect call replaces the list rather than growing it.
+func TestProtectRemovesHostRangesAndReplaces(t *testing.T) {
+	body, status := bigFeed(300)+"203.0.113.0/24\n198.51.100.7\n192.0.2.0/24\n", http.StatusOK
+	srv, _ := feedServer(t, &body, &status)
+	m := newTestManager(t, srv)
+	m.Protect([]string{"203.0.113.0/24", "198.51.100.7", "not-an-address", ""})
+	if err := m.Ensure(context.Background(), []string{"spamhaus_drop"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	set, _ := os.ReadFile(m.IpsetPath("spamhaus_drop"))
+	for _, gone := range []string{" 203.0.113.0/24\n", " 198.51.100.7/32\n"} {
+		if strings.Contains(string(set), gone) {
+			t.Errorf("protected range %q rendered into the set", strings.TrimSpace(gone))
+		}
+	}
+	if !strings.Contains(string(set), " 192.0.2.0/24\n") {
+		t.Error("an unprotected public range was removed")
+	}
+	// Three, not two: the FireHOL excerpt itself carries 203.0.113.7, which
+	// lies inside the protected /24 and must go with it.
+	meta, _ := m.Info("spamhaus_drop")
+	if meta.Protected != 3 || meta.Dropped != 8 {
+		t.Fatalf("meta protected=%d dropped=%d, want 3 / 8", meta.Protected, meta.Dropped)
+	}
+	// Replace, not merge: after a new Protect without 203.0.113.0/24 the
+	// range is blocked again on the next render.
+	m.Protect([]string{"198.51.100.7"})
+	if _, err := m.render(Catalogue[1]); err != nil {
+		t.Fatal(err)
+	}
+	set, _ = os.ReadFile(m.IpsetPath("spamhaus_drop"))
+	if !strings.Contains(string(set), " 203.0.113.0/24\n") {
+		t.Error("a range dropped from Protect stayed protected")
 	}
 }
