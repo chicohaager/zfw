@@ -162,7 +162,9 @@ sh build.sh        # -> dist/zfw-<version>-<arch>.tar.gz  (per arch)
 
 Default arches: `amd64` (ZimaBoard 1/2, ZimaCube) and `arm64` (Lattepanda/Pi-class
 hosts). Override with `ARCHES="amd64" sh build.sh` to build a single arch.
-Requires `go` 1.22+ and `squashfs-tools` (`mksquashfs`). The image is packed with
+Requires `go` 1.27.1 — the exact toolchain is pinned by the `go` directive in `go.mod`,
+and any Go ≥ 1.21 on the build host downloads and switches to it on its own
+(`GOTOOLCHAIN=auto`) — plus `squashfs-tools` (`mksquashfs`). The image is packed with
 gzip — the ZimaOS kernel is built without zstd/xz squashfs support.
 
 ### Building the installer image
