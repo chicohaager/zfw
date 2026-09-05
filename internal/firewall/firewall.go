@@ -28,13 +28,54 @@ type Config struct {
 
 // Status is the live firewall state read from iptables and systemd.
 type Status struct {
-	Active         bool `json:"active"` // ZFW-IN chain exists
-	Hooked         bool `json:"hooked"` // INPUT jumps to ZFW-IN
-	InputRules     int  `json:"input_rules"`
-	DockerDrops    int  `json:"docker_drops"`
-	IPv6Active     bool `json:"ipv6_active"`
-	Deadman        bool `json:"deadman"`         // a safe-apply rollback is armed
-	ServiceEnabled bool `json:"service_enabled"` // zfw.service enabled at boot
+	Active bool `json:"active"` // ZFW-IN chain exists
+	Hooked bool `json:"hooked"` // INPUT jumps to ZFW-IN
+	// InputPosition is the 1-based position of the ZFW-IN jump among the
+	// INPUT rules (0 when not hooked). ZFW inserts itself at position 1 and
+	// never re-asserts that: any tool that later inserts ahead of it — a
+	// blocklist module, Tailscale's ts-input, an ACCEPT-all from a VPN
+	// installer — runs first, and a permissive rule there bypasses ZFW
+	// silently. InputBefore lists those rules (the spec after "-A INPUT")
+	// so the UI can show them instead of a bare number.
+	InputPosition int      `json:"input_position"`
+	InputBefore   []string `json:"input_before"`
+	InputRules    int      `json:"input_rules"`
+	DockerDrops   int      `json:"docker_drops"`
+	IPv6Active    bool     `json:"ipv6_active"`
+	// Same two fields for the IPv6 INPUT chain and ZFW-IN6.
+	IPv6InputPosition int      `json:"ipv6_input_position"`
+	IPv6InputBefore   []string `json:"ipv6_input_before"`
+	Deadman           bool     `json:"deadman"`         // a safe-apply rollback is armed
+	ServiceEnabled    bool     `json:"service_enabled"` // zfw.service enabled at boot
+}
+
+// maxInputBefore caps InputBefore so a pathological INPUT chain (some
+// tools append thousands of per-IP rules) cannot balloon the status JSON.
+const maxInputBefore = 32
+
+// inputOrder reports where the jump to target sits in an `iptables -S INPUT`
+// dump: the 1-based position among the -A INPUT rules and the specs of the
+// rules ahead of it. pos is 0 and before is nil when the jump is absent.
+// Only rule lines count; the policy line (-P INPUT …) and anything that is
+// not an INPUT append are ignored, so a foreign chain dumped by mistake
+// cannot be mistaken for a position.
+func inputOrder(dump, target string) (pos int, before []string) {
+	suffix := " -j " + target
+	n := 0
+	for _, ln := range strings.Split(dump, "\n") {
+		ln = strings.TrimSpace(ln)
+		if !strings.HasPrefix(ln, "-A INPUT ") {
+			continue
+		}
+		n++
+		if strings.HasSuffix(ln, suffix) {
+			return n, before
+		}
+		if len(before) < maxInputBefore {
+			before = append(before, strings.TrimPrefix(ln, "-A INPUT "))
+		}
+	}
+	return 0, nil
 }
 
 // Manager wraps the firewall engine.
@@ -176,7 +217,8 @@ func (m *Manager) Status(ctx context.Context) Status {
 		}
 	}
 	if out, err := run(ctx, m.iptBin, "-S", "INPUT"); err == nil {
-		s.Hooked = strings.Contains(out, "-j ZFW-IN")
+		s.InputPosition, s.InputBefore = inputOrder(out, "ZFW-IN")
+		s.Hooked = s.InputPosition > 0
 	}
 	if out, err := run(ctx, m.iptBin, "-S", "DOCKER-USER"); err == nil {
 		for _, ln := range strings.Split(out, "\n") {
@@ -185,7 +227,7 @@ func (m *Manager) Status(ctx context.Context) Status {
 			}
 		}
 	}
-	s.IPv6Active = m.ipv6Active(ctx)
+	s.IPv6Active, s.IPv6InputPosition, s.IPv6InputBefore = m.ipv6Active(ctx)
 	if out, _ := run(ctx, "systemctl", "is-active", "zfw-deadman.timer"); strings.TrimSpace(out) == "active" {
 		s.Deadman = true
 	}
@@ -205,7 +247,9 @@ func (m *Manager) Status(ctx context.Context) Status {
 // table holds rules. So if the primary binary comes up empty, ask the other
 // family before reporting ✗ — a false "IPv6 protection ✗" on a host that is
 // in fact protected is the exact bug reported against v1.0.16.
-func (m *Manager) ipv6Active(ctx context.Context) bool {
+// It also returns the position of the ZFW-IN6 jump and the rules ahead of
+// it, mirroring Status.InputPosition/InputBefore for IPv4.
+func (m *Manager) ipv6Active(ctx context.Context) (active bool, pos int, before []string) {
 	seen := map[string]bool{}
 	for _, bin := range []string{m.ipt6, "ip6tables-nft", "ip6tables-legacy"} {
 		if bin == "" || seen[bin] {
@@ -216,11 +260,13 @@ func (m *Manager) ipv6Active(ctx context.Context) bool {
 		if err != nil || !strings.Contains(out, "-A ZFW-IN6") {
 			continue
 		}
-		if hook, err := run(ctx, bin, "-S", "INPUT"); err == nil && strings.Contains(hook, "-j ZFW-IN6") {
-			return true
+		if hook, err := run(ctx, bin, "-S", "INPUT"); err == nil {
+			if p, b := inputOrder(hook, "ZFW-IN6"); p > 0 {
+				return true, p, b
+			}
 		}
 	}
-	return false
+	return false, 0, nil
 }
 
 // LoadConfig parses allowlist.conf.

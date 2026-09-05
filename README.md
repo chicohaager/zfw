@@ -82,7 +82,11 @@ A standalone ZimaOS module — a tile in the ZimaOS dashboard — with seven tab
   not Confirm in time, ZFW **removes the firewall entirely** (all ZFW rules dropped, host
   back to its unprotected stock state — *not* a restore of the previously committed rules).
   A bad rule can never lock you out, but an unattended Safe-Apply leaves the host
-  unprotected; Commit; Revert.
+  unprotected; Commit; Revert. The status grid also shows **where** ZFW's chain sits
+  in `INPUT`: ZFW inserts itself first and never shoves back, so a tool installed
+  later (a blocklist module, a VPN's own chain) can end up ahead of it — harmless if
+  it is stricter, a silent bypass if it accepts. The tab names what runs ahead, and
+  the Audit tab carries it as finding M9. ZFW reports; it does not fight for the slot.
 - **Rules** — the rule list, evaluated top to bottom, first match wins. A rule is
   allow/deny on a source (any / IP / CIDR range / ISO-3166 country codes, max 32),
   a port list or range, TCP/UDP/both, and a zone (auto / host / docker, or bound to a
