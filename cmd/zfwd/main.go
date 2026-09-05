@@ -119,6 +119,12 @@ func main() {
 	// stays an explicit operator action. No-op on hosts without docker.
 	go dockerwatch.New(srv.Recompile, slog.Default()).Run(ctx)
 
+	// Keep blocklist feeds current without touching the rules: the refresh
+	// re-fetches, filters and swaps the live ipsets in place. It never
+	// recompiles or applies — same line as dockerwatch above. Disabled with
+	// ZFW_FEEDS_REFRESH=0; a host without feed rules makes no calls at all.
+	go srv.RunFeedRefresh(ctx, cfg.FeedsRefresh)
+
 	// Install the boot watchdog on the persistent root (ZimaOS sysext units
 	// can lose the multi-user.target race — see KB §18.9).
 	go func() {

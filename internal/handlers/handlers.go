@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -65,6 +66,7 @@ type Server struct {
 	extraBypass  []string // v0.5.4 — extra inbound-bypass iface names appended to every chain
 	geo          *geo.Manager
 	feeds        *feeds.Manager
+	ipsetRun     feeds.Runner    // nil = the real ipset binary
 	upd          *update.Checker // nil = self-update polling disabled
 	hook         *notify.Hook    // v0.5.5 — nil = webhook disabled
 	httpClient   *http.Client    // reusable client for outbound peer pushes
@@ -489,6 +491,7 @@ func (s *Server) Routes() http.Handler {
 	// uncapped — they hit memory + a small JSON encode at worst.
 	mux.HandleFunc("/api/exposure", s.rateLimitedGet(s.exposure))
 	mux.HandleFunc("/api/feeds", s.rateLimitedGet(s.feedsList))
+	mux.HandleFunc("/api/feeds/refresh", s.rateLimited(s.feedsRefresh))
 	mux.HandleFunc("/api/audit", s.rateLimitedGet(s.auditHandler))
 	mux.HandleFunc("/api/versions", s.rateLimitedGet(s.versions))
 	mux.HandleFunc("/api/update", s.updateStatus)
@@ -1239,6 +1242,82 @@ func (s *Server) geoLookup(w http.ResponseWriter, r *http.Request) {
 		ips = ips[:500]
 	}
 	writeJSON(w, http.StatusOK, s.geo.LookupBatch(ips))
+}
+
+// ipsetRunner is the Runner RefreshFeeds hands to feeds.Refresh: the real
+// ipset binary with a bounded timeout. Tests replace s.ipsetRun.
+func ipsetRunner(ctx context.Context, args ...string) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, "ipset", args...).CombinedOutput()
+	return string(out), err
+}
+
+// RefreshFeeds re-fetches every feed the current rules reference and swaps
+// the live sets in place. It never recompiles and never applies: the
+// firewall's rules after a refresh are byte for byte the rules before it,
+// only the set contents moved. A host without feed rules does nothing —
+// no network call, no ipset call.
+func (s *Server) RefreshFeeds(ctx context.Context) error {
+	rs, err := rules.Load(s.rulesPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	seen := map[string]bool{}
+	var ids []string
+	for _, r := range rs.Rules {
+		if r.Source.Type == "feed" && !seen[r.Source.Value] {
+			seen[r.Source.Value] = true
+			ids = append(ids, r.Source.Value)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	sort.Strings(ids)
+	s.feeds.Protect(s.feedProtection(rs))
+	run := s.ipsetRun
+	if run == nil {
+		run = ipsetRunner
+	}
+	return s.feeds.Refresh(ctx, ids, run, func(f string, a ...any) { slog.Info(fmt.Sprintf(f, a...)) })
+}
+
+// RunFeedRefresh refreshes on a fixed cadence until ctx ends. The first run
+// waits a full interval: an apply already fetches anything older than a
+// day, and a daemon restart must not turn into a burst of downloads.
+func (s *Server) RunFeedRefresh(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := s.RefreshFeeds(ctx); err != nil {
+				slog.Warn("feed refresh", "err", err)
+			}
+		}
+	}
+}
+
+// feedsRefresh is POST /api/feeds/refresh: the status card's "Update now".
+func (s *Server) feedsRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		fail(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	if err := s.RefreshFeeds(r.Context()); err != nil {
+		fail(w, http.StatusBadGateway, "feed refresh: "+err.Error())
+		return
+	}
+	s.feedsList(w, &http.Request{Method: http.MethodGet, URL: r.URL})
 }
 
 // feedProtection lists the host-specific ranges a feed must never block:
