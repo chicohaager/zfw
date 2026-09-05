@@ -92,9 +92,12 @@ jobs:
       # Pinned, not @latest: this runs inside the job that produces the published
       # release tarball, so a compromised upstream release of the SBOM tool would
       # execute right next to the artifact it is meant to describe. Bump
-      # deliberately.
+      # deliberately. -trimpath because the SBOM records the tool's own
+      # binary hash (metadata.tools[].hashes): without it the hash carries
+      # the build host's paths, and the tarball differs between CI and a
+      # developer box although every shipped byte is identical.
       - name: Install cyclonedx-gomod (SBOM)
-        run: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
+        run: go install -trimpath github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@v1.12.0
       - name: First build
         run: bash build.sh
       - name: Capture first tarball SHA
