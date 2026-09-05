@@ -73,6 +73,55 @@ async function loadFirewall() {
     fwItem('INPUT rules', fw.input_rules || 0) +
     fwItem('DOCKER-USER DROPs', fw.docker_drops || 0) +
     fwItem('Dead-man armed', !!fw.deadman, 'warn');
+  loadFeedsCard().catch(() => {});
+}
+
+/* ---------- blocklist feeds card (Firewall tab) ---------- */
+// Only feeds a rule actually uses are shown; a host without feed rules
+// keeps the card hidden. "Live" means the set is loaded in the kernel —
+// i.e. the rules were applied — and the counters are what those rules
+// have matched so far. The switch for a feed is its rule: disable the
+// rule on the Rules tab, then apply.
+async function loadFeedsCard() {
+  const card = $('#fw-feeds');
+  let list;
+  try { list = await api('/feeds'); } catch (e) { card.hidden = true; return; }
+  feedCatalogue = list;
+  const used = list.filter(f => (f.rules || []).length);
+  if (!used.length) { card.hidden = true; return; }
+  const fmtBytes = b => b >= 1 << 30 ? (b / (1 << 30)).toFixed(1) + ' GB' : b >= 1 << 20 ? (b / (1 << 20)).toFixed(1) + ' MB' : b >= 1024 ? (b / 1024).toFixed(1) + ' KB' : b + ' B';
+  const rel = iso => {
+    if (!iso) return '';
+    const d = (new Date(iso) - Date.now()) / 60000;
+    if (Math.abs(d) < 1) return 'now';
+    const h = Math.round(Math.abs(d) / 60), m = Math.round(Math.abs(d));
+    const s = h >= 1 ? h + ' h' : m + ' min';
+    return d > 0 ? 'in ' + s : s + ' ago';
+  };
+  const rows = used.map(f => {
+    const m = f.meta || {};
+    let state, cls;
+    if (f.live) { state = `live — ${f.live.entries} networks, ${f.live.packets} packets blocked (${fmtBytes(f.live.bytes)})`; cls = 'ok'; }
+    else if (f.cached) { state = `cached, ${m.entries} networks — not live until the rules are applied`; cls = 'warn'; }
+    else { state = 'not fetched yet — apply the rules to load it'; cls = 'warn'; }
+    const removed = f.cached ? `${m.dropped} special-use and ${m.protected || 0} host-specific entries removed` : '';
+    const when = f.cached ? `fetched ${rel(m.fetched)}${f.next_refresh ? ', next refresh ' + rel(f.next_refresh) : ''}` : '';
+    return `<div class="feed-row">
+      <div class="feed-main"><span class="feed-name">${esc(f.name)}</span>
+        <span class="feed-state ${cls}">${esc(state)}</span>
+        <span class="feed-sub">${esc([removed, when].filter(Boolean).join(' · '))}</span>
+        <span class="feed-sub">used by: ${esc(f.rules.join(', '))}</span></div>
+    </div>`;
+  }).join('');
+  card.innerHTML = `<div class="feed-head"><span class="sg-label">Blocklist feeds</span>
+    <button id="btn-feeds-refresh" class="btn-secondary btn-small">Update now</button></div>${rows}`;
+  card.hidden = false;
+  $('#btn-feeds-refresh').addEventListener('click', async () => {
+    const b = $('#btn-feeds-refresh'); b.disabled = true; setStatus('Refreshing feeds…');
+    try { await api('/feeds/refresh', { method: 'POST', body: '{}' }); setStatus('Feeds refreshed', 'ok'); }
+    catch (e) { setStatus('Feed refresh failed: ' + e.message, 'err'); }
+    b.disabled = false; loadFeedsCard().catch(() => {});
+  });
 }
 
 async function doFw(path, body, msg) {

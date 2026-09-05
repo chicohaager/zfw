@@ -10,7 +10,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/chicohaager/zfw/internal/firewall"
 	"github.com/chicohaager/zfw/internal/rules"
@@ -420,5 +422,71 @@ func TestRefreshFeedsNoopWithoutFeedRules(t *testing.T) {
 	}
 	if fetched || called {
 		t.Fatalf("refresh without feed rules did work: fetched=%v ipset=%v", fetched, called)
+	}
+}
+
+// /api/feeds tells the status card which rules use a feed, what the kernel
+// holds and has counted against it, and when the next refresh is due.
+func TestFeedsListReportsRulesLiveCountersAndNextRefresh(t *testing.T) {
+	var body strings.Builder
+	for i := 0; i < 300; i++ {
+		fmt.Fprintf(&body, "45.%d.%d.0/24\n", i/256, i%256)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(body.String()))
+	}))
+	defer srv.Close()
+	fw := &fakeFirewall{counters: map[string]firewall.Counters{"zfw-feed-spamhaus_drop": {Packets: 621, Bytes: 37260}}}
+	s, _ := newTestServer(t, fw)
+	s.feeds.Source = func(f feeds.Feed) string { return srv.URL + "/" + f.ID }
+	s.ipsetRun = func(_ context.Context, args ...string) (string, error) {
+		if strings.Contains(strings.Join(args, " "), "list -t zfw-feed-spamhaus_drop") {
+			return "Number of entries: 300\n", nil
+		}
+		return "", fmt.Errorf("no such set")
+	}
+	atomic.StoreInt64(&s.feedsInterval, int64(12*time.Hour))
+	rs := rules.RuleSet{DefaultPolicy: "allow", Rules: []rules.Rule{
+		{ID: "f1", Order: 10, Enabled: true, Name: "Drop Spamhaus", Action: "deny",
+			Source: rules.Source{Type: "feed", Value: "spamhaus_drop"}, Ports: rules.Ports{Type: "all"}, Protocol: "both", Zone: "host"},
+		{ID: "f2", Order: 20, Enabled: true, Name: "No egress to Spamhaus", Action: "deny", Direction: "outbound",
+			Source: rules.Source{Type: "feed", Value: "spamhaus_drop"}, Ports: rules.Ports{Type: "all"}, Protocol: "both", Zone: "host"}}}
+	if w := do(s, http.MethodPost, "/api/rules", rs); w.Code != http.StatusOK {
+		t.Fatalf("rules POST: HTTP %d", w.Code)
+	}
+	w := do(s, http.MethodGet, "/api/feeds", nil)
+	var list []struct {
+		ID    string   `json:"id"`
+		Rules []string `json:"rules"`
+		Live  *struct {
+			Entries        int
+			Packets, Bytes int64
+		} `json:"live"`
+		NextRefresh *string `json:"next_refresh"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	var sp, fh int
+	for i, e := range list {
+		if e.ID == "spamhaus_drop" {
+			sp = i
+		}
+		if e.ID == "firehol_level1" {
+			fh = i
+		}
+	}
+	e := list[sp]
+	if len(e.Rules) != 2 || e.Rules[0] != "Drop Spamhaus" {
+		t.Fatalf("rules = %v", e.Rules)
+	}
+	if e.Live == nil || e.Live.Entries != 300 || e.Live.Packets != 621 || e.Live.Bytes != 37260 {
+		t.Fatalf("live = %+v", e.Live)
+	}
+	if e.NextRefresh == nil {
+		t.Fatal("next_refresh missing with a 12h interval set")
+	}
+	if u := list[fh]; len(u.Rules) != 0 || u.Live != nil || u.NextRefresh != nil {
+		t.Fatalf("unused feed reported state: %+v", u)
 	}
 }

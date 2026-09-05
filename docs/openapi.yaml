@@ -393,6 +393,16 @@ paths:
                     max_entries: { type: integer }
                     set_name:    { type: string, example: zfw-feed-spamhaus_drop }
                     cached:      { type: boolean }
+                    rules:       { type: array, items: { type: string }, description: "Names of the rules that reference this feed" }
+                    live:
+                      type: object
+                      nullable: true
+                      description: "Present when the feed's set is loaded in the kernel (rules applied)"
+                      properties:
+                        entries: { type: integer, description: "Networks in the live set" }
+                        packets: { type: integer, description: "Packets matched by rules on this set across the ZFW chains" }
+                        bytes:   { type: integer }
+                    next_refresh: { type: string, format: date-time, description: "When the background refresh is due; absent when disabled or never fetched" }
                     meta:
                       type: object
                       nullable: true

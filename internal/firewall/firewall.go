@@ -361,3 +361,52 @@ func (m *Manager) Commit(ctx context.Context) (string, error) {
 func (m *Manager) Revert(ctx context.Context) (string, error) {
 	return m.engine(ctx, "revert")
 }
+
+// Counters is what the kernel has counted against one match so far.
+type Counters struct {
+	Packets int64 `json:"packets"`
+	Bytes   int64 `json:"bytes"`
+}
+
+// setChains are the ZFW-owned chains a feed or country set can appear in.
+var setChains = []string{"ZFW-IN", "DOCKER-USER", "ZFW-OUT", "ZFW-FWD-OUT"}
+
+// MatchSetCounters sums the packet/byte counters of every rule in the ZFW
+// chains that matches the named ipset — the "blocked so far" figure for a
+// feed. Read with -x so large counts are exact, not "12K".
+func (m *Manager) MatchSetCounters(ctx context.Context, set string) Counters {
+	var c Counters
+	for _, chain := range setChains {
+		out, err := run(ctx, m.iptBin, "-L", chain, "-v", "-n", "-x")
+		if err != nil {
+			continue
+		}
+		p, b := sumMatchSet(out, set)
+		c.Packets += p
+		c.Bytes += b
+	}
+	return c
+}
+
+// sumMatchSet adds up the pkts/bytes columns of every line in an
+// `iptables -L <chain> -v -n -x` dump whose match names the set exactly
+// ("match-set <set> src|dst"). Column layout: pkts bytes target prot opt in
+// out source destination [match …]; the two counters are the first two
+// fields of a rule line, and only rule lines start with a digit.
+func sumMatchSet(dump, set string) (pkts, bytes int64) {
+	needle := "match-set " + set + " "
+	for _, ln := range strings.Split(dump, "\n") {
+		f := strings.Fields(ln)
+		if len(f) < 2 || !strings.Contains(ln, needle) {
+			continue
+		}
+		p, err1 := strconv.ParseInt(f[0], 10, 64)
+		b, err2 := strconv.ParseInt(f[1], 10, 64)
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		pkts += p
+		bytes += b
+	}
+	return pkts, bytes
+}

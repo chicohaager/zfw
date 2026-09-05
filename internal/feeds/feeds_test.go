@@ -424,3 +424,19 @@ func TestRefreshKeepsCacheAndSwapsOnDownloadFailure(t *testing.T) {
 		t.Errorf("download failure not logged: %q", logged)
 	}
 }
+
+func TestLiveEntriesParsesIpsetListT(t *testing.T) {
+	ok := func(_ context.Context, args ...string) (string, error) {
+		if strings.Join(args, " ") != "-q list -t zfw-feed-spamhaus_drop" {
+			t.Fatalf("unexpected args %v", args)
+		}
+		return "Name: zfw-feed-spamhaus_drop\nType: hash:net\nRevision: 7\nHeader: family inet hashsize 4096 maxelem 262144\nSize in memory: 51488\nReferences: 1\nNumber of entries: 1706\n", nil
+	}
+	if n, live := LiveEntries(context.Background(), ok, "spamhaus_drop"); !live || n != 1706 {
+		t.Fatalf("got %d live=%v, want 1706 live", n, live)
+	}
+	missing := func(_ context.Context, _ ...string) (string, error) { return "", fmt.Errorf("exit 1") }
+	if _, live := LiveEntries(context.Background(), missing, "spamhaus_drop"); live {
+		t.Fatal("a failed list reported the set as live")
+	}
+}

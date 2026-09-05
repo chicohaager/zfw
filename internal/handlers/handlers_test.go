@@ -33,6 +33,8 @@ import (
 type fakeFirewall struct {
 	status firewall.Status
 	conf   firewall.Config
+	// counters answers MatchSetCounters per set name; absent = zero.
+	counters map[string]firewall.Counters
 
 	saveErr   error
 	applyErr  error
@@ -1163,4 +1165,8 @@ func TestDenyPolicyEmitsPerPortDeny(t *testing.T) {
 			t.Errorf("compiled.sh missing %q", want)
 		}
 	}
+}
+
+func (f *fakeFirewall) MatchSetCounters(_ context.Context, set string) firewall.Counters {
+	return f.counters[set]
 }
