@@ -1,36 +1,66 @@
 # Exemptions for check-public-data.py — decided once, recorded here.
-# Keep every entry as narrow as the case allows: an allowance as wide as
-# the rule deletes the rule. Own host addresses are NEVER listed here;
-# they get anonymised instead.
-
-# --- invented addresses in the test suite and API examples ---
-# None of these is a real host of anyone's; they exercise LAN semantics,
-# which RFC 5737 documentation addresses cannot express (they are public).
-10.0.0.1
-10.0.0.2
-10.0.0.5
-10.0.0.7
-10.0.0.8
-10.1.2.3
-192.168.1.1
-192.168.1.10
-192.168.1.42
-192.168.1.46
-192.168.1.50
-192.168.1.77
-192.168.1.100
-192.168.1.101
-192.168.1.175
+#
+# EVERY address entry is path-scoped (<path>:<address>). A bare address on its
+# own line is refused by the scanner since 2026-09-07: that form exempted the
+# maintainer's own Zima Net addresses in EVERY file at once, which is how they
+# reached the README and a published release note.
+#
+# What can never appear here: the maintainer's real hosts and networks. Those
+# live in ~/.claude/bin/public-data-personal.txt and are matched before this
+# file is read, so no entry can silence them. A NEW address in one of those
+# networks blocks until it is anonymised or gets its own line below.
+#
+# --- invented example addresses in the test suite, the API examples and the UI
+# They exercise LAN semantics, which RFC 5737 documentation addresses cannot
+# express (they are public). None is a real host of anyone's.
+BEST-PRACTICES.md:192.168.1.10
+docs/openapi.yaml:192.168.1.100
+docs/openapi.yaml:192.168.1.101
+docs/openapi.yaml:192.168.1.42
+docs/openapi.yaml:192.168.1.46
+internal/compiler/compiler_restore_test.go:192.168.1.100
+internal/compiler/compiler_test.go:192.168.1.100
+internal/compiler/dockeruser6_test.go:192.168.1.100
+internal/compiler/integration_test.go:192.168.1.100
+internal/compiler/shellsafety_test.go:10.0.0.1
+internal/compiler/shellsafety_test.go:10.1.2.3
+internal/compiler/shellsafety_test.go:192.168.1.1
+internal/compiler/shellsafety_test.go:192.168.1.100
+internal/compiler/udpdeny_test.go:192.168.1.100
+internal/conntrack/conntrack_test.go:10.0.0.1
+internal/conntrack/conntrack_test.go:10.0.0.2
+internal/conntrack/conntrack_test.go:192.168.1.100
+internal/conntrack/conntrack_test.go:192.168.1.42
+internal/conntrack/conntrack_test.go:192.168.1.50
+internal/conntrack/flush_linux_test.go:192.168.1.100
+internal/conntrack/flush_linux_test.go:192.168.1.175
+internal/events/events_test.go:10.0.0.1
+internal/events/events_test.go:10.0.0.5
+internal/events/events_test.go:10.0.0.7
+internal/events/events_test.go:10.0.0.8
+internal/events/parse_test.go:10.0.0.7
+internal/events/parse_test.go:192.168.1.100
+internal/events/parse_test.go:192.168.1.42
+internal/firewall/firewall_test.go:10.0.0.5
+internal/firewall/firewall_test.go:192.168.1.1
+internal/firewall/firewall_test.go:192.168.1.100
+internal/handlers/middleware_test.go:10.0.0.1
+internal/handlers/middleware_test.go:192.168.1.50
+internal/handlers/middleware_test.go:192.168.1.77
+internal/httputil/redirect_test.go:10.0.0.1
+internal/httputil/redirect_test.go:192.168.1.50
+internal/rules/rules_test.go:192.168.1.100
+tools/check-session-auth.py:192.168.1.100
 
 # --- maintainer identity where it is required to be public ---
 # ISC needs the copyright holder; a disclosure policy needs a contact.
-LICENSE:Kuehn
+BEST-PRACTICES.md:Kuehn
 BUG-BOUNTY.md:Kuehn
 BUG-BOUNTY.md:holger.kuehn
 BUG-BOUNTY.md:holger.kuehn@virtual-services.info
+LICENSE:Kuehn
 SECURITY-REPORT.md:Kuehn
 THREAT-MODEL.md:Kuehn
-BEST-PRACTICES.md:Kuehn
 mod-store/zfw.yaml:Kuehn
 mod-store/zfw.yaml:holger.kuehn
 mod-store/zfw.yaml:holger.kuehn@virtual-services.info
