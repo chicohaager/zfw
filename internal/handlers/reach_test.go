@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/chicohaager/zfw/internal/firewall"
@@ -152,6 +153,29 @@ func TestExposureFallsBackToLegacyConfigWithoutRules(t *testing.T) {
 	}
 }
 
+// auditDetail returns the detail text of one finding as the API serves it.
+func auditDetail(t *testing.T, s *Server, id string) string {
+	t.Helper()
+	w := do(s, http.MethodGet, "/api/audit", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("audit: HTTP %d (body=%s)", w.Code, w.Body.String())
+	}
+	var got []struct {
+		ID     string `json:"id"`
+		Detail string `json:"detail"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, f := range got {
+		if f.ID == id {
+			return f.Detail
+		}
+	}
+	t.Fatalf("finding %s not in audit output", id)
+	return ""
+}
+
 func auditStatus(t *testing.T, s *Server) map[string]string {
 	t.Helper()
 	w := do(s, http.MethodGet, "/api/audit", nil)
@@ -202,5 +226,40 @@ func TestAuditFindingsFollowRules(t *testing.T) {
 		if got[id] != w {
 			t.Errorf("finding %s: status=%q, want %q", id, got[id], w)
 		}
+	}
+}
+
+// M9: a chain inserted ahead of ZFW-IN runs before it. The finding must name
+// the predecessors and flip to fixed the moment ZFW-IN is first again.
+func TestAuditFlagsRulesAheadOfZFWIN(t *testing.T) {
+	behind := &fakeFirewall{status: firewall.Status{Active: true, Hooked: true,
+		InputPosition: 3, InputBefore: []string{"-j IPBLOCKLIST", "-j ts-input"}},
+		loadErr: errors.New("no allowlist.conf")}
+	s, _ := newTestServer(t, behind)
+	got := auditStatus(t, s)
+	if got["M9"] != "open" {
+		t.Fatalf("M9 with ZFW-IN at position 3: status=%q, want open", got["M9"])
+	}
+	detail := auditDetail(t, s, "M9")
+	for _, want := range []string{"#3", "IPBLOCKLIST", "ts-input"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("M9 detail %q does not name %q", detail, want)
+		}
+	}
+
+	first := &fakeFirewall{status: firewall.Status{Active: true, Hooked: true, InputPosition: 1},
+		loadErr: errors.New("no allowlist.conf")}
+	s, _ = newTestServer(t, first)
+	if got := auditStatus(t, s); got["M9"] != "fixed" {
+		t.Fatalf("M9 with ZFW-IN first: status=%q, want fixed", got["M9"])
+	}
+
+	// Not hooked at all: nothing is "first", the finding stays open and
+	// says so rather than reporting a comforting position.
+	unhooked := &fakeFirewall{status: firewall.Status{Active: true, Hooked: false},
+		loadErr: errors.New("no allowlist.conf")}
+	s, _ = newTestServer(t, unhooked)
+	if got := auditStatus(t, s); got["M9"] != "open" {
+		t.Fatalf("M9 unhooked: status=%q, want open", got["M9"])
 	}
 }
