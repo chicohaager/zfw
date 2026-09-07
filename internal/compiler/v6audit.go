@@ -79,6 +79,11 @@ func v6SkipReason(r rules.Rule) string {
 			// built from IPv4 ranges); there is no v6 set to match against.
 			return "country-source"
 		}
+		if r.Source.Type == "feed" {
+			// Feed sets are family inet as well (the catalogue lists are
+			// IPv4; Spamhaus publishes v6 as a separate list, not wired).
+			return "feed-source"
+		}
 		// An IPv4 address or CIDR cannot be expressed as an ip6tables
 		// source match. This is the reason the LAN-scoped rules that
 		// rules.Defaults seeds never reach IPv6 at all.

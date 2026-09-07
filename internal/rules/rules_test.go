@@ -497,3 +497,22 @@ func TestScheduleAcceptsPlainHHMM(t *testing.T) {
 		t.Errorf("Validate rejected a valid schedule: %v", err)
 	}
 }
+
+// A feed source names an entry of the fixed catalogue — never a URL, never a
+// file, never anything the compiler would interpolate unchecked.
+func TestValidateFeedSource(t *testing.T) {
+	base := Rule{ID: "f1", Order: 10, Enabled: true, Name: "feed", Action: "deny",
+		Ports: Ports{Type: "all"}, Protocol: "both", Zone: "host"}
+	ok := base
+	ok.Source = Source{Type: "feed", Value: "spamhaus_drop"}
+	if err := Validate(RuleSet{DefaultPolicy: "deny", Rules: []Rule{ok}}); err != nil {
+		t.Fatalf("catalogue feed rejected: %v", err)
+	}
+	for _, v := range []string{"", "not_in_catalogue", "SPAMHAUS_DROP", "https://example.invalid/list.txt", "../x", "spamhaus_drop; id"} {
+		bad := base
+		bad.Source = Source{Type: "feed", Value: v}
+		if err := Validate(RuleSet{DefaultPolicy: "deny", Rules: []Rule{bad}}); err == nil {
+			t.Errorf("feed value %q accepted", v)
+		}
+	}
+}

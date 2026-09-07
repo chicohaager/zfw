@@ -9,13 +9,17 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/chicohaager/zfw/internal/audit"
@@ -23,6 +27,7 @@ import (
 	"github.com/chicohaager/zfw/internal/compiler"
 	"github.com/chicohaager/zfw/internal/conntrack"
 	"github.com/chicohaager/zfw/internal/events"
+	"github.com/chicohaager/zfw/internal/feeds"
 	"github.com/chicohaager/zfw/internal/firewall"
 	"github.com/chicohaager/zfw/internal/geo"
 	"github.com/chicohaager/zfw/internal/notify"
@@ -47,24 +52,30 @@ type Firewall interface {
 	Apply(ctx context.Context, safe bool) (string, error)
 	Commit(ctx context.Context) (string, error)
 	Revert(ctx context.Context) (string, error)
+	// MatchSetCounters sums the kernel counters of every ZFW rule matching
+	// the named ipset — what a feed has blocked so far.
+	MatchSetCounters(ctx context.Context, set string) firewall.Counters
 }
 
 // Server holds the dependencies for the HTTP API.
 type Server struct {
-	mu           sync.Mutex // serialises apply/commit/revert/recompile
-	auditMu      sync.Mutex // serialises audit-history reads/writes
-	fw           Firewall
-	rulesPath    string
-	compiledPath string
-	historyPath  string
-	peersPath    string
-	peerToken    string   // shared secret for inbound /api/peers/receive; empty = disabled
-	extraBypass  []string // v0.5.4 — extra inbound-bypass iface names appended to every chain
-	geo          *geo.Manager
-	upd          *update.Checker // nil = self-update polling disabled
-	hook         *notify.Hook    // v0.5.5 — nil = webhook disabled
-	httpClient   *http.Client    // reusable client for outbound peer pushes
-	mutateRL     *keyedLimiter   // shared by all non-GET endpoints
+	mu            sync.Mutex // serialises apply/commit/revert/recompile
+	auditMu       sync.Mutex // serialises audit-history reads/writes
+	fw            Firewall
+	rulesPath     string
+	compiledPath  string
+	historyPath   string
+	peersPath     string
+	peerToken     string   // shared secret for inbound /api/peers/receive; empty = disabled
+	extraBypass   []string // v0.5.4 — extra inbound-bypass iface names appended to every chain
+	geo           *geo.Manager
+	feeds         *feeds.Manager
+	ipsetRun      feeds.Runner    // nil = the real ipset binary
+	feedsInterval int64           // background refresh cadence in ns, 0 = off (atomic)
+	upd           *update.Checker // nil = self-update polling disabled
+	hook          *notify.Hook    // v0.5.5 — nil = webhook disabled
+	httpClient    *http.Client    // reusable client for outbound peer pushes
+	mutateRL      *keyedLimiter   // shared by all non-GET endpoints
 	// readRL caps expensive GET endpoints (exposure, events, conntrack,
 	// versions) that shell out to ss / journalctl / docker / sshd. An
 	// authenticated user could otherwise flood them and CPU-pin the
@@ -113,7 +124,7 @@ func (s *Server) SetLogLevel(lv *slog.LevelVar) { s.logLevel = lv }
 // /api/peers list+push endpoints; peerToken may be "" to disable the
 // follower-side /api/peers/receive endpoint. The two are independent —
 // a host can be a leader, a follower, both, or neither.
-func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string, upd *update.Checker, peersPath, peerToken string, extraBypass []string, hook *notify.Hook) *Server {
+func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, feedsDir, historyPath string, upd *update.Checker, peersPath, peerToken string, extraBypass []string, hook *notify.Hook) *Server {
 	return &Server{
 		fw:           fw,
 		rulesPath:    rulesPath,
@@ -123,6 +134,7 @@ func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, historyPath string,
 		peerToken:    peerToken,
 		extraBypass:  extraBypass,
 		geo:          geo.New(geoDir),
+		feeds:        feeds.New(feedsDir),
 		upd:          upd,
 		hook:         hook,
 		httpClient:   peers.DefaultClient(),
@@ -259,11 +271,26 @@ func (s *Server) prefetchForCompile(ctx context.Context, rsHint *rules.RuleSet) 
 		rs = loaded
 	}
 	ccSet := map[string]bool{}
+	feedSet := map[string]bool{}
 	for _, r := range rs.Rules {
-		if r.Source.Type == "country" {
+		switch r.Source.Type {
+		case "country":
 			for _, cc := range rules.SplitCountries(r.Source.Value) {
 				ccSet[strings.ToLower(cc)] = true
 			}
+		case "feed":
+			feedSet[r.Source.Value] = true
+		}
+	}
+	if len(feedSet) > 0 {
+		ids := make([]string, 0, len(feedSet))
+		for id := range feedSet {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		s.feeds.Protect(s.feedProtection(rs))
+		if err := s.feeds.Ensure(ctx, ids, func(f string, a ...any) { slog.Warn(fmt.Sprintf(f, a...)) }); err != nil {
+			return nil, system.PublishedPorts{}, err
 		}
 	}
 	if len(ccSet) > maxGeoCountries {
@@ -367,11 +394,14 @@ func (s *Server) recompileLocked(containers []system.DockerContainer, dockerPort
 	}
 	geoFiles := map[string]string{}
 	for _, r := range rs.Rules {
-		if r.Source.Type == "country" {
+		switch r.Source.Type {
+		case "country":
 			for _, cc := range rules.SplitCountries(r.Source.Value) {
 				lc := strings.ToLower(cc)
 				geoFiles[lc] = s.geo.IpsetPath(lc)
 			}
+		case "feed":
+			geoFiles["feed:"+r.Source.Value] = s.feeds.IpsetPath(r.Source.Value)
 		}
 	}
 	script := compiler.Compile(rs, dockerPorts, geoFiles, s.extraBypass...)
@@ -465,6 +495,8 @@ func (s *Server) Routes() http.Handler {
 	// list, openapi, update snapshot, rules GET, templates) stay
 	// uncapped — they hit memory + a small JSON encode at worst.
 	mux.HandleFunc("/api/exposure", s.rateLimitedGet(s.exposure))
+	mux.HandleFunc("/api/feeds", s.rateLimitedGet(s.feedsList))
+	mux.HandleFunc("/api/feeds/refresh", s.rateLimited(s.feedsRefresh))
 	mux.HandleFunc("/api/audit", s.rateLimitedGet(s.auditHandler))
 	mux.HandleFunc("/api/versions", s.rateLimitedGet(s.versions))
 	mux.HandleFunc("/api/update", s.updateStatus)
@@ -1215,6 +1247,169 @@ func (s *Server) geoLookup(w http.ResponseWriter, r *http.Request) {
 		ips = ips[:500]
 	}
 	writeJSON(w, http.StatusOK, s.geo.LookupBatch(ips))
+}
+
+// ipsetRunner is the Runner RefreshFeeds hands to feeds.Refresh: the real
+// ipset binary with a bounded timeout. Tests replace s.ipsetRun.
+func ipsetRunner(ctx context.Context, args ...string) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, 25*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(cctx, "ipset", args...).CombinedOutput()
+	return string(out), err
+}
+
+// RefreshFeeds re-fetches every feed the current rules reference and swaps
+// the live sets in place. It never recompiles and never applies: the
+// firewall's rules after a refresh are byte for byte the rules before it,
+// only the set contents moved. A host without feed rules does nothing —
+// no network call, no ipset call.
+func (s *Server) RefreshFeeds(ctx context.Context) error {
+	rs, err := rules.Load(s.rulesPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	seen := map[string]bool{}
+	var ids []string
+	for _, r := range rs.Rules {
+		if r.Source.Type == "feed" && !seen[r.Source.Value] {
+			seen[r.Source.Value] = true
+			ids = append(ids, r.Source.Value)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	sort.Strings(ids)
+	s.feeds.Protect(s.feedProtection(rs))
+	run := s.ipsetRun
+	if run == nil {
+		run = ipsetRunner
+	}
+	return s.feeds.Refresh(ctx, ids, run, func(f string, a ...any) { slog.Info(fmt.Sprintf(f, a...)) })
+}
+
+// RunFeedRefresh refreshes on a fixed cadence until ctx ends. The first run
+// waits a full interval: an apply already fetches anything older than a
+// day, and a daemon restart must not turn into a burst of downloads.
+func (s *Server) RunFeedRefresh(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	atomic.StoreInt64(&s.feedsInterval, int64(interval))
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := s.RefreshFeeds(ctx); err != nil {
+				slog.Warn("feed refresh", "err", err)
+			}
+		}
+	}
+}
+
+// feedsRefresh is POST /api/feeds/refresh: the status card's "Update now".
+func (s *Server) feedsRefresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		fail(w, http.StatusMethodNotAllowed, "POST required")
+		return
+	}
+	if err := s.RefreshFeeds(r.Context()); err != nil {
+		fail(w, http.StatusBadGateway, "feed refresh: "+err.Error())
+		return
+	}
+	s.feedsList(w, &http.Request{Method: http.MethodGet, URL: r.URL})
+}
+
+// feedProtection lists the host-specific ranges a feed must never block:
+// the LAN and host address from rules.json, and every sync peer given as a
+// literal address. Names are not resolved — a DNS answer is not something
+// to build a firewall exception on. The built-in special-use list in
+// internal/feeds covers the private ranges regardless of what is here.
+func (s *Server) feedProtection(rs rules.RuleSet) []string {
+	out := []string{rs.LAN, rs.HostIP}
+	if s.peersPath != "" {
+		if ps, err := peers.Load(s.peersPath); err == nil {
+			for _, p := range ps {
+				if u, err := url.Parse(p.URL); err == nil {
+					if ip := net.ParseIP(u.Hostname()); ip != nil {
+						out = append(out, ip.String())
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// feedEntry is one catalogue feed plus what this host has cached of it,
+// which rules use it, and — when its set is live — what the kernel holds
+// and has counted against it.
+type feedEntry struct {
+	feeds.Feed
+	SetName     string      `json:"set_name"`
+	Cached      bool        `json:"cached"`
+	Meta        *feeds.Meta `json:"meta,omitempty"`
+	Rules       []string    `json:"rules"`                  // names of rules referencing the feed
+	Live        *feedLive   `json:"live,omitempty"`         // present when the set is loaded
+	NextRefresh *time.Time  `json:"next_refresh,omitempty"` // background refresh due (cached feeds only)
+}
+
+type feedLive struct {
+	Entries int   `json:"entries"`
+	Packets int64 `json:"packets"`
+	Bytes   int64 `json:"bytes"`
+}
+
+// feedsList serves the blocklist catalogue with per-feed cache and live
+// state. The catalogue is fixed in code, so the UI offers a choice, never a
+// URL field.
+func (s *Server) feedsList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		fail(w, http.StatusMethodNotAllowed, "GET required")
+		return
+	}
+	ctx, cancel := reqCtx()
+	defer cancel()
+	uses := map[string][]string{}
+	if rs, err := rules.Load(s.rulesPath); err == nil {
+		for _, r := range rs.Rules {
+			if r.Source.Type == "feed" {
+				uses[r.Source.Value] = append(uses[r.Source.Value], r.Name)
+			}
+		}
+	}
+	run := s.ipsetRun
+	if run == nil {
+		run = ipsetRunner
+	}
+	interval := time.Duration(atomic.LoadInt64(&s.feedsInterval))
+	out := make([]feedEntry, 0, len(feeds.Catalogue))
+	for _, f := range feeds.Catalogue {
+		e := feedEntry{Feed: f, SetName: feeds.SetName(f.ID), Rules: uses[f.ID]}
+		if e.Rules == nil {
+			e.Rules = []string{}
+		}
+		if m, ok := s.feeds.Info(f.ID); ok {
+			mm := m
+			e.Meta, e.Cached = &mm, true
+			if interval > 0 {
+				next := mm.Rendered.Add(interval)
+				e.NextRefresh = &next
+			}
+		}
+		if n, ok := feeds.LiveEntries(ctx, run, f.ID); ok {
+			c := s.fw.MatchSetCounters(ctx, e.SetName)
+			e.Live = &feedLive{Entries: n, Packets: c.Packets, Bytes: c.Bytes}
+		}
+		out = append(out, e)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // updateStatus returns the cached self-update check result so the UI can
