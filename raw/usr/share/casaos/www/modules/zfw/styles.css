@@ -365,7 +365,7 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   padding: 14px 16px;
   box-shadow: var(--card-shadow);
 }
-.sg-label { color: var(--text-muted); font-size: 13px; font-weight: 500; }
+.sg-label { color: var(--text-muted); font-size: 13px; font-weight: 500; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .dot {
   font-weight: 700; width: 26px; height: 26px; border-radius: 50%;
   display: inline-flex; align-items: center; justify-content: center; font-size: 13px;
@@ -377,6 +377,9 @@ button:focus-visible, input:focus-visible, select:focus-visible {
   font-size: 22px; font-weight: 700; color: var(--text);
   font-variant-numeric: tabular-nums;
 }
+.num.ok   { color: var(--success); }
+.num.warn { color: var(--warn); }
+.sg-note  { font-size: 11px; color: var(--warn); font-weight: 500; overflow-wrap: anywhere; }
 
 .action-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 16px 0; }
 .save-hint { color: var(--text-muted); font-size: 12px; }
