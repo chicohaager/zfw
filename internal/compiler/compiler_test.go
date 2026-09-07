@@ -454,8 +454,71 @@ func TestNoOutboundRulesEmitsNoOutboundChains(t *testing.T) {
 			Protocol: "tcp", Zone: "host",
 		}},
 	}, system.PublishedPorts{}, nil)
-	mustNotContain(t, out, "ZFW-OUT")
-	mustNotContain(t, out, "ZFW-FWD-OUT")
+	// No outbound FILTERING is built ...
+	mustNotContain(t, out, "-A ZFW-OUT ")
+	mustNotContain(t, out, "-A ZFW-OUT6 ")
+	mustNotContain(t, out, "-A ZFW-FWD-OUT ")
+	// ... and an outbound chain left over from an earlier apply is torn
+	// down rather than left running, see TestRemovingTheLastOutboundRule.
+	for _, want := range []string{
+		"-D OUTPUT -j ZFW-OUT", "-X ZFW-OUT",
+		"-D OUTPUT -j ZFW-OUT6", "-X ZFW-OUT6",
+		"-D FORWARD -j ZFW-FWD-OUT", "-X ZFW-FWD-OUT",
+	} {
+		mustContain(t, out, want)
+	}
+}
+
+// TestRemovingTheLastOutboundRule is the regression for a firewall that
+// kept filtering traffic no rule asked for. Before 2026-09-07 the whole
+// outbound block was simply skipped when no outbound rule existed — which
+// is correct for a host that never had one, and wrong for a host where the
+// last outbound rule was just deleted: the chain built by the previous
+// apply stayed populated and stayed hooked into OUTPUT. Measured on a
+// ZimaCube: after deleting the only outbound rule, `-A ZFW-OUT -m set
+// --match-set zfw-feed-spamhaus_drop dst -j DROP` was still live while
+// neither rules.json nor the compiled script mentioned it. Present since
+// v0.5.6, found by the v1.0.26 feed apply test.
+func TestRemovingTheLastOutboundRule(t *testing.T) {
+	inbound := rules.Rule{
+		Order: 10, Enabled: true, Name: "SSH", Action: "allow",
+		Source:   rules.Source{Type: "range", Value: "192.168.1.0/24"},
+		Ports:    rules.Ports{Type: "list", List: []int{22}},
+		Protocol: "tcp", Zone: "host",
+	}
+	outbound := rules.Rule{
+		Order: 20, Enabled: true, Name: "drop to feed", Action: "deny",
+		Source:   rules.Source{Type: "feed", Value: "spamhaus_drop"},
+		Ports:    rules.Ports{Type: "all"},
+		Protocol: "both", Zone: "host",
+		Direction: "outbound",
+	}
+	set := rules.RuleSet{LAN: "192.168.1.0/24", DefaultPolicy: "deny",
+		Rules: []rules.Rule{inbound, outbound}}
+
+	// With the outbound rule: the chain is built and hooked, no teardown.
+	mit := Compile(set, system.PublishedPorts{}, nil)
+	mustContain(t, mit, "-A ZFW-OUT ")
+	mustContain(t, mit, "-C OUTPUT -j ZFW-OUT")
+	mustNotContain(t, mit, "-X ZFW-OUT\n")
+
+	// Rule deleted: nothing is appended any more, and the previous chain is
+	// unhooked, flushed and deleted — in that order, or -X fails on a chain
+	// that is still referenced.
+	set.Rules = []rules.Rule{inbound}
+	ohne := Compile(set, system.PublishedPorts{}, nil)
+	mustNotContain(t, ohne, "-A ZFW-OUT ")
+	mustNotContain(t, ohne, "match-set")
+	iD := strings.Index(ohne, "-D OUTPUT -j ZFW-OUT")
+	iF := strings.Index(ohne, "-F ZFW-OUT 2>/dev/null")
+	iX := strings.Index(ohne, "-X ZFW-OUT 2>/dev/null")
+	if iD < 0 || iF < 0 || iX < 0 {
+		t.Fatalf("teardown incomplete: unhook=%d flush=%d delete=%d", iD, iF, iX)
+	}
+	if !(iD < iF && iF < iX) {
+		t.Errorf("teardown out of order: unhook=%d flush=%d delete=%d "+
+			"(-X on a chain still referenced by OUTPUT fails)", iD, iF, iX)
+	}
 }
 
 // TestOutboundChainTerminatesInReturn guards the safety contract for

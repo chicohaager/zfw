@@ -63,7 +63,19 @@ manifest URL on every host so v0.3.9's update banner starts firing.
    (file modes via umask) itself.
 
    The tarballs do not contain `mod-store/zfw.yaml`, so the amend changes
-   no shipped byte — the rebuild is the proof. Then push branch and tag,
+   no shipped byte — the rebuild is the proof.
+
+   **One input is NOT reproducible across machines, measured while cutting
+   v1.0.26:** `sbom.json` records the hash of the `cyclonedx-gomod` binary
+   itself, and that binary differs between a local `go install` and CI's
+   (`4a888824…` here, `b865e122…` on CI) even at the same version and with
+   `-trimpath`, because the tool's own `toolchain` directive decides which
+   Go compiles it. Everything else in the tarball — the daemon, the sysext
+   module, the docs — was byte-identical; `diff -rq` on the two unpacked
+   trees reported `sbom.json` and nothing else. **So the checksums pinned in
+   `mod-store/zfw.yaml` are the CI artifact's**, the release assets are
+   downloaded from the tag's CI run rather than uploaded from the build
+   host, and a local rebuild is the control for every file except that one. Then push branch and tag,
    let CI build the tag (its artifact must carry the same checksums), and
    publish:
 

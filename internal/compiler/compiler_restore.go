@@ -138,6 +138,32 @@ func CompileRestoreScript(rs rules.RuleSet, pp system.PublishedPorts, geoFiles m
 	if hasDockerOut {
 		b.WriteString("$IPT -C FORWARD -j ZFW-FWD-OUT 2>/dev/null || $IPT -I FORWARD 1 -j ZFW-FWD-OUT\n")
 	}
+
+	// Teardown, and it has to live here rather than in the restore document:
+	// `--noflush` only touches the chains the document declares, so a chain
+	// that has just lost its last rule is not listed, not flushed, and stays
+	// live with the rules of the previous apply. Measured on a ZimaCube
+	// 2026-09-07 — see TestRemovingTheLastOutboundRule in the bash path.
+	// This is the same defect in the sibling emitter; fixing only one of the
+	// two would have left the bug in place on every host that uses the
+	// atomic path, which is the default when compiled.restore.sh exists.
+	if !hasHostOut {
+		b.WriteString("\n# ===== no host outbound rules: tear down ZFW-OUT / ZFW-OUT6 =====\n")
+		b.WriteString("$IPT -D OUTPUT -j ZFW-OUT 2>/dev/null || true\n")
+		b.WriteString("$IPT -F ZFW-OUT 2>/dev/null || true\n")
+		b.WriteString("$IPT -X ZFW-OUT 2>/dev/null || true\n")
+		b.WriteString(`if [ -n "$IPT6" ]; then` + "\n")
+		b.WriteString("  $IPT6 -D OUTPUT -j ZFW-OUT6 2>/dev/null || true\n")
+		b.WriteString("  $IPT6 -F ZFW-OUT6 2>/dev/null || true\n")
+		b.WriteString("  $IPT6 -X ZFW-OUT6 2>/dev/null || true\n")
+		b.WriteString("fi\n")
+	}
+	if !hasDockerOut {
+		b.WriteString("\n# ===== no docker outbound rules: tear down ZFW-FWD-OUT =====\n")
+		b.WriteString("$IPT -D FORWARD -j ZFW-FWD-OUT 2>/dev/null || true\n")
+		b.WriteString("$IPT -F ZFW-FWD-OUT 2>/dev/null || true\n")
+		b.WriteString("$IPT -X ZFW-FWD-OUT 2>/dev/null || true\n")
+	}
 	return b.String()
 }
 

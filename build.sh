@@ -78,7 +78,13 @@ go test ./...
 # 2. Optional SBOM. cyclonedx-gomod is small and Go-installable; if absent we
 # print a hint instead of failing. The SBOM is arch-independent (Go module
 # graph) so generate once and ship it alongside the tarballs.
-rm -f "$DIST"/*.tar.gz "$DIST"/*.tar.gz.sha256 "$DIST"/zfw-*.raw "$DIST"/zfw-*.raw.sha256
+# The stale SBOM goes too. Leaving it meant the fallback below packed the
+# PREVIOUS release's file: v1.0.26 was first built on a host without
+# cyclonedx-gomod and its tarball carried an sbom.json whose main component
+# read "v1.0.25". A missing tool must produce a missing SBOM, never an
+# outdated one that looks like a fresh measurement.
+rm -f "$DIST"/*.tar.gz "$DIST"/*.tar.gz.sha256 "$DIST"/zfw-*.raw "$DIST"/zfw-*.raw.sha256 \
+      "$DIST"/sbom.json "$DIST"/sbom.err
 if command -v cyclonedx-gomod >/dev/null 2>&1; then
   echo "[2/4] Generating CycloneDX SBOM..."
   # The positional argument is the MODULE directory; the main package is

@@ -376,6 +376,36 @@ func emitOutboundChains(b *strings.Builder, rl []rules.Rule) {
 		b.WriteString("$IPT -A ZFW-FWD-OUT -j RETURN\n")
 		b.WriteString("$IPT -C FORWARD -j ZFW-FWD-OUT 2>/dev/null || $IPT -I FORWARD 1 -j ZFW-FWD-OUT\n")
 	}
+
+	// Removing the last outbound rule must actually remove the filtering.
+	// Skipping the block above leaves a chain that WAS built by an earlier
+	// apply still populated and still hooked into OUTPUT/FORWARD: the rule
+	// set says "nothing outbound" while the kernel keeps dropping. Measured
+	// on a ZimaCube 2026-09-07 — after deleting the only outbound rule,
+	// `-A ZFW-OUT -m set --match-set … -j DROP` was still live and the ipset
+	// still referenced, with no trace of either in rules.json or in the
+	// compiled script. Present since v0.5.6, found by the feed apply test.
+	//
+	// The teardown is unconditional in the sense that matters: it runs
+	// whenever the chain is NOT being rebuilt, and it is quiet on a host
+	// that never had one (`|| true` on a missing chain).
+	if !hasHostOut {
+		b.WriteString("\n# ===== no host outbound rules: tear down ZFW-OUT / ZFW-OUT6 =====\n")
+		b.WriteString("$IPT -D OUTPUT -j ZFW-OUT 2>/dev/null || true\n")
+		b.WriteString("$IPT -F ZFW-OUT 2>/dev/null || true\n")
+		b.WriteString("$IPT -X ZFW-OUT 2>/dev/null || true\n")
+		b.WriteString(`if [ -n "$IPT6" ]; then` + "\n")
+		b.WriteString("  $IPT6 -D OUTPUT -j ZFW-OUT6 2>/dev/null || true\n")
+		b.WriteString("  $IPT6 -F ZFW-OUT6 2>/dev/null || true\n")
+		b.WriteString("  $IPT6 -X ZFW-OUT6 2>/dev/null || true\n")
+		b.WriteString("fi\n")
+	}
+	if !hasDockerOut {
+		b.WriteString("\n# ===== no docker outbound rules: tear down ZFW-FWD-OUT =====\n")
+		b.WriteString("$IPT -D FORWARD -j ZFW-FWD-OUT 2>/dev/null || true\n")
+		b.WriteString("$IPT -F ZFW-FWD-OUT 2>/dev/null || true\n")
+		b.WriteString("$IPT -X ZFW-FWD-OUT 2>/dev/null || true\n")
+	}
 }
 
 // outboundLines returns the iptables args (after "-A ZFW-OUT" or
