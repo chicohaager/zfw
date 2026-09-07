@@ -496,8 +496,8 @@ func TestWireGuardWildcardBypassed(t *testing.T) {
 // ZimaOS v1.7.1-beta1 ships its own mesh, "Zima Net" (`znet 0.2.0`, an
 // embedded EasyTier), which owns tun0 — the same role zt+ has for
 // ZeroTier. Without the bypass, a client that has built the tunnel is
-// still cut off at the last hop: measured on a ZimaCube, 125 SYNs to
-// 10.126.126.10:9527 went to ZFW-IN-DROP in a single connection attempt
+// still cut off at the last hop: measured on a ZimaCube, 125 SYNs to the
+// host's Zima Net address on 9527 went to ZFW-IN-DROP in a single connection attempt
 // and the client hung on "connecting" indefinitely, while tun0's tx
 // counter stayed at 668 bytes for days.
 //
