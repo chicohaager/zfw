@@ -207,7 +207,68 @@ func TestCompileRestoreScriptOmitsAbsentOutboundHooks(t *testing.T) {
 		}},
 	}
 	script := CompileRestoreScript(rs, system.PublishedPorts{}, nil)
-	if strings.Contains(script, "ZFW-OUT") || strings.Contains(script, "ZFW-FWD-OUT") {
-		t.Error("inbound-only rule set emitted outbound chains/hooks")
+	// No outbound chain is built and none is hooked ...
+	for _, unerwuenscht := range []string{
+		"-A ZFW-OUT ", "-A ZFW-OUT6 ", "-A ZFW-FWD-OUT ",
+		"-C OUTPUT -j ZFW-OUT", "-C FORWARD -j ZFW-FWD-OUT",
+	} {
+		if strings.Contains(script, unerwuenscht) {
+			t.Errorf("inbound-only rule set emitted %q", unerwuenscht)
+		}
+	}
+	// ... and one left over from an earlier apply is torn down. The restore
+	// document uses --noflush, which touches only the chains it declares, so
+	// without these shell lines a chain that just lost its last rule keeps
+	// running. See TestRemovingTheLastOutboundRuleRestorePath.
+	for _, noetig := range []string{"-D OUTPUT -j ZFW-OUT", "-X ZFW-OUT",
+		"-D FORWARD -j ZFW-FWD-OUT", "-X ZFW-FWD-OUT"} {
+		if !strings.Contains(script, noetig) {
+			t.Errorf("teardown line missing: %q", noetig)
+		}
+	}
+}
+
+// TestRemovingTheLastOutboundRuleRestorePath is the sibling of
+// TestRemovingTheLastOutboundRule for the atomic apply path — the one the
+// engine actually picks when compiled.restore.sh exists. Fixing only the
+// bash emitter on 2026-09-07 left the defect live on exactly the hosts that
+// use the default path, which is how it was found: the bash script tore the
+// chain down correctly while `zfw apply` kept it alive.
+func TestRemovingTheLastOutboundRuleRestorePath(t *testing.T) {
+	inbound := rules.Rule{
+		ID: "a", Order: 10, Enabled: true, Name: "ssh", Action: "allow",
+		Source: rules.Source{Type: "range", Value: "192.168.1.0/24"},
+		Ports:  rules.Ports{Type: "list", List: []int{22}}, Protocol: "tcp", Zone: "host",
+	}
+	outbound := rules.Rule{
+		ID: "b", Order: 20, Enabled: true, Name: "drop to feed", Action: "deny",
+		Source: rules.Source{Type: "feed", Value: "spamhaus_drop"},
+		Ports:  rules.Ports{Type: "all"}, Protocol: "both", Zone: "host",
+		Direction: "outbound",
+	}
+	rs := rules.RuleSet{DefaultPolicy: "deny", LAN: "192.168.1.0/24",
+		Rules: []rules.Rule{inbound, outbound}}
+
+	mit := CompileRestoreScript(rs, system.PublishedPorts{}, nil)
+	if !strings.Contains(mit, "-C OUTPUT -j ZFW-OUT") {
+		t.Fatal("outbound rule present but the chain is not hooked")
+	}
+	if strings.Contains(mit, "-X ZFW-OUT 2>/dev/null") {
+		t.Error("chain in use, but the script tears it down")
+	}
+
+	rs.Rules = []rules.Rule{inbound}
+	ohne := CompileRestoreScript(rs, system.PublishedPorts{}, nil)
+	iD := strings.Index(ohne, "-D OUTPUT -j ZFW-OUT")
+	iF := strings.Index(ohne, "-F ZFW-OUT 2>/dev/null")
+	iX := strings.Index(ohne, "-X ZFW-OUT 2>/dev/null")
+	if iD < 0 || iF < 0 || iX < 0 {
+		t.Fatalf("teardown incomplete: unhook=%d flush=%d delete=%d", iD, iF, iX)
+	}
+	if !(iD < iF && iF < iX) {
+		t.Errorf("teardown out of order: unhook=%d flush=%d delete=%d", iD, iF, iX)
+	}
+	if strings.Contains(ohne, "match-set") {
+		t.Error("the removed feed rule still appears in the restore script")
 	}
 }
