@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"github.com/chicohaager/zfw/internal/feeds"
 	"net"
 	"os"
 	"sort"
@@ -27,8 +28,8 @@ var migrateMu sync.Mutex
 
 // Source is a rule's traffic source.
 type Source struct {
-	Type  string `json:"type"`  // any | ip | range
-	Value string `json:"value"` // ip address, or CIDR for range
+	Type  string `json:"type"`  // any | ip | range | country | feed
+	Value string `json:"value"` // ip address, CIDR for range, country codes, or a feed id (feeds.Catalogue)
 }
 
 // Ports is a rule's destination port set.
@@ -566,6 +567,12 @@ func validateSource(s Source) error {
 			if len(c) != 2 || !isAlpha(c) {
 				return fmt.Errorf("country code %q is invalid (ISO-3166 alpha-2, e.g. DE)", c)
 			}
+		}
+	case "feed":
+		// A feed id is a name in a fixed catalogue, never a URL: the set
+		// of lists ZFW will fetch is decided in code, not in rules.json.
+		if !feeds.IsValidID(s.Value) {
+			return fmt.Errorf("feed %q is not in the catalogue", s.Value)
 		}
 	default:
 		return fmt.Errorf("source.type is invalid")

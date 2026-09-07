@@ -70,7 +70,7 @@ func main() {
 	// signal-aware context is constructed below.
 	upd := update.New(buildinfo.Version, cfg.UpdateURL)
 	hook := notify.New(cfg.WebhookURL)
-	srv := handlers.NewServer(fw, cfg.RulesFile, cfg.CompiledFile, cfg.GeoDir, cfg.HistoryFile, upd, cfg.PeersFile, cfg.PeerToken, cfg.ExtraBypassIfaces, hook)
+	srv := handlers.NewServer(fw, cfg.RulesFile, cfg.CompiledFile, cfg.GeoDir, cfg.FeedsDir, cfg.HistoryFile, upd, cfg.PeersFile, cfg.PeerToken, cfg.ExtraBypassIfaces, hook)
 	srv.SetLogLevel(logLevel) // enable runtime debug toggle via /api/debug
 
 	seedRulesIfMissing(cfg, fw)
@@ -118,6 +118,12 @@ func main() {
 	// (debounced) but never auto-applies — changing the live firewall
 	// stays an explicit operator action. No-op on hosts without docker.
 	go dockerwatch.New(srv.Recompile, slog.Default()).Run(ctx)
+
+	// Keep blocklist feeds current without touching the rules: the refresh
+	// re-fetches, filters and swaps the live ipsets in place. It never
+	// recompiles or applies — same line as dockerwatch above. Disabled with
+	// ZFW_FEEDS_REFRESH=0; a host without feed rules makes no calls at all.
+	go srv.RunFeedRefresh(ctx, cfg.FeedsRefresh)
 
 	// Install the boot watchdog on the persistent root (ZimaOS sysext units
 	// can lose the multi-user.target race — see KB §18.9).
