@@ -25,7 +25,7 @@
 # The image is multi-arch: each architecture carries the .raw built for it, so
 # `docker run` on an arm64 host pulls the arm64 module.
 
-FROM alpine:3.21
+FROM alpine:3.24
 
 # util-linux supplies nsenter; the rest of install.sh needs only a POSIX shell,
 # coreutils and sha256sum, which busybox already provides.
