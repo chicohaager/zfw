@@ -445,9 +445,10 @@ input:focus, select:focus {
 .badge-lan     { background: var(--warn-tint);    color: var(--warn);    }
 .badge-blocked { background: var(--success-tint); color: var(--success); }
 .badge-local   { background: var(--neutral-tint); color: var(--text-muted); }
-/* v1.0.27 Exposure states: reachable from a few listed sources only; active
+/* v1.0.27 Exposure states (restricted is still exposure, so warn-coloured,
+   never green): reachable from a few listed sources only; active
    firewall without a record of what it applied; saved != live. */
-.badge-restricted { background: var(--accent-tint); color: var(--text); }
+.badge-restricted { background: var(--warn-tint); color: var(--warn); border: 1px solid var(--warn); }
 .badge-unverified { background: var(--neutral-tint); color: var(--warn); border: 1px dashed var(--warn); }
 .badge-pending    { background: transparent; color: var(--text-muted); border: 1px dashed var(--text-muted); margin-left: 4px; }
 
