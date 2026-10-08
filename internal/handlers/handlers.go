@@ -426,8 +426,9 @@ func (s *Server) recompileLocked(containers []system.DockerContainer, dockerPort
 // writeScriptAtomic publishes a compiled script via tmp+rename so a reader
 // never observes a half-written file. s.mu serialises the daemon's own
 // compiles, but not the engine: zfw.service is PartOf=docker.service, so it
-// re-runs `bash compiled.sh` on every dockerd restart — at the same moment
-// dockerwatch sees that docker event and recompiles. A plain os.WriteFile
+// re-runs on every dockerd restart — at the same moment dockerwatch sees that
+// docker event and recompiles. (Since v1.0.27 the unit replays committed.sh,
+// not compiled.sh, but an operator's apply can still race a recompile.) A plain os.WriteFile
 // truncates the very inode bash is reading, and a mid-line truncation is a
 // syntax error: under `set -eu` the engine aborts, reverts, and the host is
 // left with no firewall after a routine docker restart. rename(2) is atomic

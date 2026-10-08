@@ -102,6 +102,12 @@ chmod 0700 "$ENGINE_DIR/$NAME.tmp"
 mv "$ENGINE_DIR/$NAME.tmp" "$ENGINE_DIR/$NAME"
 say "engine installed -> $ENGINE_DIR/$NAME (root:root 0700)"
 
+# Boot persistence from <= v1.0.26 replayed the current compiled.sh; from
+# v1.0.27 the unit replays the confirmed ruleset (committed.sh). Migrate an
+# existing unit and seed committed.sh from the compiled.sh present now. A
+# no-op on a host that never confirmed (no unit).
+"$ENGINE_DIR/$NAME" _migrate-persist || die "boot-persistence migration failed — see the message above"
+
 # --- 3. merge the sysext overlay and (re)start the service ---
 say "merging sysext overlay..."
 systemd-sysext refresh

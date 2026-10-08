@@ -5,7 +5,7 @@
 # compiled.sh. This engine is the privileged executor — it runs that script
 # and owns the dead-man / revert safety machinery.
 #
-# Usage:  zfw {apply [--safe] | commit | revert | status}
+# Usage:  zfw {apply [--safe] | commit | revert | status | boot}
 set -u
 
 # Pin a deterministic PATH: the dead-man auto-revert runs as a systemd-run
@@ -23,9 +23,22 @@ COMPILED_RESTORE="${ZFW_COMPILED_RESTORE:-$SELF_DIR/compiled.restore.sh}"
 APPLY_MODE="${ZFW_APPLY_MODE:-bash}"
 DEADMAN="zfw-deadman"
 # Boot-persistence unit installed by `commit` and removed by `revert`. The
-# unit replays the committed compiled.sh at boot after docker.service is up
-# (so DOCKER-USER exists before we add rules to it).
+# unit runs `zfw boot` after docker.service is up (so DOCKER-USER exists
+# before we add rules to it) and again on every dockerd restart.
 PERSIST_UNIT="/etc/systemd/system/zfw.service"
+# What boot replays (v1.0.27). compiled.sh cannot be it: the daemon rewrites
+# that file on every rule save and on every container event (dockerwatch), so
+# up to v1.0.26 a ruleset that was saved but never applied — never run under
+# the dead-man — went live without one on the next reboot or dockerd restart.
+#   APPLIED   = the script the last successful apply (or boot) actually ran,
+#               i.e. what is live right now. Written by apply/boot.
+#   COMMITTED = the confirmed state: APPLIED promoted by `commit`, or written
+#               directly by an apply without the dead-man (the operator's
+#               explicit "make this live"). Only this is replayed at boot.
+# Both are root-only copies (0600) next to the engine and go through
+# secure_file before they are executed, like compiled.sh.
+APPLIED="$SELF_DIR/applied.sh"
+COMMITTED="$SELF_DIR/committed.sh"
 
 # Backend: match whichever iptables backend Docker actually uses (legacy on
 # ZimaOS<=1.6.1, nft on >=1.6.2). Hardcoding legacy silently no-ops after the
@@ -90,6 +103,19 @@ secure_file(){
   return 0
 }
 
+# stage_copy atomically publishes a root-only copy of $1 at $2: written to a
+# temp file in the same directory (so the rename stays on one filesystem),
+# mode 0600 while still hidden, then renamed — a concurrent boot sees either
+# the old copy or the new one, never a truncated script.
+stage_copy(){
+  local src="$1" dst="$2" tmp
+  tmp="$(mktemp "${dst}.tmp.XXXXXX")" || return 1
+  if ! { cat "$src" > "$tmp" && chmod 0600 "$tmp" && mv -f "$tmp" "$dst"; }; then
+    rm -f "$tmp"
+    return 1
+  fi
+}
+
 # disable_persistence removes the boot-restore unit. It belongs to every path
 # that tears the firewall down, not just the `revert` verb: the dead-man and the
 # failed-apply rollback used to flush the live chains and stop there, leaving
@@ -97,9 +123,13 @@ secure_file(){
 # back. Because that unit is PartOf=docker.service, the rejected ruleset came
 # back on the next reboot *or the next dockerd restart* — this time with no
 # dead-man armed. A safety net that reinstates what it caught is not a net.
+#
+# It also removes the confirmed and live copies: with the firewall off there is
+# nothing confirmed to replay and nothing applied.
 disable_persistence(){
   systemctl disable zfw.service >/dev/null 2>&1 || true
   rm -f "$PERSIST_UNIT" 2>/dev/null || true
+  rm -f "$COMMITTED" "$APPLIED" 2>/dev/null || true
   systemctl daemon-reload 2>/dev/null || true
 }
 
@@ -149,8 +179,10 @@ write_persist_unit(){
   # Bake the active apply mode into the unit so a reboot replays exactly
   # what was committed — committing in restore mode must not silently
   # boot in bash mode (and vice versa).
-  local env_line=""
-  [ "$APPLY_MODE" = "restore" ] && env_line='Environment=ZFW_APPLY_MODE=restore'
+  #
+  # Since v1.0.27 the unit runs `zfw boot`, which replays committed.sh — a copy
+  # of whichever script (bash or restore variant) was confirmed — so the apply
+  # mode no longer needs to be baked in here.
   cat > "$tmp" <<UNIT
 [Unit]
 Description=ZFW Host Firewall — restore committed rules at boot
@@ -162,13 +194,11 @@ PartOf=docker.service
 Wants=docker.service
 Wants=network-online.target
 ConditionPathExists=/DATA/zfw/zfw
-ConditionPathExists=/DATA/zfw/compiled.sh
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-${env_line}
-ExecStart=/DATA/zfw/zfw apply
+ExecStart=/DATA/zfw/zfw boot
 
 [Install]
 WantedBy=multi-user.target
@@ -228,7 +258,65 @@ case "${1:-}" in
       log "partial state reverted — firewall is OFF (stock ACCEPT), boot-persistence disabled; fix rules and re-apply"
       exit 1
     fi
+    # Record what is now live. A failure here does not undo the apply (the
+    # rules are in the kernel), but it must be loud: commit promotes this copy.
+    stage_copy "$SCRIPT" "$APPLIED" || echo "[zfw] WARN: could not record the applied ruleset at $APPLIED — Confirm will refuse until the next apply" >&2
+    if [ -z "$safe" ]; then
+      # No dead-man: the operator made this live on purpose, so it is the
+      # confirmed state boot replays from now on.
+      stage_copy "$SCRIPT" "$COMMITTED" || { echo "[zfw] ERROR: could not record the confirmed ruleset at $COMMITTED" >&2; exit 1; }
+    fi
     log "firewall applied"
+    exit 0
+    ;;
+  boot)
+    # Run by zfw.service at boot and on every dockerd restart. Replays the
+    # confirmed ruleset only — see COMMITTED above.
+    SCRIPT="$COMMITTED"
+    if [ ! -e "$SCRIPT" ]; then
+      # Only reachable when the unit exists but the confirmed copy does not:
+      # a hand-copied engine that skipped install.sh's _migrate-persist, or a
+      # deleted file. Fall back to the pre-v1.0.27 behaviour rather than
+      # leave the host unfiltered after a reboot, and say so in the journal.
+      echo "[zfw] WARN: $COMMITTED missing — replaying $(pick_compiled) as before v1.0.27; it may hold rules that were saved but never confirmed. Run Safe-Apply + Confirm once to fix." >&2
+      SCRIPT="$(pick_compiled)"
+    fi
+    [ -r "$SCRIPT" ] || { echo "[zfw] ERROR: ruleset missing: $SCRIPT" >&2; exit 1; }
+    secure_file "$SCRIPT" || exit 1
+    if ! bash "$SCRIPT"; then
+      echo "[zfw] ERROR: replaying the confirmed ruleset failed — reverting partial state" >&2
+      revert
+      disable_persistence
+      log "partial state reverted — firewall is OFF (stock ACCEPT), boot-persistence disabled"
+      exit 1
+    fi
+    stage_copy "$SCRIPT" "$APPLIED" || echo "[zfw] WARN: could not record the applied ruleset at $APPLIED" >&2
+    log "confirmed ruleset restored"
+    exit 0
+    ;;
+  _migrate-persist)
+    # Run by install.sh after the engine is replaced. A host that confirmed
+    # under <= v1.0.26 has a unit whose ExecStart is `zfw apply` (replays the
+    # current compiled.sh) and no committed.sh. Rewrite the unit and seed the
+    # confirmed copy from the compiled.sh present right now — the same file
+    # the old unit would have replayed, but frozen: rule saves after the
+    # upgrade no longer reach boot. A host without the unit never confirmed
+    # and is left alone.
+    [ -f "$PERSIST_UNIT" ] || { log "no boot-persistence unit — nothing to migrate"; exit 0; }
+    if [ ! -e "$COMMITTED" ]; then
+      SEED="$(pick_compiled)"
+      if [ -r "$SEED" ] && secure_file "$SEED"; then
+        stage_copy "$SEED" "$COMMITTED" || { echo "[zfw] ERROR: could not seed $COMMITTED" >&2; exit 1; }
+        log "seeded $COMMITTED from $SEED (the ruleset the old unit would have replayed)"
+      else
+        echo "[zfw] WARN: cannot seed $COMMITTED from $SEED — boot falls back to it until the next Confirm" >&2
+      fi
+    fi
+    if ! grep -q '^ExecStart=/DATA/zfw/zfw boot$' "$PERSIST_UNIT"; then
+      apply_or_die write_persist_unit
+      apply_or_die systemctl daemon-reload
+      log "zfw.service migrated to replay the confirmed ruleset (ExecStart=zfw boot)"
+    fi
     exit 0
     ;;
   commit)
@@ -237,8 +325,12 @@ case "${1:-}" in
     # script at commit time so the operator sees the failure immediately
     # instead of on the next reboot (security-review v0.2.20 M1). Verify
     # the same script the active mode will run at boot.
-    SCRIPT="$(pick_compiled)"
-    [ -r "$SCRIPT" ] || { echo "[zfw] ERROR: compiled ruleset missing: $SCRIPT" >&2; exit 1; }
+    #
+    # Since v1.0.27 the script promoted is the one the last apply actually ran
+    # (APPLIED), not whatever compiled.sh holds by now: dockerwatch or a rule
+    # save may have rewritten it during the 120 s window.
+    SCRIPT="$APPLIED"
+    [ -r "$SCRIPT" ] || { echo "[zfw] ERROR: no applied ruleset recorded ($SCRIPT) — run Safe-Apply first, then Confirm" >&2; exit 1; }
     secure_file "$SCRIPT" || exit 1
     # Dead-man teardown stays best-effort — the timer may simply not be
     # running on a host where commit is called outside an apply --safe
@@ -250,6 +342,7 @@ case "${1:-}" in
     # operator believe the commit succeeded. Pre-v1.0.2 only `enable`
     # was checked (R3-3); write_persist_unit and daemon-reload were
     # implicit-success.
+    apply_or_die stage_copy "$SCRIPT" "$COMMITTED"
     apply_or_die write_persist_unit
     apply_or_die systemctl daemon-reload
     # Surface enable failures (read-only /etc, masked unit, sysext
@@ -281,7 +374,7 @@ case "${1:-}" in
     echo "--- deadman ---";     systemctl is-active "${DEADMAN}.timer" 2>/dev/null || echo "inactive"
     ;;
   *)
-    echo "usage: zfw {apply [--safe] | commit | revert | status}"
+    echo "usage: zfw {apply [--safe] | commit | revert | status | boot}"
     exit 1
     ;;
 esac

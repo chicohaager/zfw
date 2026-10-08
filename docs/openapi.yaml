@@ -356,7 +356,7 @@ paths:
 
   /api/commit:
     post:
-      summary: Confirm a Safe-Apply. Stops the dead-man timer and installs zfw.service so the rules survive reboot.
+      summary: Confirm a Safe-Apply. Stops the dead-man timer, records the ruleset that the Safe-Apply ran as the confirmed state (committed.sh) and installs zfw.service, which replays exactly that state at boot and on every dockerd restart — never rules saved after it.
       responses:
         '200': { description: Committed. }
         '429': { description: Rate-limited. }
