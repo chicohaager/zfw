@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/chicohaager/zfw/internal/apps"
@@ -43,6 +44,17 @@ func appsLive(snap *compiler.LiveSnapshot) *apps.Live {
 // request, further kicks before it is taken are the same request. Without a
 // running loop (the handler tests) the request simply stays queued.
 func (s *Server) KickApps() {
+	s.kickApps(false)
+}
+
+// kickAppsRewrite is KickApps after the firewall itself changed (apply,
+// confirm, revert): the app chains are rewritten even if their content did not.
+func (s *Server) kickAppsRewrite() { s.kickApps(true) }
+
+func (s *Server) kickApps(rewrite bool) {
+	if rewrite {
+		s.appsForce.Store(true)
+	}
 	select {
 	case s.appsKick <- struct{}{}:
 	default: // a sync is already queued
@@ -120,7 +132,11 @@ func (s *Server) syncAppsLocked(ctx context.Context, withdraw []apps.Entry) erro
 		lan = live.Rules.LAN
 	}
 	script := compiler.CompileApps(apps.Active(f, live), lan)
-	if script != s.appsScript {
+	// Rewrite when the content changed, and after every apply/confirm/revert:
+	// an apply (re)creates the chains empty when they did not exist — the
+	// first apply of this version, or any apply after a revert or a dead-man
+	// rollback — and the content would otherwise stay missing.
+	if script != s.appsScript || s.appsForce.Swap(false) {
 		if err := writeScriptAtomic(s.appsScriptPath(), script); err != nil {
 			return err
 		}
@@ -128,8 +144,14 @@ func (s *Server) syncAppsLocked(ctx context.Context, withdraw []apps.Entry) erro
 		if err != nil {
 			return errors.New("zfw apps: " + err.Error() + " " + out)
 		}
-		s.appsScript = script
 		slog.Info("app chains updated", "output", out)
+		if strings.Contains(out, "missing") {
+			// Nothing was written; the next apply creates the chains and forces
+			// a rewrite. Never remember this run as done.
+			s.appsScript = ""
+		} else {
+			s.appsScript = script
+		}
 	}
 	// Cards: re-send every open question (they are not stored by ZimaOS),
 	// withdraw the ones that were open before and are not any more.

@@ -54,6 +54,7 @@ type fakeFirewall struct {
 	saveCalls   int
 	appsCalls   int
 	appsErr     error
+	appsOut     string
 }
 
 func (f *fakeFirewall) Status(ctx context.Context) firewall.Status {
@@ -1180,5 +1181,5 @@ func (f *fakeFirewall) MatchSetCounters(_ context.Context, set string) firewall.
 
 func (f *fakeFirewall) Apps(context.Context) (string, error) {
 	f.appsCalls++
-	return "", f.appsErr
+	return f.appsOut, f.appsErr
 }

@@ -250,3 +250,37 @@ func TestAuditCountsAnAppChainPortAsOpen(t *testing.T) {
 		t.Error("an unrelated port must stay closed")
 	}
 }
+
+// An apply recreates the app chains empty (after a revert, or on the first
+// apply of this version): the next sync must rewrite their content even
+// though apps.sh did not change. And an engine run that found the chains
+// missing must not count as done.
+func TestAppChainsRewrittenAfterApplyAndWhenMissing(t *testing.T) {
+	s, fw, _ := appsFixture(t)
+	fw.appsOut = "[zfw] ZFW-APPS missing — apply once to create it"
+	if err := s.SyncApps(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	fw.appsOut = "[zfw] ZFW-APPS: 1"
+	if err := s.SyncApps(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fw.appsCalls != 2 {
+		t.Fatalf("chains were missing on the first run: want a second engine run, got %d", fw.appsCalls)
+	}
+	if err := s.SyncApps(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fw.appsCalls != 2 {
+		t.Fatalf("nothing changed: want no third run, got %d", fw.appsCalls)
+	}
+	if w := do(s, http.MethodPost, "/api/apply", map[string]bool{"safe": true}); w.Code != http.StatusOK {
+		t.Fatalf("apply: %d %s", w.Code, w.Body.String())
+	}
+	if err := s.SyncApps(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if fw.appsCalls != 3 {
+		t.Fatalf("after an apply the chains must be rewritten, engine runs: %d", fw.appsCalls)
+	}
+}
