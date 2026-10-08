@@ -43,13 +43,26 @@ func TestDockerUser6GetsPortScopedDefaultDeny(t *testing.T) {
 	}
 }
 
-// TestDockerUser6EmptyPortsNoDeny: with no published ports there is nothing to
-// scope a deny to. The chain must still terminate in RETURN rather than
-// swallowing forwarded container traffic.
+// TestDockerUser6EmptyPortsNoDeny: with no published ports there is no port to
+// scope a per-port deny to. The chain must still terminate in RETURN rather
+// than swallowing forwarded container traffic.
+//
+// Until v1.0.26 this asserted that no ZFW-DOCK6-DROP line existed at all. Since
+// the DNAT guard (dnatguard_test.go) the empty-inventory host is exactly the
+// one that must carry a drop — for the port the next `docker compose up`
+// publishes. The property this test protects is unchanged and now checked
+// line by line: every DROP in the chain is DNAT-scoped, so nothing a container
+// sends and nothing that was not port-published can hit it.
 func TestDockerUser6EmptyPortsNoDeny(t *testing.T) {
 	script := Compile(denyRuleSet(), system.PublishedPorts{}, nil)
-	if strings.Contains(script, "ZFW-DOCK6-DROP") {
-		t.Error("emitted an IPv6 deny with no published ports to scope it to")
+	if strings.Contains(script, "--ctorigdstport") {
+		t.Error("emitted a port-scoped IPv6 deny with no published ports to scope it to")
+	}
+	for _, l := range strings.Split(script, "\n") {
+		if strings.Contains(l, "$IPT6 -A DOCKER-USER") && strings.Contains(l, "-j DROP") &&
+			!strings.Contains(l, "--ctstate NEW -m conntrack --ctstate DNAT") {
+			t.Errorf("IPv6 DOCKER-USER drop that is not DNAT-scoped: %s", l)
+		}
 	}
 	if !strings.Contains(script, `$IPT6 -A DOCKER-USER -j RETURN`) {
 		t.Error("IPv6 DOCKER-USER must terminate in RETURN")

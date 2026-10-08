@@ -9,6 +9,13 @@
 // firewall — changing the live ruleset without an explicit operator
 // action (Safe-Apply) is out of scope; the watcher only keeps the
 // generated compiled.sh and the dashboard's view current. v1.0.13.
+//
+// Not applying means the live DOCKER-USER chain lags behind the inventory
+// until the next apply. Since v1.0.27 that lag fails closed under
+// default_policy=deny: the compiled chain ends in a DNAT guard
+// (compiler.dnatGuardLines) that drops new inbound connections to any
+// published port no rule decided — including ports published after the
+// apply. The Exposure view marks such ports as published after the apply.
 package dockerwatch
 
 import (

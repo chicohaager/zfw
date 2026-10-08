@@ -379,8 +379,55 @@ func dockerUserRules(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPorts
 	}
 	if rs.DefaultPolicy == "deny" {
 		out = append(out, denyLines(pp, "ZFW-DOCK-DROP ")...)
+		out = append(out, dnatGuardLines("ZFW-DOCK-DROP ")...)
 	}
 	out = append(out, "-j RETURN")
+	return out
+}
+
+// dnatGuardLines is the catch-all half of the DOCKER-USER default-deny: a new
+// inbound connection that Docker's port publishing DNATed towards a container
+// and that nothing above decided is logged and dropped.
+//
+// denyLines only knows the ports the inventory held at compile time.
+// dockerwatch recompiles on container events but deliberately never applies,
+// so before v1.0.27 a port published after the last apply had no DROP line in
+// the live chain and fell through to the trailing RETURN: reachable from any
+// source until the next Safe-Apply, while the Exposure view — judging
+// rules.json — reported it "blocked". This rule closes that window in the
+// kernel, independent of what the daemon knew when it compiled.
+//
+// What it matches, and why each part is there:
+//   - --ctstate NEW: only the first packet of a connection, exactly like the
+//     per-port deny (replies are ESTABLISHED and returned at the top).
+//   - --ctstate DNAT: conntrack's "original destination differs from the reply
+//     source" status. That is what Docker's port publishing does; a container's
+//     egress, a routed LAN-to-LAN flow or a VM bridge without port forwarding
+//     never carries it. Two separate conntrack matches, because one
+//     --ctstate NEW,DNAT would OR the two states.
+//   - -o docker0 / -o br-+: only flows leaving towards a Docker bridge. A DNAT
+//     set up by someone else (libvirt port forwards on virbr0, a k3s CNI) is
+//     not ZFW's to judge here, as before.
+//
+// Placement after every bypass is load-bearing: container-originated flows
+// (-i docker0 / -i br-+, which covers container-to-container over a published
+// port on another network), mesh interfaces and the host's own address have
+// all returned above. Host-originated connections to a published port (a
+// network_mode: host app such as Newt dialling the host IP) are DNATed in nat
+// OUTPUT and never traverse FORWARD at all. Pinned by TestDNATGuardLive, which
+// runs these paths through real netfilter in a network namespace.
+//
+// Kernel side: xt_conntrack, the same match the per-port deny's
+// --ctorigdstport already depends on (built in on ZimaOS 6.12.25, measured
+// 2026-05-23). No new module.
+func dnatGuardLines(logPrefix string) []string {
+	var out []string
+	for _, br := range []string{"docker0", "br-+"} {
+		m := "-o " + br + " -m conntrack --ctstate NEW -m conntrack --ctstate DNAT"
+		out = append(out,
+			fmt.Sprintf("%s -j LOG --log-prefix %q --log-level 6", m, logPrefix),
+			m+" -j DROP")
+	}
 	return out
 }
 
@@ -422,6 +469,7 @@ func dockerUser6Rules(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPort
 			"-i docker0 -j RETURN",
 			"-i br-+ -j RETURN")
 		out = append(out, denyLines(pp, "ZFW-DOCK6-DROP ")...)
+		out = append(out, dnatGuardLines("ZFW-DOCK6-DROP ")...)
 	}
 	out = append(out, "-j RETURN")
 	return out
