@@ -32,6 +32,7 @@ import (
 func Compile(rs rules.RuleSet, pp system.PublishedPorts, geoFiles map[string]string, extraBypass ...string) string {
 	var b strings.Builder
 	emitHeader(&b)
+	b.WriteString(liveSnapshotLine(rs, pp))
 	emitGeoSets(&b, geoFiles)
 
 	rl := append([]rules.Rule(nil), rs.Rules...)

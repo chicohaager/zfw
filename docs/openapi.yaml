@@ -130,7 +130,25 @@ components:
         bind:  { type: string }
         proc:  { type: string }
         scope: { type: string, enum: [local, all] }
-        reach: { type: string, enum: [lan, blocked, local] }
+        reach:
+          type: string
+          enum: [lan, restricted, blocked, unverified, local]
+          description: >-
+            Live verdict (v1.0.27): judged from the ruleset the engine last applied (the zfw-live
+            record in applied.sh), not from the saved rules. restricted = reachable only from the
+            sources listed in `sources`; unverified = firewall active but no record of what it
+            applied (a block cannot be vouched for; apply once).
+        sources:
+          type: array
+          items: { type: string }
+          description: The only sources allowed to connect, when reach is restricted.
+        pending:
+          type: string
+          enum: [rules-not-applied, published-after-apply]
+          description: >-
+            Present when the saved rules give a different answer than the live ruleset
+            (rules-not-applied), or when a container port was published after the last apply
+            and its live verdict comes from the DNAT guard (published-after-apply).
     Finding:
       type: object
       properties:

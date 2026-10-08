@@ -1010,20 +1010,37 @@ document.addEventListener('keydown', e => {
 async function loadExposure() {
   const d = await api('/exposure');
   let exposed = 0, blocked = 0;
+  // reach is the LIVE verdict (v1.0.27): judged from the ruleset the engine
+  // last applied, not from the saved rules. "restricted" = reachable only from
+  // the listed sources; "unverified" = the firewall is active but there is no
+  // record of what it applied, so a block cannot be vouched for.
   const map = {
     lan: ['badge-lan', 'LAN'],
+    restricted: ['badge-restricted', 'restricted'],
     blocked: ['badge-blocked', 'blocked'],
+    unverified: ['badge-unverified', 'unverified'],
     local: ['badge-local', 'localhost'],
   };
+  const pendingText = {
+    'rules-not-applied': 'Your saved rules give a different answer for this port — they are not applied yet. Click Safe-Apply.',
+    'published-after-apply': 'This container port was published after the last apply. It is closed by the catch-all for new container ports until a rule allows it and you apply.',
+  };
   const rows = d.map(s => {
-    if (s.reach === 'lan') exposed++;
+    // restricted still counts as exposed: someone on the network can connect.
+    if (s.reach === 'lan' || s.reach === 'restricted') exposed++;
     if (s.reach === 'blocked') blocked++;
     const [cls, lbl] = map[s.reach] || map.local;
+    let title = '';
+    if (s.reach === 'restricted') title = 'Reachable only from: ' + (s.sources || []).join(', ');
+    if (s.reach === 'unverified') title = 'The firewall is active, but ZFW has no record of what it applied (first start after an update, or applied by an older version). Apply once to verify.';
+    const pend = s.pending
+      ? ` <span class="badge badge-pending" title="${esc(pendingText[s.pending] || s.pending)}">${s.pending === 'published-after-apply' ? 'new since apply' : 'not yet applied'}</span>`
+      : '';
     return `<tr>
       <td class="mono">${esc(s.port)}</td>
       <td>${esc(s.proc || '—')}</td>
       <td class="mono">${esc(s.bind)}</td>
-      <td><span class="badge ${cls}">${lbl}</span></td>
+      <td><span class="badge ${cls}"${title ? ` title="${esc(title)}"` : ''}>${lbl}</span>${pend}</td>
       <td class="exp-actions">
         <button class="btn-secondary exp-rule" data-port="${esc(s.port)}" title="Open rule editor pre-filled for this port">+ Rule</button>
         <button class="btn-secondary exp-deny" data-port="${esc(s.port)}" title="Open rule editor pre-filled to block this port from the LAN">&rarr; Deny</button>
