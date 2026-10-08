@@ -219,7 +219,7 @@ really does have a public IPv6 address. What to do about it:
   LAN-scoped — the IPv6 drop is then doing exactly what you want, and the
   badge is telling you so rather than hiding it.
 - To see what is actually being dropped, look for the log prefix
-  `ZFW-IN6-DROP` in the Events tab or in `journalctl -k`.
+  `ZFW-IN6-DROP` in the Events tab or in `sudo journalctl -k`.
 
 **Link-local addresses are not a way around the rules (v1.0.27).** Up to
 v1.0.26 `ZFW-IN6` let every packet from a link-local source (`fe80::/10`)
@@ -265,7 +265,7 @@ A safe order for a fresh install:
 Re-run the installer — it is idempotent and updates in place:
 
 ```sh
-sh install.sh        # on the host, as root
+sudo sh install.sh   # on the host — the installer must run as root
 ```
 
 Your rule set lives in `/DATA/zfw/rules.json` and is **not** touched by an
@@ -287,12 +287,13 @@ In order of preference:
 4. **Revert from a shell** (console, or SSH if still reachable), as root:
 
    ```sh
-   /DATA/zfw/zfw revert
+   sudo /DATA/zfw/zfw revert
    ```
 
    This removes every ZFW chain and restores the stock (unfiltered) state.
-   `/DATA/zfw/zfw commit` cancels an armed dead-man; `/DATA/zfw/zfw status`
-   shows the live chains.
+   `sudo /DATA/zfw/zfw commit` cancels an armed dead-man; `sudo /DATA/zfw/zfw status`
+   shows the live chains. (`/DATA/zfw` is `root:root 0700` — without `sudo`
+   the engine is not even readable.)
 
 ---
 

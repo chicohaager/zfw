@@ -1,9 +1,8 @@
 #!/bin/sh
 # install.sh — install or update the ZFW host firewall on a ZimaOS host.
 #
-# Run this ON the ZimaOS host as root:
-#   sh install.sh
-# (or, as the unprivileged user:  echo '<password>' | sudo -S sh install.sh)
+# Run this ON the ZimaOS host as root — the login user is not root:
+#   sudo sh install.sh
 #
 # It installs two pieces and starts the service:
 #   1. the sysext module   -> /var/lib/extensions/zfw.raw
