@@ -18,8 +18,8 @@ import (
 //
 //	lan  (192.0.2.50, fd00:1::50) --eth-lan--> host (192.0.2.1, fd00:1::1)
 //	ts   (100.64.0.2)            --tailscale0--> host            (mesh bypass)
-//	host --br-test--> ctr  (172.30.0.2, fd00:2::2)  listens on :80 :81 :82
-//	host --br-two---> ctr2 (172.31.0.2)                          (2nd compose network)
+//	host --br-test--> ctr  (198.51.100.2, fd00:2::2)  listens on :80 :81 :82
+//	host --br-two---> ctr2 (203.0.113.2)                          (2nd compose network)
 //
 // with Docker's own plumbing reproduced by hand: an empty DOCKER-USER that
 // FORWARD jumps to first, and DNAT in nat PREROUTING + OUTPUT for
@@ -39,22 +39,22 @@ sysctl -qw net.ipv4.ip_forward=1
 sysctl -qw net.ipv6.conf.all.forwarding=1
 
 ip link add br-test type bridge; ip link set br-test up
-ip addr add 172.30.0.1/24 dev br-test; ip addr add fd00:2::1/64 dev br-test nodad
+ip addr add 198.51.100.1/24 dev br-test; ip addr add fd00:2::1/64 dev br-test nodad
 ip link add v-ctr type veth peer name eth0 netns ctr
 ip link set v-ctr master br-test up
-ip netns exec ctr ip addr add 172.30.0.2/24 dev eth0
+ip netns exec ctr ip addr add 198.51.100.2/24 dev eth0
 ip netns exec ctr ip addr add fd00:2::2/64 dev eth0 nodad
 ip netns exec ctr ip link set eth0 up
-ip netns exec ctr ip route add default via 172.30.0.1
+ip netns exec ctr ip route add default via 198.51.100.1
 ip netns exec ctr ip -6 route add default via fd00:2::1
 
 ip link add br-two type bridge; ip link set br-two up
-ip addr add 172.31.0.1/24 dev br-two
+ip addr add 203.0.113.1/24 dev br-two
 ip link add v-ctr2 type veth peer name eth0 netns ctr2
 ip link set v-ctr2 master br-two up
-ip netns exec ctr2 ip addr add 172.31.0.2/24 dev eth0
+ip netns exec ctr2 ip addr add 203.0.113.2/24 dev eth0
 ip netns exec ctr2 ip link set eth0 up
-ip netns exec ctr2 ip route add default via 172.31.0.1
+ip netns exec ctr2 ip route add default via 203.0.113.1
 
 ip link add eth-lan type veth peer name eth0 netns lan
 ip addr add 192.0.2.1/24 dev eth-lan; ip addr add fd00:1::1/64 dev eth-lan nodad
@@ -77,12 +77,12 @@ done
 for pair in 8080:80 8096:81 8097:82; do
   p=${pair%%:*}; c=${pair##*:}
   for ch in PREROUTING OUTPUT; do
-    $IPT  -t nat -A $ch -p tcp -d 192.0.2.1 --dport $p -j DNAT --to-destination 172.30.0.2:$c
+    $IPT  -t nat -A $ch -p tcp -d 192.0.2.1 --dport $p -j DNAT --to-destination 198.51.100.2:$c
     $IPT6 -t nat -A $ch -p tcp -d fd00:1::1 --dport $p -j DNAT --to-destination "[fd00:2::2]:$c"
   done
 done
 # Masquerade the container's egress, as Docker does.
-$IPT -t nat -A POSTROUTING -s 172.30.0.0/24 ! -o br-test -j MASQUERADE
+$IPT -t nat -A POSTROUTING -s 198.51.100.0/24 ! -o br-test -j MASQUERADE
 
 SRV='import socket,sys,threading
 def serve(p):

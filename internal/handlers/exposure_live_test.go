@@ -57,10 +57,10 @@ func activeFW() *fakeFirewall {
 
 func liveTestRules() rules.RuleSet {
 	return rules.RuleSet{
-		LAN: "192.168.1.0/24", HostIP: "192.168.1.100", DefaultPolicy: "deny",
+		LAN: "192.0.2.0/24", HostIP: "192.0.2.100", DefaultPolicy: "deny",
 		Rules: []rules.Rule{
 			{ID: "ssh", Order: 10, Enabled: true, Name: "ssh", Action: "allow",
-				Source: rules.Source{Type: "range", Value: "192.168.1.0/24"},
+				Source: rules.Source{Type: "range", Value: "192.0.2.0/24"},
 				Ports:  rules.Ports{Type: "list", List: []int{22}}, Protocol: "tcp", Zone: "host"},
 			{ID: "jf", Order: 20, Enabled: true, Name: "jellyfin", Action: "allow",
 				Source: rules.Source{Type: "any"},
@@ -151,8 +151,8 @@ func TestExposureReportsLiveStateAndFlagsUnappliedRules(t *testing.T) {
 func TestExposureRestrictedSource(t *testing.T) {
 	s, rulesPath := newTestServer(t, activeFW())
 	rs := liveTestRules()
-	rs.Rules[0].Source = rules.Source{Type: "ip", Value: "192.168.1.10"}
-	rs.Rules[1].Source = rules.Source{Type: "range", Value: "192.168.1.16/28"}
+	rs.Rules[0].Source = rules.Source{Type: "ip", Value: "192.0.2.10"}
+	rs.Rules[1].Source = rules.Source{Type: "range", Value: "192.0.2.16/28"}
 	if err := rules.Save(rulesPath, rs); err != nil {
 		t.Fatal(err)
 	}
@@ -160,11 +160,11 @@ func TestExposureRestrictedSource(t *testing.T) {
 	s.listening = func(context.Context) ([]system.Socket, error) { return liveSockets(), nil }
 
 	got := exposureEntries(t, s)
-	if e := got[22]; e.Reach != "restricted" || len(e.Sources) != 1 || e.Sources[0] != "192.168.1.10" {
-		t.Errorf("22 allowed from one IP: reach=%q sources=%v, want restricted [192.168.1.10]", e.Reach, e.Sources)
+	if e := got[22]; e.Reach != "restricted" || len(e.Sources) != 1 || e.Sources[0] != "192.0.2.10" {
+		t.Errorf("22 allowed from one IP: reach=%q sources=%v, want restricted [192.0.2.10]", e.Reach, e.Sources)
 	}
-	if e := got[8096]; e.Reach != "restricted" || len(e.Sources) != 1 || e.Sources[0] != "192.168.1.16/28" {
-		t.Errorf("8096 allowed from a /28: reach=%q sources=%v, want restricted [192.168.1.16/28]", e.Reach, e.Sources)
+	if e := got[8096]; e.Reach != "restricted" || len(e.Sources) != 1 || e.Sources[0] != "192.0.2.16/28" {
+		t.Errorf("8096 allowed from a /28: reach=%q sources=%v, want restricted [192.0.2.16/28]", e.Reach, e.Sources)
 	}
 }
 
@@ -191,9 +191,9 @@ func TestExposureWideSourcesStayLAN(t *testing.T) {
 // and a deny that is saved but not applied does not mitigate anything yet.
 func TestAuditNotGreenerThanTheLiveState(t *testing.T) {
 	s, rulesPath := newTestServer(t, activeFW())
-	live := rules.RuleSet{LAN: "192.168.1.0/24", DefaultPolicy: "deny", Rules: []rules.Rule{
+	live := rules.RuleSet{LAN: "192.0.2.0/24", DefaultPolicy: "deny", Rules: []rules.Rule{
 		{ID: "a1", Order: 10, Enabled: true, Name: "mcp from one host", Action: "allow",
-			Source: rules.Source{Type: "ip", Value: "192.168.1.10"},
+			Source: rules.Source{Type: "ip", Value: "192.0.2.10"},
 			Ports:  rules.Ports{Type: "list", List: []int{8717}}, Protocol: "tcp", Zone: "host"},
 		{ID: "a2", Order: 20, Enabled: true, Name: "vnc", Action: "allow",
 			Source: rules.Source{Type: "any"},

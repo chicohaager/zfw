@@ -23,7 +23,7 @@ func TestV6LinkLocalNotBlanketAllowed(t *testing.T) {
 		DefaultPolicy: "deny",
 		Rules: []rules.Rule{{
 			ID: "ssh", Order: 10, Enabled: true, Name: "SSH from LAN v4",
-			Action: "allow", Source: rules.Source{Type: "range", Value: "192.168.1.0/24"},
+			Action: "allow", Source: rules.Source{Type: "range", Value: "192.0.2.0/24"},
 			Ports:    rules.Ports{Type: "list", List: []int{22}},
 			Protocol: "tcp", Zone: "host",
 		}},

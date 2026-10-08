@@ -37,9 +37,10 @@ var dnatGuard6 = []string{
 
 func guardRuleSet() rules.RuleSet {
 	rs := denyRuleSet()
+	rs.LAN, rs.HostIP = "192.0.2.0/24", "192.0.2.100"
 	rs.Rules = []rules.Rule{{
 		ID: "r1", Order: 10, Enabled: true, Name: "app 8096 from LAN", Action: "allow",
-		Source:   rules.Source{Type: "range", Value: "192.168.1.0/24"},
+		Source:   rules.Source{Type: "range", Value: "192.0.2.0/24"},
 		Ports:    rules.Ports{Type: "list", List: []int{8096}},
 		Protocol: "tcp", Zone: "docker",
 	}}
@@ -83,7 +84,7 @@ func TestDNATGuardClosesLaterPublishedPortsV4(t *testing.T) {
 	assertGuardTail(t, "IPv4", lines, dnatGuard4, []string{
 		"-m conntrack --ctstate ESTABLISHED,RELATED -j RETURN",
 		"-s 127.0.0.0/8 -j RETURN",
-		"-s 192.168.1.100 -j RETURN",
+		"-s 192.0.2.100 -j RETURN",
 		"-i tailscale0 -j RETURN",
 		"-i zt+ -j RETURN",
 		"-i wg+ -j RETURN",

@@ -15,7 +15,7 @@ var (
 )
 
 func TestReachOf(t *testing.T) {
-	lan := "192.168.1.0/24"
+	lan := "192.0.2.0/24"
 	cases := []struct {
 		name  string
 		rs    RuleSet
@@ -27,20 +27,20 @@ func TestReachOf(t *testing.T) {
 		{"no rule, allow policy", RuleSet{LAN: lan, DefaultPolicy: "allow"}, "host", true, Reach{Verdict: "open"}},
 		{"allow any", RuleSet{LAN: lan, DefaultPolicy: "deny", Rules: []Rule{reachRule("a", "allow", "host", anySrc, p22)}}, "host", true, Reach{Verdict: "open"}},
 		{"allow LAN range", RuleSet{LAN: lan, DefaultPolicy: "deny", Rules: []Rule{reachRule("a", "allow", "host", Source{Type: "range", Value: lan}, p22)}}, "host", true, Reach{Verdict: "open"}},
-		{"allow range wider than LAN", RuleSet{LAN: lan, DefaultPolicy: "deny", Rules: []Rule{reachRule("a", "allow", "host", Source{Type: "range", Value: "192.168.0.0/16"}, p22)}}, "host", true, Reach{Verdict: "open"}},
+		{"allow range wider than LAN", RuleSet{LAN: lan, DefaultPolicy: "deny", Rules: []Rule{reachRule("a", "allow", "host", Source{Type: "range", Value: "192.0.0.0/22"}, p22)}}, "host", true, Reach{Verdict: "open"}},
 		{"allow country", RuleSet{LAN: lan, DefaultPolicy: "deny", Rules: []Rule{reachRule("a", "allow", "host", Source{Type: "country", Value: "DE"}, p22)}}, "host", true, Reach{Verdict: "open"}},
-		{"allow one ip", RuleSet{LAN: lan, DefaultPolicy: "deny", Rules: []Rule{reachRule("a", "allow", "host", Source{Type: "ip", Value: "192.168.1.10"}, p22)}}, "host", true, Reach{Verdict: "restricted", Sources: []string{"192.168.1.10"}}},
-		{"allow other /24 (VPN)", RuleSet{LAN: lan, DefaultPolicy: "deny", Rules: []Rule{reachRule("a", "allow", "host", Source{Type: "range", Value: "10.8.0.0/24"}, p22)}}, "host", true, Reach{Verdict: "restricted", Sources: []string{"10.8.0.0/24"}}},
+		{"allow one ip", RuleSet{LAN: lan, DefaultPolicy: "deny", Rules: []Rule{reachRule("a", "allow", "host", Source{Type: "ip", Value: "192.0.2.10"}, p22)}}, "host", true, Reach{Verdict: "restricted", Sources: []string{"192.0.2.10"}}},
+		{"allow other /24 (VPN)", RuleSet{LAN: lan, DefaultPolicy: "deny", Rules: []Rule{reachRule("a", "allow", "host", Source{Type: "range", Value: "198.51.100.0/24"}, p22)}}, "host", true, Reach{Verdict: "restricted", Sources: []string{"198.51.100.0/24"}}},
 		{"allow v6 /64", RuleSet{LAN: lan, DefaultPolicy: "deny", Rules: []Rule{reachRule("a", "allow", "host", Source{Type: "range", Value: "2001:db8::/64"}, p22)}}, "host", true, Reach{Verdict: "restricted", Sources: []string{"2001:db8::/64"}}},
 		{"restricted then any", RuleSet{LAN: lan, DefaultPolicy: "deny", Rules: []Rule{
-			reachRule("a", "allow", "host", Source{Type: "ip", Value: "192.168.1.10"}, p22),
+			reachRule("a", "allow", "host", Source{Type: "ip", Value: "192.0.2.10"}, p22),
 			reachRule("b", "allow", "host", anySrc, p22)}}, "host", true, Reach{Verdict: "open"}},
 		{"restricted then deny any", RuleSet{LAN: lan, DefaultPolicy: "allow", Rules: []Rule{
-			reachRule("a", "allow", "host", Source{Type: "ip", Value: "192.168.1.10"}, p22),
-			reachRule("b", "deny", "host", anySrc, p22)}}, "host", true, Reach{Verdict: "restricted", Sources: []string{"192.168.1.10"}}},
+			reachRule("a", "allow", "host", Source{Type: "ip", Value: "192.0.2.10"}, p22),
+			reachRule("b", "deny", "host", anySrc, p22)}}, "host", true, Reach{Verdict: "restricted", Sources: []string{"192.0.2.10"}}},
 		// A deny for one source leaves everyone else to the default.
 		{"partial deny under allow", RuleSet{LAN: lan, DefaultPolicy: "allow", Rules: []Rule{
-			reachRule("a", "deny", "host", Source{Type: "ip", Value: "192.168.1.66"}, p22)}}, "host", true, Reach{Verdict: "open"}},
+			reachRule("a", "deny", "host", Source{Type: "ip", Value: "192.0.2.66"}, p22)}}, "host", true, Reach{Verdict: "open"}},
 		// A deny that only holds at certain hours does not close the port.
 		{"scheduled deny under allow", RuleSet{LAN: lan, DefaultPolicy: "allow", Rules: []Rule{func() Rule {
 			r := reachRule("a", "deny", "host", anySrc, p22)
