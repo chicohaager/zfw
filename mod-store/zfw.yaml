@@ -72,10 +72,10 @@ version: 1.0.28
 artifacts:
   amd64:
     url: "https://github.com/chicohaager/zfw/releases/download/v{{version}}/zfw-{{version}}-amd64.tar.gz"
-    sha256: 9287b87dbe49779abbec16651be528a90eddd3e7d937eec025ea047a4063b08e
+    sha256: d1c9647da3dc07047210c54d5aec860b607cce63e5d6d94356ea32013b8816d5
   arm64:
     url: "https://github.com/chicohaager/zfw/releases/download/v{{version}}/zfw-{{version}}-arm64.tar.gz"
-    sha256: 6bf2e1d27f5129838436895ba849939569b87504fc1a513e3444465154cab847
+    sha256: ad03abf087e72ffe34b1d27b3c01e31d1313fd16679ab2273fd9983397e02ad2
 
 # UI-side metadata mirrors raw/usr/share/casaos/modules/zfw.json so the
 # Mod-Store listing renders identically to the installed module's
