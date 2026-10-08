@@ -56,6 +56,12 @@ manifest URL on every host so v0.3.9's update banner starts firing.
    rm -rf dist; sh build.sh                        # must reproduce every .sha256
    ```
 
+   **Cut from a regular checkout, never from a `git worktree`.** Measured
+   2026-10-08: in a linked worktree (`.git` is a file) `cyclonedx-gomod`
+   fails with `failed to determine version of main module: git: reference
+   not found`; build.sh only warns and ships the tarball without
+   `sbom.json`. The same call in the main checkout succeeds.
+
    Have `cyclonedx-gomod` on `PATH` for this, installed exactly as CI does
    (`go install -trimpath …@v1.12.0`): the SBOM records the tool's own
    binary hash, and without `-trimpath` that hash carries the install

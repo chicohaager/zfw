@@ -3,6 +3,10 @@ Description=ZFW - Host-Firewall UI & Security Dashboard
 # zimaos-gateway hosts the reverse-proxy route; registration retries anyway.
 After=zimaos-gateway.service network-online.target
 Wants=network-online.target
+# /DATA is a late bind mount on ZimaOS: without this line zfwd can start before
+# the engine (/DATA/zfw) and its data directory exist, and mkdir then hits the
+# read-only root. RequiresMountsFor orders the unit after exactly these mounts.
+RequiresMountsFor=/DATA/AppData/zfw /DATA/zfw
 
 [Service]
 Type=simple

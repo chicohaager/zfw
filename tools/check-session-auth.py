@@ -14,6 +14,11 @@ if the issuer scoping were dropped altogether.
 
     python3 tools/check-session-auth.py <host> --user <name> --password-file <f>
 
+Observed 2026-10-07 on a ZimaBoard 2 (ZimaOS v1.8.0-beta2): the access token is still
+an ES256 JWT (iss "zimaos"), but the refresh token is now opaque — 43 chars,
+no dots. That is an expected case, reported as "refresh=opaque"; it must still
+get 401. JWT refresh tokens (1.7.x) are still shown with their `iss`.
+
 The password is read from a file and never printed; neither is any token.
 Exit 0 = both directions correct, exit 1 = something to fix.
 """
@@ -38,8 +43,17 @@ def post(host, path, obj):
 
 
 def claims(token):
-    seg = token.split(".")[1]
-    return json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
+    """Return the JWT payload as a dict, or None if the token is not a JWT
+    (opaque, or a payload that does not decode to a JSON object)."""
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    seg = parts[1]
+    try:
+        out = json.loads(base64.urlsafe_b64decode(seg + "=" * (-len(seg) % 4)))
+    except ValueError:
+        return None
+    return out if isinstance(out, dict) else None
 
 
 def call_zfw(host, authorization=None):
@@ -75,8 +89,17 @@ def main():
     tokens = body["data"]["token"]
     access, refresh = tokens["access_token"], tokens["refresh_token"]
 
-    print(f"host {args.host}: access iss={claims(access)['iss']!r}, "
-          f"refresh iss={claims(refresh)['iss']!r}")
+    access_claims = claims(access)
+    if access_claims is None:
+        print(f"FAIL: access token is not a JWT ({len(access)} chars) — "
+              "ZFW cannot verify it; the session format has changed.",
+              file=sys.stderr)
+        return 1
+    refresh_claims = claims(refresh)
+    refresh_desc = (f"iss={refresh_claims.get('iss')!r}" if refresh_claims
+                    else f"opaque ({len(refresh)} chars)")
+    print(f"host {args.host}: access iss={access_claims.get('iss')!r}, "
+          f"refresh={refresh_desc}")
 
     failures = []
 
