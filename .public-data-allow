@@ -64,3 +64,6 @@ THREAT-MODEL.md:Kuehn
 mod-store/zfw.yaml:Kuehn
 mod-store/zfw.yaml:holger.kuehn
 mod-store/zfw.yaml:holger.kuehn@virtual-services.info
+# RFC 2544 benchmark range: the netns test needs a fourth network outside the LAN; the three RFC 5737 nets are taken by its topology
+internal/compiler/apps_integration_test.go:198.18.0.1
+internal/compiler/apps_integration_test.go:198.18.0.2

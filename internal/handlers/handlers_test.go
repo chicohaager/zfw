@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/chicohaager/zfw/internal/apps"
 	"github.com/chicohaager/zfw/internal/firewall"
 	"github.com/chicohaager/zfw/internal/peers"
 	"github.com/chicohaager/zfw/internal/rules"
@@ -51,6 +52,8 @@ type fakeFirewall struct {
 	commitCalls int
 	revertCalls int
 	saveCalls   int
+	appsCalls   int
+	appsErr     error
 }
 
 func (f *fakeFirewall) Status(ctx context.Context) firewall.Status {
@@ -106,6 +109,10 @@ func newTestServer(t *testing.T, fw *fakeFirewall) (*Server, string) {
 	s.dockerContainers = func(context.Context) ([]system.DockerContainer, error) {
 		return nil, nil
 	}
+	// Same for the new-app prompt's inventory, and no dashboard cards.
+	s.appPorts = func(context.Context) ([]system.AppPort, error) { return nil, nil }
+	s.appTitle = func(string) string { return "" }
+	s.notifier = apps.Notifier{}
 	return s, rulesPath
 }
 
@@ -1169,4 +1176,9 @@ func TestDenyPolicyEmitsPerPortDeny(t *testing.T) {
 
 func (f *fakeFirewall) MatchSetCounters(_ context.Context, set string) firewall.Counters {
 	return f.counters[set]
+}
+
+func (f *fakeFirewall) Apps(context.Context) (string, error) {
+	f.appsCalls++
+	return "", f.appsErr
 }

@@ -106,6 +106,11 @@ func CompileRestoreScript(rs rules.RuleSet, pp system.PublishedPorts, geoFiles m
 
 	// IPv4 filter table — test then atomically swap.
 	b.WriteString("\n# ===== IPv4 filter (atomic restore) =====\n")
+	// The app chains are jump targets in the documents below but are never
+	// declared there: a declared chain is flushed by the restore, and their
+	// content belongs to `zfw apps`, not to an apply (see apps.go).
+	b.WriteString(appsChainCreate("$IPT", AppsChainHost))
+	b.WriteString(appsChainCreate("$IPT", AppsChainDocker))
 	b.WriteString(`T4="$(mktemp)"` + "\n")
 	b.WriteString("cat > \"$T4\" <<'ZFW_RESTORE_V4'\n")
 	b.WriteString(v4)
@@ -117,6 +122,7 @@ func CompileRestoreScript(rs rules.RuleSet, pp system.PublishedPorts, geoFiles m
 	// IPv6 filter table — only when an ip6tables-restore backend exists.
 	b.WriteString("\n# ===== IPv6 filter (atomic restore) =====\n")
 	b.WriteString(`if [ -n "$IPT6R" ]; then` + "\n")
+	b.WriteString("  " + appsChainCreate("$IPT6", AppsChainHost6))
 	b.WriteString(`  T6="$(mktemp)"` + "\n")
 	b.WriteString("  cat > \"$T6\" <<'ZFW_RESTORE_V6'\n")
 	b.WriteString(v6)
@@ -297,6 +303,7 @@ func zfwInRules(rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool, ext
 		out = append(out, "-j RETURN")
 	} else {
 		out = append(out,
+			appsJump(AppsChainHost),
 			"-m conntrack --ctstate NEW -j LOG --log-prefix \"ZFW-IN-DROP \" --log-level 6",
 			"-j DROP")
 	}
@@ -379,6 +386,7 @@ func dockerUserRules(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPorts
 		out = append(out, dockerLines(r, all)...)
 	}
 	if rs.DefaultPolicy == "deny" {
+		out = append(out, appsJump(AppsChainDocker))
 		out = append(out, denyLines(pp, "ZFW-DOCK-DROP ")...)
 		out = append(out, dnatGuardLines("ZFW-DOCK-DROP ")...)
 	}
@@ -509,6 +517,7 @@ func zfwIn6Rules(rs rules.RuleSet, rl []rules.Rule, extraBypass []string) []stri
 		out = append(out, "-j RETURN")
 	} else {
 		out = append(out,
+			appsJump(AppsChainHost6),
 			"-m conntrack --ctstate NEW -j LOG --log-prefix \"ZFW-IN6-DROP \" --log-level 6",
 			"-j DROP")
 	}

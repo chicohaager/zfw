@@ -122,3 +122,20 @@ func appendUnique(xs []string, v string) []string {
 	}
 	return append(xs, v)
 }
+
+// Decides reports whether any enabled inbound rule names this port on this
+// protocol for this chain — whatever its action, source or schedule. It is
+// the new-app check's (internal/apps) definition of "somebody already chose":
+// a port no rule mentions is only closed by the default policy, so nobody has
+// answered for it yet; a port an allow or a deny names has an answer, and the
+// prompt must not override it. A container port is published, so a zone-auto
+// list rule reaches DOCKER-USER (dockerKnown true), as in the compiler.
+func Decides(rs RuleSet, zone, proto string, port int) bool {
+	for _, r := range rs.Rules {
+		if inbound(r) && protoMatch(r.Protocol, proto) && portMatch(r.Ports, port) &&
+			reachesChain(r, zone, true) {
+			return true
+		}
+	}
+	return false
+}

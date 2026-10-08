@@ -451,6 +451,8 @@ input:focus, select:focus {
 .badge-restricted { background: var(--warn-tint); color: var(--warn); border: 1px solid var(--warn); }
 .badge-unverified { background: var(--neutral-tint); color: var(--warn); border: 1px dashed var(--warn); }
 .badge-pending    { background: transparent; color: var(--text-muted); border: 1px dashed var(--text-muted); margin-left: 4px; }
+/* v1.0.28 new-app prompt: a port waiting for the operator's answer */
+.badge-decide     { background: var(--warn-tint); color: var(--warn); border: 1px dashed var(--warn); margin-left: 4px; font-weight: 600; }
 
 /* ---------- tables ---------- */
 .tbl {
@@ -695,3 +697,28 @@ input:focus, select:focus {
     transition-duration: .001ms !important;
   }
 }
+
+/* ---------- new app ports (v1.0.28) ---------- */
+.apps-banner {
+  margin: 0 0 14px; padding: 10px 14px;
+  background: var(--warn-tint); color: var(--warn);
+  border: 1px solid var(--warn); border-radius: var(--card-radius-sm);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+}
+.apps-banner[hidden] { display: none; }
+.apps-banner b { color: var(--text); }
+.apps-banner button { margin-left: auto; }
+.apps-panel {
+  margin: 0 0 18px; padding: 14px 16px;
+  background: var(--card-bg); border: 1px solid var(--card-border);
+  border-radius: var(--card-radius-sm);
+}
+.apps-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 8px; }
+.apps-head h3 { margin: 0; font-size: 15px; }
+.apps-mode { font-size: 13px; color: var(--text-muted); }
+.apps-mode select { margin-left: 6px; }
+.app-answer { display: inline-flex; gap: 4px; margin-right: 6px; flex-wrap: wrap; }
+.app-btn-any   { border-color: var(--warn); color: var(--warn); }
+.app-btn-block { border-color: var(--danger); color: var(--danger); }
+.exp-app { display: inline-block; margin-left: 6px; font-size: 12px; color: var(--text-muted); }
+

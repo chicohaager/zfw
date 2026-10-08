@@ -143,6 +143,19 @@ marks a container port published after the last apply: under the Deny default
 it is already closed by the catch-all for new container ports, and opens only
 once a rule allows it and you apply.
 
+**New app ports (v1.0.28).** A port a new app opened that no rule covers carries a
+**decide** tag, appears in the *New app ports* panel at the top of the tab and in a
+banner above all tabs, and — while a ZimaOS dashboard is open — as a card there. Until
+you answer it is reachable from your LAN only; switch the panel's mode to *blocked* if
+you prefer the strict behaviour of v1.0.27. Answer with **LAN only**, **Everyone** or
+**Block**: the answer becomes a normal rule (named after the app and port) and works
+immediately, without Safe-Apply. Two things to know:
+
+- **Everyone** means every source that can reach the host. From the internet that is
+  only true if your router forwards the port or a tunnel points at it — but then it is.
+- Answer before editing rules, or save your edits first: the answer is written into
+  `rules.json`, so ZFW refuses it while the Rules tab holds unsaved changes.
+
 Prioritise services that ship with **no authentication** — log viewers,
 metrics dashboards, noVNC / browser-desktop images, admin panels, and the
 ZimaOS VM VNC console (port 5900+, no password by default). Use the

@@ -31,6 +31,8 @@
     <div id="status" role="status" aria-live="polite"></div>
   </header>
 
+  <div id="apps-banner" class="apps-banner" role="alert" hidden></div>
+
   <nav class="tabs" role="tablist">
     <button class="tab-btn active" data-tab="firewall" role="tab">Firewall</button>
     <button class="tab-btn" data-tab="rules" role="tab">Rules</button>
@@ -80,7 +82,25 @@
         <span class="badge badge-unverified">unverified</span> firewall active, but no record of what was applied &mdash; apply once &middot;
         <span class="badge badge-local">localhost</span> local only.
         <span class="badge badge-pending">not yet applied</span> marks ports where your saved rules differ from what is live.
+        <span class="badge badge-decide">decide</span> marks a port a new app opened that no rule covers yet.
       </p>
+      <div id="apps-panel" class="apps-panel">
+        <div class="apps-head">
+          <h3>New app ports</h3>
+          <label class="apps-mode">Until you decide, a new app's port is
+            <select id="apps-mode">
+              <option value="lan">reachable from your LAN</option>
+              <option value="block">blocked</option>
+            </select>
+          </label>
+        </div>
+        <p class="panel-hint">
+          When an app (from the ZimaOS store or started by hand) publishes a port that no rule covers, ZFW asks here
+          and on the ZimaOS dashboard. Each answer is saved as a normal rule and takes effect right away, without an apply.
+          &ldquo;Everyone&rdquo; means every source that can reach this host &mdash; from the internet only if your router forwards the port or a tunnel points at it.
+        </p>
+        <div id="apps-list"><div class="loading">Loading&hellip;</div></div>
+      </div>
       <div id="exposure-list"><div class="loading">Loading&hellip;</div></div>
     </section>
 

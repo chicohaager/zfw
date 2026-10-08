@@ -5,7 +5,7 @@
 # compiled.sh. This engine is the privileged executor — it runs that script
 # and owns the dead-man / revert safety machinery.
 #
-# Usage:  zfw {apply [--safe] | commit | revert | status | boot}
+# Usage:  zfw {apply [--safe] | commit | revert | status | boot | apps}
 set -u
 
 # Pin a deterministic PATH: the dead-man auto-revert runs as a systemd-run
@@ -39,6 +39,11 @@ PERSIST_UNIT="/etc/systemd/system/zfw.service"
 # secure_file before they are executed, like compiled.sh.
 APPLIED="$SELF_DIR/applied.sh"
 COMMITTED="$SELF_DIR/committed.sh"
+# The new-app prompt (v1.0.28). The daemon writes apps.sh, which rewrites
+# only the three app chains (ZFW-APPS, ZFW-APPS-IN, ZFW-APPS-IN6); an apply
+# creates and jumps to them but never flushes them. `zfw apps` runs it — no
+# full apply, so no saved-but-untested edit goes live with an answer.
+APPS="${ZFW_APPS:-$SELF_DIR/apps.sh}"
 
 # Backend: match whichever iptables backend Docker actually uses (legacy on
 # ZimaOS<=1.6.1, nft on >=1.6.2). Hardcoding legacy silently no-ops after the
@@ -167,7 +172,17 @@ revert(){
       $IPT6 -F DOCKER-USER 2>/dev/null || true
       $IPT6 -A DOCKER-USER -j RETURN 2>/dev/null || true
     fi
+    # App chain (v1.0.28). Its only jump lived in ZFW-IN6, deleted above.
+    $IPT6 -F ZFW-APPS-IN6 2>/dev/null || true
+    $IPT6 -X ZFW-APPS-IN6 2>/dev/null || true
   fi
+  # App chains (v1.0.28). Their jumps lived in DOCKER-USER (restored to stock
+  # above) and ZFW-IN (deleted above), so they are unreferenced by now. Left
+  # behind they would be harmless, but "reverted" means no ZFW chain remains.
+  $IPT -F ZFW-APPS 2>/dev/null || true
+  $IPT -X ZFW-APPS 2>/dev/null || true
+  $IPT -F ZFW-APPS-IN 2>/dev/null || true
+  $IPT -X ZFW-APPS-IN 2>/dev/null || true
 }
 
 write_persist_unit(){
@@ -351,6 +366,14 @@ case "${1:-}" in
     apply_or_die systemctl enable zfw.service
     log "committed — deadman cancelled, boot-persistence enabled (zfw.service)"
     ;;
+  apps)
+    # Rewrite the app chains from the daemon's apps.sh (new-app prompt). The
+    # script touches only those chains and only if they exist.
+    [ -r "$APPS" ] || { echo "[zfw] ERROR: app script missing: $APPS" >&2; exit 1; }
+    secure_file "$APPS" || exit 1
+    bash "$APPS" || { echo "[zfw] ERROR: updating the app chains failed" >&2; exit 1; }
+    exit 0
+    ;;
   revert)
     revert
     # Disable + remove the boot-restore unit so a fresh boot returns to the
@@ -371,10 +394,13 @@ case "${1:-}" in
     [ -n "$IPT6" ] && { echo "--- ZFW-IN6 ---"; $IPT6 -S ZFW-IN6 2>/dev/null || echo "(not loaded)"; }
     [ -n "$IPT6" ] && { echo "--- ZFW-OUT6 ---"; $IPT6 -S ZFW-OUT6 2>/dev/null || echo "(not loaded)"; }
     [ -n "$IPT6" ] && { echo "--- DOCKER-USER (IPv6) ---"; $IPT6 -S DOCKER-USER 2>/dev/null || echo "(absent)"; }
+    echo "--- ZFW-APPS ---";    $IPT -S ZFW-APPS 2>/dev/null || echo "(not loaded)"
+    echo "--- ZFW-APPS-IN ---"; $IPT -S ZFW-APPS-IN 2>/dev/null || echo "(not loaded)"
+    [ -n "$IPT6" ] && { echo "--- ZFW-APPS-IN6 ---"; $IPT6 -S ZFW-APPS-IN6 2>/dev/null || echo "(not loaded)"; }
     echo "--- deadman ---";     systemctl is-active "${DEADMAN}.timer" 2>/dev/null || echo "inactive"
     ;;
   *)
-    echo "usage: zfw {apply [--safe] | commit | revert | status | boot}"
+    echo "usage: zfw {apply [--safe] | commit | revert | status | boot | apps}"
     exit 1
     ;;
 esac

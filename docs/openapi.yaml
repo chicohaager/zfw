@@ -144,11 +144,40 @@ components:
           description: The only sources allowed to connect, when reach is restricted.
         pending:
           type: string
-          enum: [rules-not-applied, published-after-apply]
+          enum: [rules-not-applied, published-after-apply, app-decision]
           description: >-
             Present when the saved rules give a different answer than the live ruleset
-            (rules-not-applied), or when a container port was published after the last apply
-            and its live verdict comes from the DNAT guard (published-after-apply).
+            (rules-not-applied), when a container port was published after the last apply
+            and its live verdict comes from the DNAT guard (published-after-apply), or when
+            a new app opened the port and the operator has not answered yet (app-decision, v1.0.28).
+        app:
+          type: object
+          description: Set when the port belongs to the new-app prompt (v1.0.28).
+          properties:
+            key:   { type: string, example: "docker/tcp/8086/casadrop" }
+            title: { type: string, example: "CasaDrop" }
+            state: { type: string, enum: [pending, lan, any, block] }
+            mode:  { type: string, enum: [lan, block], description: What a pending port does until answered. }
+            open:  { type: boolean, description: An app chain admits the port right now. }
+    AppEntry:
+      type: object
+      description: >-
+        A port an app opened that no rule covered (v1.0.28). docker zone = published container
+        port, host zone = a network_mode host container's listener.
+      properties:
+        key:       { type: string, example: "docker/tcp/8086/casadrop" }
+        container: { type: string }
+        app_id:    { type: string, description: "ZimaOS app id (io.zimaos.app.id), empty for a hand-started container" }
+        title:     { type: string }
+        zone:      { type: string, enum: [docker, host] }
+        proto:     { type: string, enum: [tcp, udp] }
+        port:      { type: integer }
+        state:     { type: string, enum: [pending, lan, any, block] }
+        rule_id:   { type: string, description: The rule the answer was saved as. }
+        since:     { type: string, format: date-time }
+        last_seen: { type: string, format: date-time }
+        present:   { type: boolean, description: The container offers the port right now. }
+        open:      { type: boolean, description: An app chain admits the port right now. }
     Finding:
       type: object
       properties:
@@ -455,6 +484,60 @@ paths:
           content:
             application/json:
               schema: { type: array, items: { $ref: '#/components/schemas/Socket' } }
+
+  /api/apps:
+    get:
+      summary: The new-app prompt (v1.0.28) — ports apps opened that no rule covers, and the pending mode.
+      responses:
+        '200':
+          description: Mode and entries.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mode:    { type: string, enum: [lan, block] }
+                  entries: { type: array, items: { $ref: '#/components/schemas/AppEntry' } }
+    post:
+      summary: Set what an unanswered new app port does until it is answered.
+      description: >-
+        lan (default) = reachable from the configured LAN; block = closed, as before v1.0.28.
+        Takes effect at once through the app chains (no apply).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [lan, block] }
+      responses:
+        '200': { description: Saved }
+        '400': { description: Unknown mode }
+
+  /api/apps/decide:
+    post:
+      summary: Answer the new-app prompt for one port.
+      description: >-
+        Saves the answer as an ordinary rule in rules.json (replacing an earlier answer for the
+        same port) and puts it into effect at once through the app chains — without an apply,
+        so no other saved edit goes live with it. At the next apply the rule itself takes over.
+        lan needs a configured LAN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key, answer]
+              properties:
+                key:    { type: string, example: "docker/tcp/8086/casadrop" }
+                answer: { type: string, enum: [lan, any, block] }
+      responses:
+        '200': { description: Answered; the saved rule is returned }
+        '400': { description: Unknown answer, or lan without a configured LAN }
+        '404': { description: No such entry (the app may have been removed) }
 
   /api/audit:
     get:

@@ -373,6 +373,11 @@ func (m *Manager) engine(ctx context.Context, args ...string) (string, error) {
 	return runEngine(ctx, m.Bin, args...)
 }
 
+// Apps rewrites the app chains from apps.sh (the new-app prompt, v1.0.28).
+func (m *Manager) Apps(ctx context.Context) (string, error) {
+	return m.engine(ctx, "apps")
+}
+
 // Apply runs the engine. When safe is true a 120s dead-man auto-revert is armed.
 func (m *Manager) Apply(ctx context.Context, safe bool) (string, error) {
 	args := []string{"apply"}
