@@ -175,6 +175,8 @@ to a finding in `SECURITY-REPORT.md`.
 | Container-bound rules resolve to the *current* host-published ports at every Recompile — a container that swaps ports does not silently lose its rule | (v0.5.7) | `internal/handlers.Server.Recompile` |
 | Outbound rules for `Zone=docker|auto` emit on a `ZFW-FWD-OUT` chain hooked into FORWARD — a compromised container's egress can be blocked at the host level without the container needing to cooperate | (v0.5.6) | `internal/compiler/compiler.go` |
 | Container bypass list (lo, docker0, br-+, virbr0, tailscale0, zt+, wg+, tun0) does not include the LAN — a container that wants to phone home outbound still hits ZFW-FWD-OUT user rules | (v0.5.4) | `internal/compiler/compiler.go` |
+| Under default-deny, `DOCKER-USER` (IPv4 and IPv6) ends in a DNAT guard: a new connection Docker DNATs towards `docker0`/`br-+` that no bypass, rule or per-port deny decided is logged and dropped — so a port published after the last apply is closed, not open until the next apply | (v1.0.27) | `internal/compiler.dnatGuardLines`; tests `dnatguard_test.go`, `TestDNATGuardLive` (netns) |
+| IPv6 link-local sources (`fe80::/10`) pass through the rules like any other source; only ICMPv6, DHCPv6-client and mDNS from the link are exempt | (v1.0.27) | `internal/compiler.linkLocalMDNS`; tests `TestV6LinkLocalNotBlanketAllowed`, `TestLinkLocalFilteredLive` (netns) |
 
 ### 5.5 Multi-host & outbound trust (A5)
 
@@ -213,7 +215,8 @@ should treat each as a known limit, not a missing control.
 | `/proc/net/nf_conntrack` only populated after first Safe-Apply | (v0.5.0 + tester report) | The conntrack kernel module loads on first ZFW iptables `-m conntrack` rule. The Connections tab shows an explanatory empty state until then. |
 | GeoIP flags require ≥1 country `.zone` file cached | (v0.4.5) | The geo manager downloads only countries that user-configured rules reference. Tester-observed: a host behind NAT with no country rules sees no flags. Documented in `THREAT-MODEL.md` itself (this very row) and on the Events tab. |
 | Outbound rules cannot default-deny | (v0.5.6 design invariant) | A blanket OUTPUT/FORWARD policy of DROP would brick the host's own DNS / NTP / Docker registry pulls and the gateway forwarding. Outbound is per-rule only — by construction. |
-| No watcher for live Docker port changes | (v0.5.7) | Container rule binding is resolved at Recompile; user re-runs Safe-Apply after a container port remap. A `docker events` watcher is a v1.x polish (auto-apply would skip the dead-man, which the design refuses). |
+| No auto-apply on live Docker port changes | (v0.5.7, v1.0.13, v1.0.27) | `dockerwatch` (v1.0.13) recompiles on container events but never applies — auto-apply would skip the dead-man, which the design refuses. The live chain therefore lags the inventory until the next apply. Since v1.0.27 that lag fails closed under default-deny (DNAT guard, §5.4) and the Exposure view marks such ports `new since apply`. A container-bound rule whose container moved to a new port stays closed on the new port until the next apply. |
+| Exposure/Audit trust the engine's record of what it applied | (v1.0.27) | Reach is judged from the `# zfw-live:` record inside `applied.sh`. Without a boot-persistence unit, a dockerd restart flushes `DOCKER-USER` while `applied.sh` still describes it — Exposure then reports Docker ports as blocked that are not. Commit (Confirm) installs the unit that re-applies on every dockerd restart; hosts that only ever plain-Apply without confirming are the exposed case. |
 | Mod-Store submission on hold | (v0.4.0) | Daemon-side complete; the PR against `IceWhaleTech/Mod-Store` is a manual operator action. Documented in `MOD-STORE.md`. |
 
 ---
