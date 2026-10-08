@@ -130,6 +130,7 @@ func emitHostChain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, docker
 	b.WriteString("# ===== ZFW-IN (host-native services) =====\n")
 	b.WriteString("$IPT -N ZFW-IN 2>/dev/null || true\n")
 	b.WriteString("$IPT -F ZFW-IN\n")
+	b.WriteString(appsChainCreate("$IPT", AppsChainHost))
 	hostBypass := []string{
 		"-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
 		"-m conntrack --ctstate INVALID -j DROP",
@@ -183,6 +184,7 @@ func emitHostChain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, docker
 		// logged (an established connection's later packets would have hit
 		// the ESTABLISHED,RELATED ACCEPT at the top of the chain, so by the
 		// time a packet reaches here it is almost always a fresh probe).
+		fmt.Fprintf(b, "$IPT -A ZFW-IN %s\n", appsJump(AppsChainHost))
 		b.WriteString("$IPT -A ZFW-IN -m conntrack --ctstate NEW -j LOG --log-prefix \"ZFW-IN-DROP \" --log-level 6\n")
 		b.WriteString("$IPT -A ZFW-IN -j DROP\n")
 	}
@@ -196,6 +198,7 @@ func emitDockerChain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, pp s
 	b.WriteString("# ===== DOCKER-USER (published container ports) =====\n")
 	b.WriteString("if $IPT -L DOCKER-USER -n >/dev/null 2>&1; then\n")
 	b.WriteString("  $IPT -F DOCKER-USER\n")
+	b.WriteString("  " + appsChainCreate("$IPT", AppsChainDocker))
 	for _, line := range dockerUserRules(rs, rl, pp, extraBypass) {
 		fmt.Fprintf(b, "  $IPT -A DOCKER-USER %s\n", line)
 	}
@@ -218,6 +221,7 @@ func emitV6Chain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, extraByp
 	b.WriteString(`if [ -n "$IPT6" ]; then` + "\n")
 	b.WriteString("  $IPT6 -N ZFW-IN6 2>/dev/null || true\n")
 	b.WriteString("  $IPT6 -F ZFW-IN6\n")
+	b.WriteString("  " + appsChainCreate("$IPT6", AppsChainHost6))
 	b.WriteString("  $IPT6 -A ZFW-IN6 -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN\n")
 	b.WriteString("  $IPT6 -A ZFW-IN6 -m conntrack --ctstate INVALID -j DROP\n")
 	b.WriteString("  $IPT6 -A ZFW-IN6 -i lo -j RETURN\n")
@@ -266,6 +270,7 @@ func emitV6Chain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, extraByp
 	if rs.DefaultPolicy == "allow" {
 		b.WriteString("  $IPT6 -A ZFW-IN6 -j RETURN\n")
 	} else {
+		fmt.Fprintf(b, "  $IPT6 -A ZFW-IN6 %s\n", appsJump(AppsChainHost6))
 		b.WriteString("  $IPT6 -A ZFW-IN6 -m conntrack --ctstate NEW -j LOG --log-prefix \"ZFW-IN6-DROP \" --log-level 6\n")
 		b.WriteString("  $IPT6 -A ZFW-IN6 -j DROP\n")
 	}

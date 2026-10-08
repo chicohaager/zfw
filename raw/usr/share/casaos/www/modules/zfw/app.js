@@ -37,13 +37,18 @@ async function api(path, opts = {}) {
 }
 
 /* ---------- tabs ---------- */
-$$('.tab-btn').forEach(btn => btn.addEventListener('click', () => {
+function showTab(name) {
+  const btn = $(`.tab-btn[data-tab="${name}"]`);
+  if (!btn) return;
   $$('.tab-btn').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); });
   $$('.tab-panel').forEach(p => p.classList.remove('active'));
   btn.classList.add('active');
   btn.setAttribute('aria-selected', 'true');
-  $('#tab-' + btn.dataset.tab).classList.add('active');
-}));
+  $('#tab-' + name).classList.add('active');
+}
+$$('.tab-btn').forEach(btn => btn.addEventListener('click', () => showTab(btn.dataset.tab)));
+// The ZimaOS dashboard card for a new app port opens index.html#apps.
+if (location.hash === '#apps') showTab('exposure');
 
 /* ---------- firewall ---------- */
 function fwItem(label, val, kind) {
@@ -689,6 +694,10 @@ async function saveRules() {
     await api('/rules', { method: 'POST', body: JSON.stringify(ruleSet) });
     setStatus('Rules saved — now Safe-Apply on the Firewall tab', 'ok');
     await loadRules();
+    // Exposure and Audit compare saved with live: a save changes their answer
+    // ("not yet applied") although nothing was applied (fixed in v1.0.28).
+    await runTab('exposure', loadExposure);
+    await runTab('audit', loadAudit);
   } catch (e) {
     setStatus('Error: ' + e.message, 'err');
   }
@@ -985,7 +994,7 @@ function saveRuleFromEditor() {
   }
   closeRuleEditor();
   markDirty();
-  setStatus('Rule applied — don’t forget “Save rules”.', 'ok');
+  setStatus('Rule added — click “Save rules” to keep it.', 'ok');
 }
 
 $('#rm-cancel').addEventListener('click', closeRuleEditor);
@@ -1024,6 +1033,7 @@ async function loadExposure() {
   const pendingText = {
     'rules-not-applied': 'Your saved rules give a different answer for this port — they are not applied yet. Click Safe-Apply.',
     'published-after-apply': 'This container port was published after the last apply. It is closed by the catch-all for new container ports until a rule allows it and you apply.',
+    'app-decision': 'A new app opened this port and no rule covers it yet. Decide who may reach it — the answer takes effect right away.',
   };
   const rows = d.map(s => {
     // restricted still counts as exposed: someone on the network can connect.
@@ -1033,15 +1043,18 @@ async function loadExposure() {
     let title = '';
     if (s.reach === 'restricted') title = 'Reachable only from: ' + (s.sources || []).join(', ');
     if (s.reach === 'unverified') title = 'The firewall is active, but ZFW has no record of what it applied (first start after an update, or applied by an older version). Apply once to verify.';
+    const pendLabel = { 'published-after-apply': 'new since apply', 'app-decision': 'decide' }[s.pending] || 'not yet applied';
     const pend = s.pending
-      ? ` <span class="badge badge-pending" title="${esc(pendingText[s.pending] || s.pending)}">${s.pending === 'published-after-apply' ? 'new since apply' : 'not yet applied'}</span>`
+      ? ` <span class="badge ${s.pending === 'app-decision' ? 'badge-decide' : 'badge-pending'}" title="${esc(pendingText[s.pending] || s.pending)}">${pendLabel}</span>`
       : '';
+    const appName = s.app ? ` <span class="exp-app" title="${esc(s.app.key)}">${esc(s.app.title)}</span>` : '';
     return `<tr>
       <td class="mono">${esc(s.port)}</td>
-      <td>${esc(s.proc || '—')}</td>
+      <td>${esc(s.proc || '—')}${appName}</td>
       <td class="mono">${esc(s.bind)}</td>
       <td><span class="badge ${cls}"${title ? ` title="${esc(title)}"` : ''}>${lbl}</span>${pend}</td>
       <td class="exp-actions">
+        ${s.pending === 'app-decision' && s.app ? appButtons(s.app.key) : ''}
         <button class="btn-secondary exp-rule" data-port="${esc(s.port)}" title="Open rule editor pre-filled for this port">+ Rule</button>
         <button class="btn-secondary exp-deny" data-port="${esc(s.port)}" title="Open rule editor pre-filled to block this port from the LAN">&rarr; Deny</button>
       </td>
@@ -1060,7 +1073,101 @@ async function loadExposure() {
     () => openRuleEditorForPort(parseInt(b.dataset.port, 10))));
   $$('#exposure-list .exp-deny').forEach(b => b.addEventListener('click',
     () => openDenyEditorForPort(parseInt(b.dataset.port, 10))));
+  wireAppButtons($('#exposure-list'));
 }
+
+/* ---------- new app ports (v1.0.28) ---------- */
+// A container that publishes a port no rule covers is asked about here, in
+// the banner above the tabs and on the ZimaOS dashboard. Each answer becomes
+// an ordinary rule (Rules tab) and takes effect at once through ZFW's app
+// chains — no apply, so no other saved-but-untested edit goes live with it.
+const appAnswerTitle = {
+  lan: 'Reachable from your LAN only',
+  any: 'Reachable from every source that can reach this host',
+  block: 'Closed for everyone',
+};
+function appButtons(key) {
+  return `<span class="app-answer">` +
+    `<button class="btn-secondary app-btn" data-key="${esc(key)}" data-answer="lan" title="${appAnswerTitle.lan}">LAN only</button>` +
+    `<button class="btn-secondary app-btn app-btn-any" data-key="${esc(key)}" data-answer="any" title="${appAnswerTitle.any}">Everyone</button>` +
+    `<button class="btn-secondary app-btn app-btn-block" data-key="${esc(key)}" data-answer="block" title="${appAnswerTitle.block}">Block</button>` +
+    `</span>`;
+}
+function wireAppButtons(root) {
+  if (!root) return;
+  root.querySelectorAll('.app-btn').forEach(b => b.addEventListener('click', () => decideApp(b.dataset.key, b.dataset.answer)));
+}
+async function decideApp(key, answer) {
+  // The answer is written into rules.json on the server. Unsaved edits in the
+  // Rules tab would overwrite it on their next "Save rules" — refuse instead.
+  if (rulesDirty) {
+    setStatus('Save or discard your unsaved rule changes first — the answer is saved as a rule.', 'err');
+    showTab('rules');
+    return;
+  }
+  setStatus('Saving answer…');
+  try {
+    await api('/apps/decide', { method: 'POST', body: JSON.stringify({ key, answer }) });
+    setStatus({ lan: 'Saved: LAN only', any: 'Saved: open to everyone', block: 'Saved: blocked' }[answer] + ' — in effect now, and kept as a rule.', 'ok');
+  } catch (e) {
+    setStatus('Error: ' + e.message, 'err');
+  }
+  await runTab('apps', loadApps);
+  await runTab('rules', loadRules);
+  await runTab('exposure', loadExposure);
+  await runTab('audit', loadAudit);
+}
+async function loadApps() {
+  const d = await api('/apps');
+  const mode = $('#apps-mode');
+  if (mode && document.activeElement !== mode) mode.value = d.mode || 'lan';
+  const entries = d.entries || [];
+  const pending = entries.filter(e => e.state === 'pending' && e.present);
+  const answered = entries.filter(e => e.state !== 'pending' && e.present);
+  const word = { lan: 'LAN only', any: 'everyone', block: 'blocked' };
+  const row = e => `<tr>
+      <td>${esc(e.title)}</td>
+      <td class="mono">${esc(e.port)}/${esc(e.proto)}</td>
+      <td>${esc(e.zone === 'host' ? 'host network' : 'published')}</td>
+      <td>${e.state === 'pending'
+        ? `<span class="badge badge-decide">decide</span> ${e.open ? 'reachable from your LAN for now' : 'blocked for now'}`
+        : esc(word[e.state] || e.state)}</td>
+      <td class="exp-actions">${appButtons(e.key)}</td>
+    </tr>`;
+  const list = $('#apps-list');
+  if (list) {
+    list.innerHTML = (pending.length || answered.length)
+      ? `<table class="tbl"><thead><tr><th>App</th><th>Port</th><th>Kind</th><th>Status</th><th></th></tr></thead><tbody>${pending.map(row).join('')}${answered.map(row).join('')}</tbody></table>`
+      : '<div class="loading">No new app ports. ZFW asks here when an app opens a port no rule covers.</div>';
+    wireAppButtons(list);
+  }
+  const banner = $('#apps-banner');
+  if (banner) {
+    banner.hidden = pending.length === 0;
+    if (pending.length) {
+      const names = pending.slice(0, 3).map(e => `${esc(e.title)} (${esc(e.port)}/${esc(e.proto)})`).join(', ');
+      banner.innerHTML = `<b>${pending.length} new app port${pending.length === 1 ? '' : 's'} waiting for your decision:</b> ${names}${pending.length > 3 ? ', …' : ''} ` +
+        `<button class="btn-secondary" id="apps-banner-go">Decide</button>`;
+      $('#apps-banner-go').addEventListener('click', () => { showTab('exposure'); $('#apps-panel').scrollIntoView({ block: 'start' }); });
+    }
+  }
+}
+const appsModeSel = $('#apps-mode');
+if (appsModeSel) appsModeSel.addEventListener('change', async () => {
+  try {
+    await api('/apps', { method: 'POST', body: JSON.stringify({ mode: appsModeSel.value }) });
+    setStatus(appsModeSel.value === 'lan'
+      ? 'New app ports are reachable from your LAN until you decide.'
+      : 'New app ports stay blocked until you decide.', 'ok');
+  } catch (e) {
+    setStatus('Error: ' + e.message, 'err');
+  }
+  await runTab('apps', loadApps);
+  await runTab('exposure', loadExposure);
+});
+// The questions arrive while the page is open (an app is installed in
+// another tab); poll the small /apps endpoint, not the whole dashboard.
+setInterval(() => { if (!document.hidden) runTab('apps', loadApps); }, 30000);
 
 /* ---------- audit ---------- */
 async function loadAudit() {
@@ -1420,6 +1527,7 @@ async function refreshAll() {
   // silently wiping pending changes on a Refresh click.
   if (!rulesDirty) await runTab('rules', loadRules);
   await runTab('exposure',  loadExposure);
+  await runTab('apps',      loadApps);
   await runTab('events',    loadEvents);
   await runTab('conntrack', loadConntrack);
   await runTab('audit',     loadAudit);

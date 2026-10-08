@@ -117,7 +117,15 @@ func main() {
 	// compiled.sh stale until the next rules POST. The watcher recompiles
 	// (debounced) but never auto-applies — changing the live firewall
 	// stays an explicit operator action. No-op on hosts without docker.
-	go dockerwatch.New(srv.Recompile, slog.Default()).Run(ctx)
+	// A container event recompiles (as before) and re-judges which ports are
+	// new for the new-app prompt (v1.0.28); RunApps also re-sends the open
+	// questions' dashboard cards every minute (ZimaOS does not store them).
+	go dockerwatch.New(func(ctx context.Context) error {
+		err := srv.Recompile(ctx)
+		srv.KickApps()
+		return err
+	}, slog.Default()).Run(ctx)
+	go srv.RunApps(ctx, time.Minute)
 
 	// Keep blocklist feeds current without touching the rules: the refresh
 	// re-fetches, filters and swaps the live ipsets in place. It never

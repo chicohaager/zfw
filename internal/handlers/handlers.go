@@ -23,6 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/chicohaager/zfw/internal/apps"
 	"github.com/chicohaager/zfw/internal/audit"
 	"github.com/chicohaager/zfw/internal/buildinfo"
 	"github.com/chicohaager/zfw/internal/compiler"
@@ -56,6 +57,7 @@ type Firewall interface {
 	// MatchSetCounters sums the kernel counters of every ZFW rule matching
 	// the named ipset — what a feed has blocked so far.
 	MatchSetCounters(ctx context.Context, set string) firewall.Counters
+	Apps(ctx context.Context) (string, error) // rewrite the app chains (v1.0.28)
 }
 
 // Server holds the dependencies for the HTTP API.
@@ -111,6 +113,16 @@ type Server struct {
 	// the ESTABLISHED,RELATED fast-path. Both are guarded by mu. v1.0.21.
 	lastCompiled rules.RuleSet
 	lastApplied  rules.RuleSet
+
+	// New-app prompt (v1.0.28), see apps.go. appsMu serialises apps.json and
+	// the app chains; it is taken before s.mu, never inside it.
+	appsMu     sync.Mutex
+	appsKick   chan struct{} // one queued sync request, see KickApps
+	appsScript string        // last apps.sh the engine ran successfully
+	appPorts   func(context.Context) ([]system.AppPort, error)
+	appTitle   func(project string) string
+	notifier   apps.Notifier
+	clock      func() time.Time
 }
 
 // SetLogLevel wires the daemon's runtime log-level control into the
@@ -151,6 +163,11 @@ func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, feedsDir, historyPa
 		dockerPorts:      system.DockerPorts,
 		dockerContainers: system.DockerContainers,
 		listening:        system.Listening,
+		appPorts:         system.AppPorts,
+		appTitle:         defaultAppTitle,
+		notifier:         apps.Notifier{BusURLFile: apps.DefaultBusURLFile},
+		clock:            time.Now,
+		appsKick:         make(chan struct{}, 1),
 	}
 }
 
@@ -497,6 +514,8 @@ func (s *Server) Routes() http.Handler {
 	// list, openapi, update snapshot, rules GET, templates) stay
 	// uncapped — they hit memory + a small JSON encode at worst.
 	mux.HandleFunc("/api/exposure", s.rateLimitedGet(s.exposure))
+	mux.HandleFunc("/api/apps", s.rateLimited(s.appsHandler))
+	mux.HandleFunc("/api/apps/decide", s.rateLimited(s.appsDecide))
 	mux.HandleFunc("/api/feeds", s.rateLimitedGet(s.feedsList))
 	mux.HandleFunc("/api/feeds/refresh", s.rateLimited(s.feedsRefresh))
 	mux.HandleFunc("/api/audit", s.rateLimitedGet(s.auditHandler))
@@ -844,6 +863,7 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.lastApplied = s.lastCompiled
+	s.KickApps() // the applied inventory changed: re-judge what is new
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "applied", "output": out})
 }
@@ -875,6 +895,7 @@ func (s *Server) commit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.emitEvent("firewall.committed", nil)
+	s.KickApps()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "committed", "output": out})
 }
 
@@ -893,6 +914,7 @@ func (s *Server) revert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.emitEvent("firewall.reverted", nil)
+	s.KickApps()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reverted", "output": out})
 }
 
@@ -1009,6 +1031,9 @@ func (s *Server) exposure(w http.ResponseWriter, r *http.Request) {
 		// "published-after-apply" (the container port appeared after the
 		// last apply; the live verdict comes from the DNAT guard).
 		Pending string `json:"pending,omitempty"`
+		// App is set when the port belongs to the new-app prompt (v1.0.28);
+		// Pending is then "app-decision" while it is unanswered.
+		App *exposureApp `json:"app,omitempty"`
 	}
 
 	saved, rerr := rules.Load(s.rulesPath)
@@ -1043,6 +1068,7 @@ func (s *Server) exposure(w http.ResponseWriter, r *http.Request) {
 	// saved answer as if it were live (a later-published port read "blocked"
 	// while the live DOCKER-USER let it through).
 	live := s.liveSnapshot()
+	ov := s.appsOverlay(live)
 	out := make([]entry, 0, len(socks))
 	for _, sk := range socks {
 		e := entry{Socket: sk, Reach: "lan"}
@@ -1074,9 +1100,33 @@ func (s *Server) exposure(w http.ResponseWriter, r *http.Request) {
 				e.Pending = "rules-not-applied"
 			}
 		}
+		if a, ok := ov[overlayKey(zone, sk.Port)]; ok && sk.Scope != "local" && st.Active {
+			e.App = &exposureApp{Key: a.Key, Title: a.Title, State: string(a.State), Mode: a.Mode, Open: a.Active}
+			if a.Active && (e.Reach == "blocked" || e.Reach == "unverified") {
+				// The app chain admits it: from the LAN, or from anywhere.
+				e.Reach, e.Sources = "lan", nil
+			}
+			switch {
+			case a.State == apps.Pending:
+				e.Pending = "app-decision"
+			case e.Pending == "published-after-apply":
+				// Answered: open by the app chain, or closed by the guard as the
+				// answer asked. Either way nothing is waiting for the operator.
+				e.Pending = ""
+			}
+		}
 		out = append(out, e)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// exposureApp is the new-app prompt's view of one Exposure row.
+type exposureApp struct {
+	Key   string `json:"key"`
+	Title string `json:"title"`
+	State string `json:"state"` // pending | lan | any | block
+	Mode  string `json:"mode"`  // what a pending port does: lan | block
+	Open  bool   `json:"open"`  // an app chain admits it right now
 }
 
 // auditPolicy is the audit's reach oracle: a port counts as reachable when the
@@ -1088,14 +1138,17 @@ func (s *Server) exposure(w http.ResponseWriter, r *http.Request) {
 type auditPolicy struct {
 	saved rulesPolicy
 	live  *compiler.LiveSnapshot
+	apps  map[string]appOverlay // ports an app chain admits (v1.0.28)
 }
 
 func (p auditPolicy) HostOpen(port int) bool {
-	return p.saved.HostOpen(port) || (p.live != nil && liveReach(p.live, "host", port).Verdict != "closed")
+	return p.saved.HostOpen(port) || (p.live != nil && liveReach(p.live, "host", port).Verdict != "closed") ||
+		p.apps[overlayKey("host", port)].Active
 }
 
 func (p auditPolicy) DockerOpen(port int) bool {
-	return p.saved.DockerOpen(port) || (p.live != nil && liveReach(p.live, "docker", port).Verdict != "closed")
+	return p.saved.DockerOpen(port) || (p.live != nil && liveReach(p.live, "docker", port).Verdict != "closed") ||
+		p.apps[overlayKey("docker", port)].Active
 }
 
 func (s *Server) auditHandler(w http.ResponseWriter, r *http.Request) {
@@ -1107,7 +1160,8 @@ func (s *Server) auditHandler(w http.ResponseWriter, r *http.Request) {
 	// the firewall was active, regardless of the rules.
 	pol := s.portPolicy()
 	if rp, ok := pol.(rulesPolicy); ok {
-		pol = auditPolicy{saved: rp, live: s.liveSnapshot()}
+		snap := s.liveSnapshot()
+		pol = auditPolicy{saved: rp, live: snap, apps: s.appsOverlay(snap)}
 	}
 	findings := audit.FindingsWith(st, pol)
 
