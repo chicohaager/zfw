@@ -107,6 +107,12 @@ func TestAppChainsLive(t *testing.T) {
 					run(ap) + "P=answered\n" + appsProbes +
 					run(sp) + "P=reapplied\n" + appsProbes +
 					"echo '--- ZFW-APPS'; $IPT -S ZFW-APPS; echo '--- ZFW-APPS-IN'; $IPT -S ZFW-APPS-IN; echo '--- ZFW-APPS-IN6'; $IPT6 -S ZFW-APPS-IN6\n" +
+					// The engine's revert() alone (not its systemd half): afterwards
+					// no ZFW chain may remain, the app chains included.
+					"source <(sed -n '/^revert(){/,/^}/p' " + enginePath(t) + ")\nrevert\n" +
+					"for c in ZFW-IN ZFW-APPS ZFW-APPS-IN; do $IPT -L $c -n >/dev/null 2>&1 && echo \"left-after-revert $c\"; done\n" +
+					"$IPT6 -L ZFW-APPS-IN6 -n >/dev/null 2>&1 && echo 'left-after-revert ZFW-APPS-IN6'\n" +
+					"echo revert-checked\n" +
 					"kill $(jobs -p) 2>/dev/null || true\n"
 				fp := filepath.Join(dir, "run.sh")
 				if err := os.WriteFile(fp, []byte(full), 0o600); err != nil {
@@ -127,6 +133,9 @@ func TestAppChainsLive(t *testing.T) {
 					if got[probe] != w {
 						t.Errorf("%s: got %q, want %s", probe, got[probe], w)
 					}
+				}
+				if strings.Contains(string(out), "left-after-revert") || !strings.Contains(string(out), "revert-checked") {
+					t.Errorf("engine revert left a ZFW chain behind (or did not run)")
 				}
 				if !strings.Contains(string(out), "premature-missing-lines 3") {
 					t.Errorf("apps script before the first apply: want 3 'missing' notices")
@@ -177,4 +186,17 @@ func TestAppChainsUserDenyWinsLive(t *testing.T) {
 			t.Errorf("%s: want BLOCKED (user deny above the app chain)\n%s", p, out)
 		}
 	}
+}
+
+// enginePath locates engine/zfw from the package directory.
+func enginePath(t *testing.T) string {
+	t.Helper()
+	p, err := filepath.Abs(filepath.Join("..", "..", "engine", "zfw"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("engine script: %v", err)
+	}
+	return p
 }
