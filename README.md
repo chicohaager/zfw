@@ -97,8 +97,10 @@ A standalone ZimaOS module — a tile in the ZimaOS dashboard — with seven tab
   specific container). Optional per rule: inbound or outbound direction, a time
   schedule (from–to, weekdays), a connection rate limit (*n* connections per window),
   and logging. Edited by clicking — no SSH, no file editing.
-- **Exposure** — every listening TCP port, live, classified: reachable from the LAN /
-  blocked by ZFW / loopback-only.
+- **Exposure** — every listening TCP port, live, classified against the ruleset ZFW last
+  *applied*: reachable from the LAN / restricted to a few sources / blocked by ZFW /
+  unverified (no record of what was applied) / loopback-only, with a marker where the
+  saved rules differ from what is live.
 - **Events** — packets ZFW dropped, `host` (chain `ZFW-IN`) and `docker` (`DOCKER-USER`)
   separately, with top sources and top targeted ports for the last hour. A source is
   tagged `port_scan` after 10 distinct destination ports within a minute, and

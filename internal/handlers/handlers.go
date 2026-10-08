@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -933,6 +934,57 @@ func (s *Server) events(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, evs)
 }
 
+// appliedPath is where the engine records the script it last ran (engine/zfw
+// APPLIED): applied.sh next to compiled.sh. Its zfw-live record is what the
+// kernel holds, as opposed to what rules.json says or compiled.sh was
+// recompiled to since.
+func (s *Server) appliedPath() string {
+	return filepath.Join(filepath.Dir(s.compiledPath), "applied.sh")
+}
+
+// liveSnapshot returns the record of the live ruleset, or nil when there is
+// none: no apply since the upgrade to v1.0.27, a reverted firewall, or a
+// script from an older build.
+func (s *Server) liveSnapshot() *compiler.LiveSnapshot {
+	snap, err := compiler.ReadLiveSnapshot(s.appliedPath())
+	if err != nil {
+		if !os.IsNotExist(err) && !errors.Is(err, compiler.ErrNoLiveSnapshot) {
+			slog.Warn("live ruleset record unreadable — Exposure cannot vouch for blocks", "err", err)
+		}
+		return nil
+	}
+	return snap
+}
+
+// reachWord maps a rules.Reach verdict to the Exposure vocabulary the UI
+// renders as badges.
+func reachWord(r rules.Reach) string {
+	switch r.Verdict {
+	case "open":
+		return "lan"
+	case "restricted":
+		return "restricted"
+	}
+	return "blocked"
+}
+
+// liveReach judges one port against the live record. For a Docker port the
+// live DOCKER-USER differs depending on whether the port was in the inventory
+// at compile time: if it was not, only docker-zone rules exist for it there,
+// and what is left falls to the DNAT guard — or, in a script without one
+// (default_policy=allow), through.
+func liveReach(snap *compiler.LiveSnapshot, zone string, port int) rules.Reach {
+	rs := snap.Rules
+	known := true
+	if zone == "docker" {
+		known = snap.Published(port)
+		if !known && !snap.DNATGuard {
+			rs.DefaultPolicy = "allow"
+		}
+	}
+	return rules.ReachOf(rs, zone, "tcp", port, known)
+}
+
 func (s *Server) exposure(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := reqCtx()
 	defer cancel()
@@ -942,35 +994,108 @@ func (s *Server) exposure(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st := s.fw.Status(ctx)
-	// Reach is judged by the rule model, not the legacy allowlist.conf: the
-	// UI has not written that file since the rules tab replaced it, so on a
-	// v1.x install it is absent, the old code read an empty config, and every
-	// LAN-facing socket rendered "blocked" the moment the firewall was active
-	// — including the ones the rules explicitly allow.
-	pol := s.portPolicy()
 
 	type entry struct {
 		system.Socket
+		// Reach is the live verdict: lan | restricted | blocked | local |
+		// unverified (firewall active, but no record of what it applied, so
+		// a block cannot be vouched for).
 		Reach string `json:"reach"`
+		// Sources lists the only sources that may connect when Reach is
+		// "restricted".
+		Sources []string `json:"sources,omitempty"`
+		// Pending says why the saved rules would give a different answer:
+		// "rules-not-applied" (saved, not yet applied) or
+		// "published-after-apply" (the container port appeared after the
+		// last apply; the live verdict comes from the DNAT guard).
+		Pending string `json:"pending,omitempty"`
 	}
+
+	saved, rerr := rules.Load(s.rulesPath)
+	if rerr != nil {
+		// No rules.json: the pre-migration legacy reading, unchanged.
+		pol := s.portPolicy()
+		out := make([]entry, 0, len(socks))
+		for _, sk := range socks {
+			reach := "lan"
+			switch {
+			case sk.Scope == "local":
+				reach = "local"
+			case st.Active && sk.Proc == "docker-proxy":
+				if !pol.DockerOpen(sk.Port) {
+					reach = "blocked"
+				}
+			case st.Active:
+				if !pol.HostOpen(sk.Port) {
+					reach = "blocked"
+				}
+			}
+			out = append(out, entry{Socket: sk, Reach: reach})
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+
+	// Reach is judged from what the kernel holds — the record in applied.sh
+	// — not from rules.json alone. rules.json is what was saved; between a
+	// save and the next apply, and for every container port published after
+	// the last apply, the two differ, and until v1.0.27 this view showed the
+	// saved answer as if it were live (a later-published port read "blocked"
+	// while the live DOCKER-USER let it through).
+	live := s.liveSnapshot()
 	out := make([]entry, 0, len(socks))
 	for _, sk := range socks {
-		reach := "lan"
+		e := entry{Socket: sk, Reach: "lan"}
+		zone := "host"
+		if sk.Proc == "docker-proxy" {
+			zone = "docker"
+		}
 		switch {
 		case sk.Scope == "local":
-			reach = "local"
-		case st.Active && sk.Proc == "docker-proxy":
-			if !pol.DockerOpen(sk.Port) {
-				reach = "blocked"
+			e.Reach = "local"
+		case !st.Active:
+			// Firewall off: nothing is filtered, whatever any file says.
+		case live == nil:
+			// Active, but no record of what was applied. Reporting exposure
+			// needs no proof; a block does.
+			sv := rules.ReachOf(saved, zone, "tcp", sk.Port, true)
+			e.Reach, e.Sources = reachWord(sv), sv.Sources
+			if e.Reach == "blocked" {
+				e.Reach, e.Sources = "unverified", nil
 			}
-		case st.Active:
-			if !pol.HostOpen(sk.Port) {
-				reach = "blocked"
+		default:
+			lv := liveReach(live, zone, sk.Port)
+			e.Reach, e.Sources = reachWord(lv), lv.Sources
+			sv := rules.ReachOf(saved, zone, "tcp", sk.Port, true)
+			switch {
+			case zone == "docker" && !live.Published(sk.Port):
+				e.Pending = "published-after-apply"
+			case reachWord(sv) != e.Reach || strings.Join(sv.Sources, ",") != strings.Join(lv.Sources, ","):
+				e.Pending = "rules-not-applied"
 			}
 		}
-		out = append(out, entry{Socket: sk, Reach: reach})
+		out = append(out, e)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// auditPolicy is the audit's reach oracle: a port counts as reachable when the
+// saved rules OR the live record say so. Either alone could turn a finding
+// green too early — a deny that is saved but not applied mitigates nothing
+// yet, and a deny that is live but has since been removed from the saved
+// rules is about to stop mitigating. Source restrictions never mitigate: the
+// saved half uses rules.Disposition, which ignores sources by design.
+type auditPolicy struct {
+	saved rulesPolicy
+	live  *compiler.LiveSnapshot
+}
+
+func (p auditPolicy) HostOpen(port int) bool {
+	return p.saved.HostOpen(port) || (p.live != nil && liveReach(p.live, "host", port).Verdict != "closed")
+}
+
+func (p auditPolicy) DockerOpen(port int) bool {
+	return p.saved.DockerOpen(port) || (p.live != nil && liveReach(p.live, "docker", port).Verdict != "closed")
 }
 
 func (s *Server) auditHandler(w http.ResponseWriter, r *http.Request) {
@@ -980,7 +1105,11 @@ func (s *Server) auditHandler(w http.ResponseWriter, r *http.Request) {
 	// Same oracle as /api/exposure — see portPolicy. With the legacy config
 	// read here, every port-based finding flipped to "mitigated" as soon as
 	// the firewall was active, regardless of the rules.
-	findings := audit.FindingsWith(st, s.portPolicy())
+	pol := s.portPolicy()
+	if rp, ok := pol.(rulesPolicy); ok {
+		pol = auditPolicy{saved: rp, live: s.liveSnapshot()}
+	}
+	findings := audit.FindingsWith(st, pol)
 
 	// Load + update the audit-finding history under a dedicated mutex
 	// so concurrent /api/audit requests don't race the file. When

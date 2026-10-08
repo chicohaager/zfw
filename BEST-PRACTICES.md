@@ -124,12 +124,24 @@ Reorder with the ▲ / ▼ controls in the Rules tab.
 ## 5. Work the Exposure tab
 
 The Exposure tab lists every TCP port currently **listening**, live, with how
-far each one reaches:
+far each one reaches — judged against the rules ZFW last **applied**, not the
+ones you saved (since v1.0.27):
 
 - **`LAN`** — reachable from the whole network. Treat every `LAN` row as a
   question: *does this need to be open?*
+- **`restricted`** — reachable only from a few sources (single addresses, or
+  ranges of /24 and narrower that do not cover your whole LAN); the tooltip
+  lists them. Still exposed to those sources, and counted as exposed.
 - **`blocked`** — ZFW is dropping it from the LAN. Good.
+- **`unverified`** — the firewall is on, but ZFW has no record of what it
+  applied (first start after updating from v1.0.26 or older). Apply once.
 - **`localhost`** — bound to loopback only; not your problem.
+
+A dashed **not yet applied** tag means your saved rules would answer
+differently for that port — apply to make them live. **new since apply**
+marks a container port published after the last apply: under the Deny default
+it is already closed by the catch-all for new container ports, and opens only
+once a rule allows it and you apply.
 
 Prioritise services that ship with **no authentication** — log viewers,
 metrics dashboards, noVNC / browser-desktop images, admin panels, and the

@@ -84,6 +84,9 @@ func TestExposureJudgesReachFromRulesNotLegacyConfig(t *testing.T) {
 	if err := rules.Save(rulesPath, reachRules()); err != nil {
 		t.Fatal(err)
 	}
+	// Since v1.0.27 a "blocked" needs the record of what the engine applied;
+	// without one Exposure answers "unverified" (exposure_live_test.go).
+	markLive(t, s, reachRules(), system.PublishedPorts{TCP: map[int]bool{8096: true, 8888: true}, UDP: map[int]bool{}})
 	s.listening = func(context.Context) ([]system.Socket, error) { return reachSockets(), nil }
 
 	got := exposureReach(t, s)
@@ -131,6 +134,7 @@ func TestExposureAllowPolicyOnlyBlocksExplicitDenies(t *testing.T) {
 	if err := rules.Save(rulesPath, rs); err != nil {
 		t.Fatal(err)
 	}
+	markLive(t, s, rs, system.PublishedPorts{TCP: map[int]bool{8096: true, 8888: true}, UDP: map[int]bool{}})
 	s.listening = func(context.Context) ([]system.Socket, error) { return reachSockets(), nil }
 	got := exposureReach(t, s)
 	if got[5900] != "blocked" {

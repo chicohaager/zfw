@@ -73,10 +73,13 @@
 
     <section id="tab-exposure" class="tab-panel" role="tabpanel">
       <p class="panel-hint">
-        All listening TCP ports, live.
+        All listening TCP ports, judged against the rules ZFW last <b>applied</b> (not the saved ones).
         <span class="badge badge-lan">LAN</span> reachable across the whole network &middot;
+        <span class="badge badge-restricted">restricted</span> reachable only from the sources in the tooltip &middot;
         <span class="badge badge-blocked">blocked</span> blocked by ZFW &middot;
+        <span class="badge badge-unverified">unverified</span> firewall active, but no record of what was applied &mdash; apply once &middot;
         <span class="badge badge-local">localhost</span> local only.
+        <span class="badge badge-pending">not yet applied</span> marks ports where your saved rules differ from what is live.
       </p>
       <div id="exposure-list"><div class="loading">Loading&hellip;</div></div>
     </section>
