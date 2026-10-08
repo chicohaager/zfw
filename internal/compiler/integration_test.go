@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/chicohaager/zfw/internal/rules"
+	"github.com/chicohaager/zfw/internal/system"
 )
 
 // requireNetns skips the test when the host does not support the
@@ -62,9 +63,18 @@ func runInNetns(t *testing.T, script, queryChain string) string {
 	lockPath := filepath.Join(dir, "xtables.lock")
 	// Use a single inner bash so the compiled script and the iptables -S
 	// query share the same netns / userns / mount view.
+	outPath := filepath.Join(dir, "out")
+	// Query with the backend the compiled script itself picked
+	// (dockerBackendPick): on a host whose `iptables` alternative is nft the
+	// script writes to nf_tables, and a hard-coded `iptables-legacy -S` then
+	// reports "No chain/target/match" for a chain that is present.
+	pickPath := filepath.Join(dir, "pick.sh")
+	if err := os.WriteFile(pickPath, []byte(dockerBackendPick), 0o600); err != nil {
+		t.Fatalf("write pick.sh: %v", err)
+	}
 	inner := "export XTABLES_LOCKFILE=" + lockPath + "; " +
-		"bash " + scriptPath + " >/tmp/out 2>&1 || { echo '--- compiled.sh failed ---'; cat /tmp/out >&2; exit 1; }; " +
-		"iptables-legacy -S " + queryChain
+		"bash " + scriptPath + " >" + outPath + " 2>&1 || { echo '--- compiled.sh failed ---'; cat " + outPath + " >&2; exit 1; }; " +
+		". " + pickPath + "; $IPT -S " + queryChain
 	out, err := exec.Command("unshare", "-U", "-r", "-n", "bash", "-c", inner).CombinedOutput()
 	if err != nil {
 		t.Fatalf("netns exec failed: %v\n%s", err, out)
