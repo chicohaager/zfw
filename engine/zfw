@@ -226,7 +226,7 @@ arm_deadman(){
     echo "[zfw] ERROR: could not arm the dead-man timer — refusing to Safe-Apply without a rollback net: $err" >&2
     return 1
   fi
-  log "DEADMAN ARMED — in 120s the firewall is REMOVED (all ZFW rules dropped, stock ACCEPT; not a restore of the previous rules) unless you run:  zfw commit"
+  log "DEADMAN ARMED — in 120s the firewall is REMOVED (all ZFW rules dropped, stock ACCEPT; not a restore of the previous rules) unless you run:  sudo /DATA/zfw/zfw commit"
 }
 
 case "${1:-}" in

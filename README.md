@@ -245,11 +245,12 @@ nothing here: it shows what the build produced, not what the registry now serves
 
 `build.sh` writes one release package per arch — `dist/zfw-<version>-<arch>.tar.gz`
 contains the `zfw.raw` module, the `zfw` engine script, `install.sh` and the docs.
-Copy the matching arch to the ZimaOS host and run the installer as root:
+Copy the matching arch to the ZimaOS host and run the installer as root (`sudo`
+asks for your ZimaOS password — the login user is not root):
 
 ```sh
-scp dist/zfw-<version>-amd64.tar.gz root@<host>:/tmp/   # ZimaBoard / ZimaCube
-ssh root@<host> 'cd /tmp && tar xzf zfw-<version>-amd64.tar.gz && cd zfw-* && sh install.sh'
+scp dist/zfw-<version>-amd64.tar.gz <user>@<host>:/tmp/   # ZimaBoard / ZimaCube
+ssh -t <user>@<host> 'cd /tmp && tar xzf zfw-<version>-amd64.tar.gz && cd zfw-* && sudo sh install.sh'
 ```
 
 `install.sh` places the sysext module in `/var/lib/extensions/`, installs the
@@ -267,8 +268,11 @@ an **installer image** ([`chicohaager/zfw`](https://hub.docker.com/r/chicohaager
 multi-arch: amd64 + arm64). Run it on the ZimaOS host:
 
 ```sh
-docker run --rm --privileged --pid=host -v /:/host chicohaager/zfw:1.0.26
+sudo docker run --rm --privileged --pid=host -v /:/host chicohaager/zfw:1.0.26
 ```
+
+`sudo` is not optional: on a stock ZimaOS the login user is not in the `docker`
+group, so a plain `docker run` ends in `permission denied` on the Docker socket.
 
 **The container is a delivery vehicle, not a runtime.** It stages the payload and
 runs the very same `install.sh` inside the *host's* namespaces, then exits — ZFW
@@ -283,8 +287,8 @@ be suspicious of any firewall that does.
 
 The flags are what they look like: `--privileged` and `--pid=host` let the
 installer enter the host's namespaces, `-v /:/host` is the filesystem it installs
-into. Uninstalling is `zfw revert` on the host, then removing
-`/var/lib/extensions/zfw.raw`.
+into. Uninstalling is `sudo /DATA/zfw/zfw revert` on the host, then removing
+`/var/lib/extensions/zfw.raw` (as root) and running `sudo systemd-sysext refresh`.
 
 ### After a ZimaOS update
 
@@ -306,7 +310,7 @@ Since v1.0.23 a refused request also says so in the journal, which is where you
 would look first:
 
 ```sh
-journalctl -u zfw-ui | grep 'session rejected'
+sudo journalctl -u zfw-ui | grep 'session rejected'
 ```
 
 The line names the reason, the path and the client. Rejections are triggerable
@@ -373,7 +377,7 @@ After any change, run **Safe-Apply** from the Firewall tab (or `sudo /DATA/zfw/z
 
 Applying firewall rules over the network is risky — one wrong rule can lock you out.
 ZFW's **Safe-Apply** applies the rules and arms a 120-second timer; unless you click
-**Confirm** (or run `zfw commit`) within that window, the rules are reverted
+**Confirm** (or run `sudo /DATA/zfw/zfw commit`) within that window, the rules are reverted
 automatically. The current SSH session is never dropped — established connections are
 accepted first.
 

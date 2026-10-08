@@ -22,17 +22,17 @@ die() { echo "[zfw-installer] ERROR: $*" >&2; exit 1; }
 # --privileged" is actionable, "your host does not support sysext" is a dead end,
 # and an operator who has forgotten a flag should not be told the second thing.
 [ -d /host ] || die "host filesystem not mounted. Re-run with:
-  docker run --rm --privileged --pid=host -v /:/host <image>"
+  sudo docker run --rm --privileged --pid=host -v /:/host <image>"
 
 [ -e /proc/1/ns/mnt ] || die "cannot see the host's PID 1 — the --pid=host flag is missing. Re-run with:
-  docker run --rm --privileged --pid=host -v /:/host <image>"
+  sudo docker run --rm --privileged --pid=host -v /:/host <image>"
 
 # Entering the host's mount namespace needs privileges the default container does
 # not have. Probe it now, so the failure names the flag instead of surfacing as
 # an opaque nsenter error halfway through.
 nsenter -t 1 -m -u -i -n -p -- true 2>/dev/null \
   || die "cannot enter the host namespaces — the --privileged flag is missing. Re-run with:
-  docker run --rm --privileged --pid=host -v /:/host <image>"
+  sudo docker run --rm --privileged --pid=host -v /:/host <image>"
 
 [ -d /host/var/lib/extensions ] || die "/host/var/lib/extensions missing — this host does not support systemd-sysext, which is how ZFW is installed. ZFW targets ZimaOS; see https://github.com/chicohaager/zfw"
 
