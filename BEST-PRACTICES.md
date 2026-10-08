@@ -49,6 +49,13 @@ automatically. The workflow:
 
 Plain **Apply** (no dead-man) is for the physical console only.
 
+**What survives a reboot (v1.0.27).** Boot — and every restart of Docker,
+which flushes `DOCKER-USER` — replays the *confirmed* ruleset: the one a
+Safe-Apply ran and you then confirmed, or the last plain Apply. Rules you have
+saved since but not applied stay saved and are **not** replayed; they go live
+only through the next apply. Up to v1.0.26 boot replayed whatever the daemon
+had compiled last, including saves that never ran under the dead-man.
+
 ---
 
 ## 2. Keep your management paths open

@@ -152,6 +152,7 @@ to a finding in `SECURITY-REPORT.md`.
 | `/DATA/zfw` is `root:root 0700`; `compiled.sh` is `0600` | ZFW-3, S9 | `cmd/zfwd/main.go` startup `Chmod` |
 | Engine refuses to execute `compiled.sh` or itself if root is not the owner OR if anyone but root has write | S8 | `engine/zfw` `secure_file` |
 | `commit` re-runs `secure_file` before installing the boot-persistence unit so tampering caught at apply isn't bypassed by a stale unit | R3-1 | `engine/zfw` |
+| Boot and every dockerd restart replay only the **confirmed** ruleset (`committed.sh`: the script that ran under the dead-man and was confirmed, or a plain apply), never the current `compiled.sh`, which the daemon rewrites on every rule save and container event. `committed.sh` / `applied.sh` are root-only `0600` copies and pass `secure_file` before execution | (v1.0.27) | `engine/zfw` `boot`, `commit`, `stage_copy`; tests `internal/firewall/enginepersist_test.go` |
 | Engine runs under `set -eu` so a partial-apply aborts loudly instead of silently | ZFW-7 | `internal/compiler/compiler.go` |
 | Schema-versioned `rules.json` migration with `.bak.v<old>` backup | (v0.3.8 + v0.4.3 + v0.5.6) | `internal/rules.migrate` |
 
