@@ -207,9 +207,9 @@ func emitV6Chain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, extraByp
 	// finished with -j RETURN — i.e. effectively no protection. Now ZFW-IN6
 	// mirrors ZFW-IN: always emitted, bypass for trusted interfaces and
 	// protocols that IPv6 cannot work without (ICMPv6 for ND/MTU/MLD,
-	// DHCPv6 client, link-local fe80::/10, multicast ff00::/8), then the
-	// host-zone allow-rules mirrored from the IPv4 chain, and a default-
-	// deny with a LOG target so the Events tab can surface IPv6 drops.
+	// DHCPv6 client, mDNS from link-local sources), then the host-zone
+	// allow-rules mirrored from the IPv4 chain, and a default-deny with a
+	// LOG target so the Events tab can surface IPv6 drops.
 	b.WriteString("# ===== ZFW-IN6 (IPv6 INPUT — always emitted from v0.2.15) =====\n")
 	b.WriteString(`if [ -n "$IPT6" ]; then` + "\n")
 	b.WriteString("  $IPT6 -N ZFW-IN6 2>/dev/null || true\n")
@@ -232,9 +232,9 @@ func emitV6Chain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, extraByp
 	b.WriteString("  $IPT6 -A ZFW-IN6 -p ipv6-icmp -j RETURN\n")
 	// DHCPv6 client (server-to-client port). Harmless if no DHCPv6 is used.
 	b.WriteString("  $IPT6 -A ZFW-IN6 -p udp --dport 546 -j RETURN\n")
-	// Link-local and multicast addresses: needed for ND, MLD, mDNSv6.
-	b.WriteString("  $IPT6 -A ZFW-IN6 -s fe80::/10 -j RETURN\n")
-	b.WriteString("  $IPT6 -A ZFW-IN6 -s ff00::/8 -j RETURN\n")
+	// mDNS on the local link — see linkLocalMDNS for why this is the only
+	// link-local exception.
+	b.WriteString("  $IPT6 -A ZFW-IN6 " + linkLocalMDNS + "\n")
 	// Mirror host-zone rules over IPv6. Dispatch by source family:
 	//   - "any":      destination-port-only mirror (allow port from any IPv6).
 	//   - IPv6 ip/range: -s <addr/cidr> mirrored to ip6tables.
@@ -268,6 +268,30 @@ func emitV6Chain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, extraByp
 	b.WriteString("  $IPT6 -C INPUT -j ZFW-IN6 2>/dev/null || $IPT6 -I INPUT 1 -j ZFW-IN6\n")
 	b.WriteString("fi\n")
 }
+
+// linkLocalMDNS is the only link-local exception in ZFW-IN6 (since v1.0.27).
+//
+// Before that ZFW-IN6 carried `-s fe80::/10 -j RETURN` ahead of every user
+// rule: any device on the LAN reached every service listening on [::] — SSH,
+// Samba, the ZimaOS UI, docker-proxy ports — through its link-local address,
+// while the same service was filtered over IPv4 and over a global or ULA
+// IPv6 address. Reproduced in a network namespace by TestLinkLocalFilteredLive.
+// The comment justified it with "ND, MLD, mDNSv6"; ND and MLD are ICMPv6 and
+// pass on the ipv6-icmp line above, which leaves mDNS.
+//
+// mDNS keeps a narrow hole because ZimaOS relies on it for <host>.local
+// discovery and the recommended defaults allow it on IPv4 (rules.Defaults,
+// "mDNS discovery", udp/5353 from the LAN). Over IPv6 the equivalent of
+// "from the LAN" is "from the link", and unicast mDNS answers to the host's
+// own queries arrive as NEW conntrack entries (the query went to ff02::fb),
+// so the rule is scoped by source, not by multicast destination. LLMNR
+// (5355) and WS-Discovery (3702) are ordinary services: they get no
+// exception and are opened, if wanted, by a rule like any other port.
+//
+// The former `-s ff00::/8 -j RETURN` is gone too: a multicast address is
+// never a valid source (RFC 4291 §2.7) and the kernel discards such packets
+// before the filter table sees them, so the line could not match anything.
+const linkLocalMDNS = "-s fe80::/10 -p udp --dport 5353 -j RETURN"
 
 // emitDockerChain6 writes the IPv6 DOCKER-USER chain — see dockerUser6Rules
 // for why it matters. Guarded twice: no ip6tables backend, or no v6

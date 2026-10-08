@@ -494,8 +494,7 @@ func zfwIn6Rules(rs rules.RuleSet, rl []rules.Rule, extraBypass []string) []stri
 	out = append(out,
 		"-p ipv6-icmp -j RETURN",
 		"-p udp --dport 546 -j RETURN",
-		"-s fe80::/10 -j RETURN",
-		"-s ff00::/8 -j RETURN")
+		linkLocalMDNS)
 	for _, r := range rl {
 		if !r.Enabled {
 			continue

@@ -206,3 +206,107 @@ func TestDNATGuardLive(t *testing.T) {
 		}
 	}
 }
+
+// linkLocalTopology: host and one LAN neighbour on a veth, IPv6 only. The
+// host serves :2222 (no rule) and :2223 (allowed from any source) on [::].
+const linkLocalTopology = `set -eu
+mount -t tmpfs none /run
+mkdir -p /run/netns
+export XTABLES_LOCKFILE=/run/xtables.lock
+ip link set lo up
+sysctl -qw net.ipv6.conf.default.accept_dad=0 net.ipv6.conf.all.accept_dad=0
+ip netns add lan
+ip netns exec lan sysctl -qw net.ipv6.conf.default.accept_dad=0 net.ipv6.conf.all.accept_dad=0
+ip netns exec lan ip link set lo up
+ip link add eth-lan type veth peer name eth0 netns lan
+ip addr add fd00:1::1/64 dev eth-lan nodad
+ip link set eth-lan up
+ip netns exec lan ip addr add fd00:1::50/64 dev eth0 nodad
+ip netns exec lan ip link set eth0 up
+# Link-local addresses still run DAD-less but need the link to settle before
+# the kernel uses them as a source; wait until both ends report them usable.
+for i in $(seq 1 50); do
+  if ! ip -6 addr show dev eth-lan | grep -q tentative && \
+     ! ip netns exec lan ip -6 addr show dev eth0 | grep -q tentative && \
+     ip netns exec lan ip -6 addr show dev eth0 scope link | grep -q fe80; then break; fi
+  sleep 0.1
+done
+sleep 1
+LL="$(ip -6 -o addr show dev eth-lan scope link | awk '{print $4}' | cut -d/ -f1)"
+[ -n "$LL" ] || { echo "no link-local address on eth-lan"; exit 1; }
+SRV='import socket,sys,threading
+def serve(p):
+    s=socket.socket(socket.AF_INET6); s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+    s.bind(("::",p)); s.listen(8)
+    while True:
+        c,_=s.accept(); c.sendall(b"ok"); c.close()
+for p in map(int,sys.argv[1:]): threading.Thread(target=serve,args=(p,),daemon=True).start()
+threading.Event().wait()'
+python3 -c "$SRV" 2222 2223 &
+sleep 0.5
+`
+
+const linkLocalProbes = `
+CLI='import socket,sys
+try:
+    s=socket.create_connection((sys.argv[1],int(sys.argv[2])),timeout=1.5); print(sys.argv[3],"REACH" if s.recv(2)==b"ok" else "BLOCKED")
+except Exception: print(sys.argv[3],"BLOCKED")'
+# Positive control first: it also settles neighbour discovery on the link,
+# so a BLOCKED below cannot be an unresolved neighbour in disguise.
+ip netns exec lan python3 -c "$CLI" "$LL%eth0" 2223 allowed-port-via-link-local
+ip netns exec lan python3 -c "$CLI" "$LL%eth0" 2222 unruled-port-via-link-local
+ip netns exec lan python3 -c "$CLI" fd00:1::1   2222 unruled-port-via-ula
+[ -n "${ZFW_DEBUG:-}" ] && { ip6tables-nft -L ZFW-IN6 -v -n; ip6tables-nft -S INPUT; ip netns exec lan ip -6 addr; ip -6 addr; }
+kill $(jobs -p) 2>/dev/null || true
+`
+
+// TestLinkLocalFilteredLive: a LAN neighbour must not reach an un-ruled
+// service through the host's fe80:: address. The allowed port doubles as the
+// positive control that neighbour discovery (ICMPv6) still works with the
+// blanket link-local RETURN gone.
+func TestLinkLocalFilteredLive(t *testing.T) {
+	rs := rules.RuleSet{
+		DefaultPolicy: "deny",
+		Rules: []rules.Rule{{
+			ID: "r1", Order: 10, Enabled: true, Name: "svc 2223", Action: "allow",
+			Source:   rules.Source{Type: "any"},
+			Ports:    rules.Ports{Type: "list", List: []int{2223}},
+			Protocol: "tcp", Zone: "host",
+		}},
+	}
+	want := map[string]string{
+		"unruled-port-via-link-local": "BLOCKED",
+		"unruled-port-via-ula":        "BLOCKED",
+		"allowed-port-via-link-local": "REACH",
+	}
+	for ename, script := range map[string]string{
+		"bash":    Compile(rs, system.PublishedPorts{}, nil),
+		"restore": CompileRestoreScript(rs, system.PublishedPorts{}, nil),
+	} {
+		t.Run(ename, func(t *testing.T) {
+			requireNetnsMount(t, "nft")
+			dir := t.TempDir()
+			sp := filepath.Join(dir, "compiled.sh")
+			if err := os.WriteFile(sp, []byte(script), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			full := linkLocalTopology +
+				"bash " + sp + " > " + filepath.Join(dir, "apply.log") + " 2>&1 || { echo APPLY-FAILED; cat " + filepath.Join(dir, "apply.log") + "; exit 1; }\n" +
+				linkLocalProbes
+			fp := filepath.Join(dir, "run.sh")
+			if err := os.WriteFile(fp, []byte(full), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			out, err := exec.Command("unshare", "-U", "-r", "-n", "-m", "bash", fp).CombinedOutput()
+			if err != nil {
+				t.Fatalf("netns run failed: %v\n%s", err, out)
+			}
+			t.Logf("probe output:\n%s", out)
+			for probe, w := range want {
+				if !strings.Contains(string(out), probe+" "+w) {
+					t.Errorf("%s: want %s\nfull output:\n%s", probe, w, out)
+				}
+			}
+		})
+	}
+}

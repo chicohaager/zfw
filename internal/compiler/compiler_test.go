@@ -214,7 +214,12 @@ func TestIPv6ChainAlwaysEmitted(t *testing.T) {
 	}, system.PublishedPorts{}, nil)
 	mustContain(t, out, "$IPT6 -N ZFW-IN6")
 	mustContain(t, out, "$IPT6 -A ZFW-IN6 -p ipv6-icmp -j RETURN")
-	mustContain(t, out, "$IPT6 -A ZFW-IN6 -s fe80::/10 -j RETURN")
+	// v1.0.27: link-local sources are filtered like any other — only mDNS
+	// keeps a link-scoped exception (see linkLocalMDNS). This line used to
+	// assert the blanket `-s fe80::/10 -j RETURN` that let every LAN device
+	// past the rules.
+	mustContain(t, out, "$IPT6 -A ZFW-IN6 -s fe80::/10 -p udp --dport 5353 -j RETURN")
+	mustNotContain(t, out, "$IPT6 -A ZFW-IN6 -s fe80::/10 -j RETURN")
 	mustContain(t, out, "ZFW-IN6-DROP")
 	mustContain(t, out, "$IPT6 -A ZFW-IN6 -j DROP")
 }

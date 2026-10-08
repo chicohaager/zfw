@@ -84,6 +84,9 @@ tunnelled or host-local client cannot be cut off:
 | `virbr0` | libvirt / ZimaOS VM networking |
 | ICMP | ping / path-MTU |
 | UDP 68 | DHCP client |
+| ICMPv6 | IPv6 neighbour discovery, MLD, path-MTU |
+| UDP 546 (IPv6) | DHCPv6 client |
+| UDP 5353 from `fe80::/10` (IPv6) | mDNS on the local link — and nothing else from link-local addresses (since v1.0.27) |
 
 In `DOCKER-USER`, loopback, the host's own LAN IP and the mesh interfaces are
 also always returned to Docker's accept path — so a `network_mode: host`
@@ -198,6 +201,20 @@ really does have a public IPv6 address. What to do about it:
   badge is telling you so rather than hiding it.
 - To see what is actually being dropped, look for the log prefix
   `ZFW-IN6-DROP` in the Events tab or in `journalctl -k`.
+
+**Link-local addresses are not a way around the rules (v1.0.27).** Up to
+v1.0.26 `ZFW-IN6` let every packet from a link-local source (`fe80::/10`)
+through before any rule was consulted, so every device on the LAN could reach
+every service listening on `[::]` — SSH, Samba, the ZimaOS UI — through the
+host's `fe80::` address, while the same service was filtered over IPv4. Now a
+link-local source is filtered like any other. What IPv6 genuinely needs keeps
+working without a rule: neighbour discovery and MLD are ICMPv6, which is always
+allowed, and mDNS (UDP 5353) stays allowed from link-local sources. LLMNR
+(5355) and WS-Discovery (3702) get no exception — open them with a rule like
+any other port if you rely on them over IPv6. Note that a LAN-scoped rule
+(IPv4 source) still does not apply to IPv6, link-local included; a Windows
+client reaching Samba over `fe80::` falls back to IPv4 when it is dropped
+there (assumption from client behaviour, not measured by ZFW).
 
 Note also that a host reachable only through Tailscale or ZeroTier does not
 count as having public IPv6 — those hand out ULA addresses (`fd…`), which ZFW

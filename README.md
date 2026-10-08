@@ -123,6 +123,10 @@ ZFW filters at **two hook points**, because traffic on ZimaOS takes two separate
 A plain `INPUT` firewall is not enough: **Docker-published ports never traverse
 `INPUT`** — they are DNAT'd and routed through `FORWARD`. `DOCKER-USER` is Docker's
 official, guaranteed-untouched user hook, so ZFW filters container ports there.
+Under the Deny default each port published at compile time gets its own drop, and
+since v1.0.27 a final guard drops any *other* new connection Docker DNATs towards a
+container (`--ctstate DNAT`, leaving on `docker0`/`br-+`) — so an app installed after
+the last apply is closed until a rule allows it, instead of open until the next apply.
 
 `localhost`, the host's own IP and the mesh interfaces (`tailscale0`, ZeroTier,
 WireGuard and `tun0` for ZimaOS' own Zima Net) are always allowed — so VPN access
@@ -138,7 +142,9 @@ Since v1.0.22 rules mirror their ports into `ZFW-IN6` accordingly. One limit is
 structural: a rule whose source is an IPv4 address or range cannot be matched on
 ip6tables at all, so it does not apply to IPv6 — the Rules tab badges those
 **IPv4 only** and warns when a deny-by-default rule set has no IPv6 coverage on a
-host with a public IPv6 address. See [BEST-PRACTICES.md §8](BEST-PRACTICES.md).
+host with a public IPv6 address. Link-local sources (`fe80::/10`) are filtered like
+any other since v1.0.27; only ICMPv6 (neighbour discovery, MLD), the DHCPv6 client
+port and mDNS from the link pass without a rule. See [BEST-PRACTICES.md §8](BEST-PRACTICES.md).
 
 ## Architecture
 
