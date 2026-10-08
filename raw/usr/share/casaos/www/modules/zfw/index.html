@@ -87,9 +87,10 @@
     <section id="tab-events" class="tab-panel" role="tabpanel">
       <p class="panel-hint">
         Recent packets blocked by ZFW &mdash; <b>host</b> drops hit the
-        ZFW-IN chain, <b>docker</b> drops hit DOCKER-USER. Logging is
-        rate-limited to 60/min per chain so a port scan can never flood
-        your journal. Older events are kept by journald with the system's
+        ZFW-IN chain, <b>docker</b> drops hit DOCKER-USER. Only the first
+        packet of each new connection that ends in a drop is logged &mdash;
+        there is no fixed per-minute cap, so a fast port scan logs one line
+        per probe. Older events are kept by journald with the system's
         usual retention.
       </p>
       <label class="debug-toggle" title="Switch the daemon to debug logging at runtime (journalctl -u zfw-ui) — useful when the Events tab is empty and you want to see why. No restart needed.">

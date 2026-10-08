@@ -105,8 +105,9 @@ A standalone ZimaOS module — a tile in the ZimaOS dashboard — with seven tab
   separately, with top sources and top targeted ports for the last hour. A source is
   tagged `port_scan` after 10 distinct destination ports within a minute, and
   `brute_force` after 20 hits on one credential port (22, 445, 3389, 8888) — the tags
-  flag, they do not block. Logging is rate-limited to 60/min per chain so a scan
-  cannot flood the journal.
+  flag, they do not block. Only the first packet of each new connection that reaches
+  a chain's final DROP is logged; there is no fixed per-minute cap (`xt_limit` is not
+  shipped on the ZimaOS kernel), so a fast scan logs one line per probe.
 - **Connections** — the live kernel conntrack table: which flows are open right now,
   original direction only, read over ctnetlink.
 - **Audit** — a catalogue of security findings, each re-evaluated live against the

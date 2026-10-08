@@ -88,10 +88,13 @@ func emitHeader(b *strings.Builder) {
 	// xt_LOG is a module on ZimaOS (not built-in) — load it before the LOG
 	// targets below or `-j LOG` errors with "No chain/target/match by that
 	// name". nf_log_syslog is its softdep backend (logs to journald/kmsg).
-	// xt_limit is NOT shipped on this kernel, so rate-limiting relies on
-	// (a) the LOG sitting right before the catch-all DROP — only packets
-	// that already failed every allow-rule are logged, and (b) journald's
-	// own RateLimitBurst.
+	// xt_limit is NOT shipped on this kernel (measured 2026-05-23), so there
+	// is no time-based cap on the LOG lines. Volume control is only (a) the
+	// LOG sitting right before the catch-all DROP — only packets that already
+	// failed every allow-rule are logged — and (b) --ctstate NEW, one line per
+	// new connection. Whether journald rate-limits kernel (kmsg) lines on top
+	// is not established; the UI and README no longer promise a cap
+	// (TestNoLogRateLimitIsPromised).
 	// xt_recent powers per-rule rate-limit (v0.4.4) and xt_time powers
 	// time-window rules (v0.4.3). Both are stock kernel modules on
 	// modern Linux; modprobe is best-effort so the apply still runs on
