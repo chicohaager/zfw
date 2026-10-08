@@ -119,6 +119,7 @@ type Server struct {
 	appsMu     sync.Mutex
 	appsKick   chan struct{} // one queued sync request, see KickApps
 	appsScript string        // last apps.sh the engine ran successfully
+	appsForce  atomic.Bool   // rewrite the app chains on the next sync (set by apply/commit/revert)
 	appPorts   func(context.Context) ([]system.AppPort, error)
 	appTitle   func(project string) string
 	notifier   apps.Notifier
@@ -863,7 +864,7 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.lastApplied = s.lastCompiled
-	s.KickApps() // the applied inventory changed: re-judge what is new
+	s.kickAppsRewrite() // the applied inventory changed: re-judge what is new
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "applied", "output": out})
 }
@@ -895,7 +896,7 @@ func (s *Server) commit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.emitEvent("firewall.committed", nil)
-	s.KickApps()
+	s.kickAppsRewrite()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "committed", "output": out})
 }
 
@@ -914,7 +915,7 @@ func (s *Server) revert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.emitEvent("firewall.reverted", nil)
-	s.KickApps()
+	s.kickAppsRewrite()
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reverted", "output": out})
 }
 
