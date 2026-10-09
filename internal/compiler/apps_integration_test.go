@@ -44,6 +44,8 @@ probe lan 192.0.2.1 9100 $P-host-lan
 probe wan 192.0.2.1 9100 $P-host-wan
 probe wan fd00:1::1 9100 $P-host-wan-v6
 probe lan 192.0.2.1 8096 $P-ruled-port
+probe wan 192.0.2.1 8097 $P-docker-any-wan
+probe wan fd00:1::1 8097 $P-docker-any-wan-v6
 `
 
 // TestAppChainsLive runs the new-app prompt's chains through real netfilter:
@@ -64,20 +66,23 @@ func TestAppChainsLive(t *testing.T) {
 	active := []apps.Entry{
 		{Key: "docker/tcp/8080/web", Zone: "docker", Proto: "tcp", Port: 8080, State: apps.LAN, Present: true},
 		{Key: "host/tcp/9100/node", Zone: "host", Proto: "tcp", Port: 9100, State: apps.Any, Present: true},
+		// "everyone" for a container port must also open the IPv6 DNAT path
+		// through DOCKER-USER (missing before 2026-10-09).
+		{Key: "docker/tcp/8097/pub", Zone: "docker", Proto: "tcp", Port: 8097, State: apps.Any, Present: true},
 	}
 	want := map[string]string{
 		// before: the default-deny answers for both
 		"before-docker-lan": "BLOCKED", "before-docker-wan": "BLOCKED", "before-docker-lan-v6": "BLOCKED",
 		"before-host-lan": "BLOCKED", "before-host-wan": "BLOCKED", "before-host-wan-v6": "BLOCKED",
-		"before-ruled-port": "REACH",
+		"before-ruled-port": "REACH", "before-docker-any-wan": "BLOCKED", "before-docker-any-wan-v6": "BLOCKED",
 		// after the apps script: LAN only for 8080, everyone for 9100
 		"answered-docker-lan": "REACH", "answered-docker-wan": "BLOCKED", "answered-docker-lan-v6": "BLOCKED",
 		"answered-host-lan": "REACH", "answered-host-wan": "REACH", "answered-host-wan-v6": "REACH",
-		"answered-ruled-port": "REACH",
+		"answered-ruled-port": "REACH", "answered-docker-any-wan": "REACH", "answered-docker-any-wan-v6": "REACH",
 		// a normal apply afterwards must not wipe the answers
 		"reapplied-docker-lan": "REACH", "reapplied-docker-wan": "BLOCKED", "reapplied-docker-lan-v6": "BLOCKED",
 		"reapplied-host-lan": "REACH", "reapplied-host-wan": "REACH", "reapplied-host-wan-v6": "REACH",
-		"reapplied-ruled-port": "REACH",
+		"reapplied-ruled-port": "REACH", "reapplied-docker-any-wan": "REACH", "reapplied-docker-any-wan-v6": "REACH",
 	}
 	appsScript := CompileApps(active, rs.LAN)
 	emitters := map[string]string{
@@ -106,12 +111,12 @@ func TestAppChainsLive(t *testing.T) {
 					run(sp) + "P=before\n" + appsProbes +
 					run(ap) + "P=answered\n" + appsProbes +
 					run(sp) + "P=reapplied\n" + appsProbes +
-					"echo '--- ZFW-APPS'; $IPT -S ZFW-APPS; echo '--- ZFW-APPS-IN'; $IPT -S ZFW-APPS-IN; echo '--- ZFW-APPS-IN6'; $IPT6 -S ZFW-APPS-IN6\n" +
+					"echo '--- ZFW-APPS'; $IPT -S ZFW-APPS; echo '--- ZFW-APPS-IN'; $IPT -S ZFW-APPS-IN; echo '--- ZFW-APPS-IN6'; $IPT6 -S ZFW-APPS-IN6; echo '--- ZFW-APPS6'; $IPT6 -S ZFW-APPS6\n" +
 					// The engine's revert() alone (not its systemd half): afterwards
 					// no ZFW chain may remain, the app chains included.
 					"source <(sed -n '/^revert(){/,/^}/p' " + enginePath(t) + ")\nrevert\n" +
 					"for c in ZFW-IN ZFW-APPS ZFW-APPS-IN; do $IPT -L $c -n >/dev/null 2>&1 && echo \"left-after-revert $c\"; done\n" +
-					"$IPT6 -L ZFW-APPS-IN6 -n >/dev/null 2>&1 && echo 'left-after-revert ZFW-APPS-IN6'\n" +
+					"for c in ZFW-APPS-IN6 ZFW-APPS6; do $IPT6 -L $c -n >/dev/null 2>&1 && echo \"left-after-revert $c\"; done\n" +
 					"echo revert-checked\n" +
 					"kill $(jobs -p) 2>/dev/null || true\n"
 				fp := filepath.Join(dir, "run.sh")
@@ -137,8 +142,8 @@ func TestAppChainsLive(t *testing.T) {
 				if strings.Contains(string(out), "left-after-revert") || !strings.Contains(string(out), "revert-checked") {
 					t.Errorf("engine revert left a ZFW chain behind (or did not run)")
 				}
-				if !strings.Contains(string(out), "premature-missing-lines 3") {
-					t.Errorf("apps script before the first apply: want 3 'missing' notices")
+				if !strings.Contains(string(out), "premature-missing-lines 4") {
+					t.Errorf("apps script before the first apply: want 4 'missing' notices")
 				}
 				if t.Failed() {
 					t.Logf("full output:\n%s", out)

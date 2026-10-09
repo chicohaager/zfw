@@ -13,6 +13,7 @@ import (
 
 	"github.com/chicohaager/zfw/internal/apps"
 	"github.com/chicohaager/zfw/internal/compiler"
+	"github.com/chicohaager/zfw/internal/conntrack"
 	"github.com/chicohaager/zfw/internal/rules"
 	"github.com/chicohaager/zfw/internal/system"
 )
@@ -116,6 +117,16 @@ func (s *Server) syncAppsLocked(ctx context.Context, withdraw []apps.Entry) erro
 			before[e.Key] = true
 		}
 	}
+	// An answer whose rule the operator deleted is withdrawn before Detect
+	// judges the port again. Without rules.json there is nothing to compare.
+	if saved, rerr := rules.Load(s.rulesPath); rerr == nil {
+		var gone []apps.Entry
+		if f, gone = apps.Withdraw(f, saved); len(gone) > 0 {
+			for _, e := range gone {
+				slog.Info("new-app answer withdrawn: its rule was deleted", "app", e.Title, "port", e.Port, "proto", e.Proto, "rule", e.RuleID)
+			}
+		}
+	}
 	live := appsLive(s.liveSnapshot())
 	f = apps.Detect(f, cands, live, now)
 	if err := apps.Save(s.appsStatePath(), f); err != nil {
@@ -153,6 +164,7 @@ func (s *Server) syncAppsLocked(ctx context.Context, withdraw []apps.Entry) erro
 			s.appsScript = script
 		}
 	}
+	s.flushNarrowedApps(ctx, f)
 	// Cards: re-send every open question (they are not stored by ZimaOS),
 	// withdraw the ones that were open before and are not any more.
 	open := map[string]bool{}
@@ -177,6 +189,66 @@ func (s *Server) syncAppsLocked(ctx context.Context, withdraw []apps.Entry) erro
 		}
 	}
 	return nil
+}
+
+var reachRank = map[string]int{"": 0, "lan": 1, "any": 2}
+
+// flushNarrowedApps tears down the connections of every app port whose reach
+// just shrank — any → LAN, or open → closed (Block, block mode, a withdrawn
+// answer, a removed app). The app chains judge new connections only; an
+// ESTABLISHED one passes ahead of them and would outlive the answer, as it did
+// for "Block" until 2026-10-09. Same best-effort teardown as after an apply
+// (v1.0.21). The first sync after a daemon start only records the state.
+func (s *Server) flushNarrowedApps(ctx context.Context, f apps.File) {
+	now := map[string]string{}
+	ports := map[string]conntrack.PortKey{}
+	for _, e := range f.Entries {
+		ports[e.Key] = conntrack.PortKey{Proto: e.Proto, Port: e.Port}
+		if r := e.Reach(f.Mode); r != "" {
+			now[e.Key] = r
+		}
+	}
+	prev := s.appsOpen
+	s.appsOpen = now
+	if prev == nil {
+		return
+	}
+	var targets []conntrack.PortKey
+	seen := map[conntrack.PortKey]bool{}
+	for k, was := range prev {
+		if reachRank[now[k]] >= reachRank[was] {
+			continue
+		}
+		pk, ok := ports[k]
+		if !ok { // entry gone from apps.json: recover proto/port from the key
+			pk, ok = portKeyOf(k)
+		}
+		if ok && !seen[pk] {
+			seen[pk] = true
+			targets = append(targets, pk)
+		}
+	}
+	if len(targets) == 0 || s.flushConntrack == nil {
+		return
+	}
+	if n, err := s.flushConntrack(ctx, targets); err != nil {
+		slog.Warn("conntrack flush after narrowing an app answer (non-fatal)", "err", err, "ports", len(targets))
+	} else if n > 0 {
+		slog.Info("flushed conntrack for narrowed app ports", "deleted", n, "ports", len(targets))
+	}
+}
+
+// portKeyOf parses apps.KeyOf's zone/proto/port/container.
+func portKeyOf(key string) (conntrack.PortKey, bool) {
+	p := strings.SplitN(key, "/", 4)
+	if len(p) < 3 {
+		return conntrack.PortKey{}, false
+	}
+	n, err := strconv.Atoi(p[2])
+	if err != nil {
+		return conntrack.PortKey{}, false
+	}
+	return conntrack.PortKey{Proto: p[1], Port: n}, true
 }
 
 // appOverlay is one present TCP app port as the Exposure and Audit views

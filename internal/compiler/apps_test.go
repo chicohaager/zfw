@@ -43,6 +43,10 @@ func TestAppsJumpPlacement(t *testing.T) {
 		{"DOCKER-USER", dockerUserRules(rs, rl, pp, nil), "^-j ZFW-APPS$", "--ctorigdstport 8080 .*-j DROP", "ZFW-DOCK-DROP"},
 		{"ZFW-IN", zfwInRules(rs, rl, pp.All(), nil), "^-j ZFW-APPS-IN$", "--dport 22 .*-j ACCEPT", "ZFW-IN-DROP"},
 		{"ZFW-IN6", zfwIn6Rules(rs, rl, nil), "^-j ZFW-APPS-IN6$", "--dport 23 -j DROP", "ZFW-IN6-DROP"},
+		// IPv6 DOCKER-USER (Docker's ip6tables support on): before 2026-10-09
+		// it had no jump, so an "everyone" answer for a container port stayed
+		// closed over IPv6 by the v6 DNAT guard.
+		{"DOCKER-USER v6", dockerUser6Rules(rs, rl, pp, nil), "^-j ZFW-APPS6$", "--ctorigdstport 8080 .*-j DROP", "ZFW-DOCK6-DROP"},
 	}
 	for _, c := range cases {
 		j, u, d := indexOf(c.lines, c.jump), indexOf(c.lines, c.user), indexOf(c.lines, c.catchy)
@@ -56,7 +60,7 @@ func TestAppsJumpPlacement(t *testing.T) {
 	}
 	// The bash emitter carries the same jumps.
 	bash := Compile(rs, pp, nil)
-	for _, want := range []string{"-A ZFW-IN -j ZFW-APPS-IN", "-A DOCKER-USER -j ZFW-APPS", "-A ZFW-IN6 -j ZFW-APPS-IN6"} {
+	for _, want := range []string{"-A ZFW-IN -j ZFW-APPS-IN", "$IPT -A DOCKER-USER -j ZFW-APPS\n", "-A ZFW-IN6 -j ZFW-APPS-IN6", "$IPT6 -A DOCKER-USER -j ZFW-APPS6"} {
 		if !strings.Contains(bash, want) {
 			t.Errorf("bash script lacks %q", want)
 		}
@@ -85,7 +89,7 @@ func TestApplyNeverFlushesAppChains(t *testing.T) {
 		if flush.MatchString(s) {
 			t.Errorf("%s apply script flushes or deletes an app chain", name)
 		}
-		for _, c := range []string{"ZFW-APPS", "ZFW-APPS-IN", "ZFW-APPS-IN6"} {
+		for _, c := range []string{"ZFW-APPS", "ZFW-APPS-IN", "ZFW-APPS-IN6", "ZFW-APPS6"} {
 			if !strings.Contains(s, " -N "+c+" 2>/dev/null || true") {
 				t.Errorf("%s: %s is not created idempotently", name, c)
 			}
@@ -103,6 +107,9 @@ func TestApplyNeverFlushesAppChains(t *testing.T) {
 	if strings.Index(restore, "-N ZFW-APPS-IN6") > strings.Index(restore, "--test --noflush \"$T6\"") {
 		t.Error("ZFW-APPS-IN6 must exist before the v6 restore is tested")
 	}
+	if i := strings.Index(restore, "-N ZFW-APPS6 "); i < 0 || i > strings.Index(restore, "--test --noflush \"$T6\"") {
+		t.Error("ZFW-APPS6 must exist before the v6 restore is tested")
+	}
 }
 
 func TestCompileAppsLines(t *testing.T) {
@@ -111,7 +118,7 @@ func TestCompileAppsLines(t *testing.T) {
 		{Zone: "docker", Proto: "udp", Port: 5000, State: apps.Pending}, // pending in lan mode → LAN
 		{Zone: "host", Proto: "tcp", Port: 9100, State: apps.Any},
 	}
-	docker, host, host6 := AppLines(active, "192.0.2.0/24")
+	docker, host, host6, docker6 := AppLines(active, "192.0.2.0/24")
 	wantD := []string{
 		"-s 192.0.2.0/24 -p tcp -m conntrack --ctorigdstport 8086 -j ACCEPT",
 		"-s 192.0.2.0/24 -p udp -m conntrack --ctorigdstport 5000 -j ACCEPT",
@@ -125,6 +132,16 @@ func TestCompileAppsLines(t *testing.T) {
 	if len(host6) != 1 || host6[0] != "-p tcp --dport 9100 -j ACCEPT" {
 		t.Errorf("only an 'any' answer opens IPv6: %v", host6)
 	}
+	_, _, h6, d6 := AppLines([]apps.Entry{{Zone: "docker", Proto: "tcp", Port: 8086, State: apps.Any}}, "192.0.2.0/24")
+	if len(d6) != 1 || d6[0] != "-p tcp -m conntrack --ctorigdstport 8086 -j ACCEPT" {
+		t.Errorf("'any' for a container port opens the IPv6 DOCKER-USER path: %v", d6)
+	}
+	if len(h6) != 1 {
+		t.Errorf("…and still the docker-proxy path in ZFW-IN6: %v", h6)
+	}
+	if len(docker6) != 0 {
+		t.Errorf("a LAN answer never opens IPv6: %v", docker6)
+	}
 }
 
 // Values that reach a root shell script are checked where they are used.
@@ -136,9 +153,9 @@ func TestCompileAppsRejectsUnsafeValues(t *testing.T) {
 		{Zone: "elsewhere", Proto: "tcp", Port: 81, State: apps.Any},
 		{Zone: "docker", Proto: "tcp", Port: 82, State: apps.LAN},
 	}
-	d, h, h6 := AppLines(active, "192.0.2.0/24; reboot")
-	if len(d)+len(h)+len(h6) != 0 {
-		t.Errorf("unsafe values produced lines: %v %v %v", d, h, h6)
+	d, h, h6, d6 := AppLines(active, "192.0.2.0/24; reboot")
+	if len(d)+len(h)+len(h6)+len(d6) != 0 {
+		t.Errorf("unsafe values produced lines: %v %v %v %v", d, h, h6, d6)
 	}
 	script := CompileApps(active, "192.0.2.0/24; reboot")
 	if strings.Contains(script, "reboot") || strings.Contains(script, "70000") {
@@ -160,7 +177,7 @@ func TestCompileAppsTouchesOnlyAppChains(t *testing.T) {
 			t.Errorf("apps script modifies %s", m[2])
 		}
 	}
-	if n < 6 { // 3 flushes + 3 appends at least
+	if n < 8 { // 4 flushes + 4 appends at least
 		t.Errorf("expected flush+fill of all three chains, found %d operations:\n%s", n, script)
 	}
 }

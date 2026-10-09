@@ -309,6 +309,7 @@ func emitDockerChain6(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, pp 
 	b.WriteString("\n# ===== DOCKER-USER IPv6 (published container ports) =====\n")
 	b.WriteString(`if [ -n "$IPT6" ] && $IPT6 -L DOCKER-USER -n >/dev/null 2>&1; then` + "\n")
 	b.WriteString("  $IPT6 -F DOCKER-USER\n")
+	b.WriteString("  " + appsChainCreate("$IPT6", AppsChainDocker6))
 	for _, line := range dockerUser6Rules(rs, rl, pp, extraBypass) {
 		fmt.Fprintf(b, "  $IPT6 -A DOCKER-USER %s\n", line)
 	}

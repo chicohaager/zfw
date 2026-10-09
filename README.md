@@ -139,13 +139,16 @@ the last apply is closed until a rule allows it, instead of open until the next 
 it looks broken. So when an app — from the ZimaOS store or started by hand, published
 port or `network_mode: host` — opens a port no rule covers, ZFW asks: **LAN only**,
 **Everyone** or **Block**, in the Exposure tab, in a banner above the tabs and as a
-card on the ZimaOS dashboard. Until you answer, the port is reachable **from your LAN
+card on the ZimaOS dashboard that opens ZFW. Until you answer, the port is reachable **from your LAN
 only** (or stays blocked, if you choose that mode). Each answer is saved as an ordinary
 rule and takes effect at once through dedicated chains (`ZFW-APPS` in `DOCKER-USER`,
-`ZFW-APPS-IN` in `ZFW-IN`, `ZFW-APPS-IN6` in `ZFW-IN6`) — **without an apply**, so no
+`ZFW-APPS-IN` in `ZFW-IN`, `ZFW-APPS-IN6` in `ZFW-IN6`, and `ZFW-APPS6` in the IPv6
+`DOCKER-USER` when Docker's own IPv6 filtering is on) — **without an apply**, so no
 other saved-but-untested edit goes live with it, and adding one `ACCEPT` for one port
 cannot lock you out. A rule you wrote for the port always wins: the app chains sit
-after your rules. "New" is deliberately narrow, so an update never opens what you had
+after your rules. "Covers" means the rule names the port, or applies to all ports for
+your whole LAN (source *any* or a range containing the LAN, no schedule) — a country or
+feed deny or an admin-PC allow over all ports does not stop the question. "New" is deliberately narrow, so an update never opens what you had
 left closed: a published port counts only if it was not in the inventory of the last
 apply, a host-network app only if its container started after this version first ran.
 

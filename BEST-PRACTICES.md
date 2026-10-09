@@ -145,7 +145,8 @@ once a rule allows it and you apply.
 
 **New app ports (v1.0.28).** A port a new app opened that no rule covers carries a
 **decide** tag, appears in the *New app ports* panel at the top of the tab and in a
-banner above all tabs, and — while a ZimaOS dashboard is open — as a card there. Until
+banner above all tabs, and — while a ZimaOS dashboard is open — as a card there that
+opens ZFW (you answer in ZFW, not on the card). Until
 you answer it is reachable from your LAN only; switch the panel's mode to *blocked* if
 you prefer the strict behaviour of v1.0.27. Answer with **LAN only**, **Everyone** or
 **Block**: the answer becomes a normal rule (named after the app and port) and works
@@ -155,6 +156,20 @@ immediately, without Safe-Apply. Two things to know:
   only true if your router forwards the port or a tunnel points at it — but then it is.
 - Answer before editing rules, or save your edits first: the answer is written into
   `rules.json`, so ZFW refuses it while the Rules tab holds unsaved changes.
+- **What counts as "a rule covers the port".** A rule that names the port (in a list
+  or a range) covers it, whatever its action or source. A rule for *all* ports covers
+  it only when it speaks for your whole LAN: source *any* or a range that contains
+  your LAN, and no schedule. A country or feed deny, or an allow for one admin PC,
+  over all ports does not — ZFW still asks about a new app's port. (Up to v1.0.28 any
+  such rule silenced the question for every port, and new container ports then stayed
+  closed without a word.)
+- **Changing your mind.** Answer again, or delete the rule the answer became and save:
+  that withdraws the answer. If nothing was applied since the app appeared, ZFW asks
+  again; otherwise the port is closed by the default-deny like any port no rule allows.
+  (Up to v1.0.28 the old answer stayed in effect after the rule was deleted and applied.)
+- **Narrowing ends connections.** *Block*, *Everyone → LAN only*, switching the mode
+  to *blocked* and a withdrawn answer tear down the open connections to that port, as
+  an apply does for a newly blocked port. (Up to v1.0.28 *Block* only stopped new ones.)
 
 Prioritise services that ship with **no authentication** — log viewers,
 metrics dashboards, noVNC / browser-desktop images, admin panels, and the
