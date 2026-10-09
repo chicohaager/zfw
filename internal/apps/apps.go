@@ -24,7 +24,7 @@
 //     calls "new since apply");
 //   - host zone (network_mode: host): the container started after this
 //     package first ran on the host (Baseline);
-//   - and in both cases no live rule mentions the port (rules.Decides).
+//   - and in both cases no live rule answers for the port (rules.Decides).
 package apps
 
 import (
@@ -231,6 +231,51 @@ func Detect(f File, cands []Candidate, live *Live, now time.Time) File {
 	f.Entries = kept
 	sort.SliceStable(f.Entries, func(i, j int) bool { return f.Entries[i].Since.Before(f.Entries[j].Since) })
 	return f
+}
+
+// Withdraw drops the answered entries whose rule is no longer in the saved
+// rule set: the operator deleted the rule an answer became, and saved rules
+// are the source of truth. Before 2026-10-09 the entry kept its answer and
+// Active re-admitted it to the app chain once the rule was gone from the
+// applied set too — deleting the rule and applying left the port open.
+// Dropped, the port is judged afresh by Detect: still new (nothing applied
+// since it appeared) → asked again; in the applied inventory → closed by the
+// default policy like any other port no rule allows.
+func Withdraw(f File, saved rules.RuleSet) (File, []Entry) {
+	have := make(map[string]bool, len(saved.Rules))
+	for _, r := range saved.Rules {
+		have[r.ID] = true
+	}
+	var gone []Entry
+	kept := f.Entries[:0]
+	for _, e := range f.Entries {
+		if e.State != Pending && e.RuleID != "" && !have[e.RuleID] {
+			gone = append(gone, e)
+			continue
+		}
+		kept = append(kept, e)
+	}
+	f.Entries = kept
+	return f, gone
+}
+
+// Reach is how far an entry is meant to be open right now — by its answer, or
+// by the pending mode — whichever chain carries it: "any", "lan" or "".
+func (e Entry) Reach(mode string) string {
+	if !e.Present {
+		return ""
+	}
+	switch e.State {
+	case Any:
+		return "any"
+	case LAN:
+		return "lan"
+	case Pending:
+		if mode == ModeLAN {
+			return "lan"
+		}
+	}
+	return ""
 }
 
 // Active returns the entries that need an ACCEPT in the app chains right now:

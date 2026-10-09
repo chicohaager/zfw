@@ -40,7 +40,7 @@ PERSIST_UNIT="/etc/systemd/system/zfw.service"
 APPLIED="$SELF_DIR/applied.sh"
 COMMITTED="$SELF_DIR/committed.sh"
 # The new-app prompt (v1.0.28). The daemon writes apps.sh, which rewrites
-# only the three app chains (ZFW-APPS, ZFW-APPS-IN, ZFW-APPS-IN6); an apply
+# only the four app chains (ZFW-APPS, ZFW-APPS-IN, ZFW-APPS-IN6, ZFW-APPS6); an apply
 # creates and jumps to them but never flushes them. `zfw apps` runs it — no
 # full apply, so no saved-but-untested edit goes live with an answer.
 APPS="${ZFW_APPS:-$SELF_DIR/apps.sh}"
@@ -172,9 +172,12 @@ revert(){
       $IPT6 -F DOCKER-USER 2>/dev/null || true
       $IPT6 -A DOCKER-USER -j RETURN 2>/dev/null || true
     fi
-    # App chain (v1.0.28). Its only jump lived in ZFW-IN6, deleted above.
+    # App chains (v1.0.28; ZFW-APPS6 added 2026-10-09). Their only jumps lived in
+    # ZFW-IN6 (deleted above) and the IPv6 DOCKER-USER (restored to stock above).
     $IPT6 -F ZFW-APPS-IN6 2>/dev/null || true
     $IPT6 -X ZFW-APPS-IN6 2>/dev/null || true
+    $IPT6 -F ZFW-APPS6 2>/dev/null || true
+    $IPT6 -X ZFW-APPS6 2>/dev/null || true
   fi
   # App chains (v1.0.28). Their jumps lived in DOCKER-USER (restored to stock
   # above) and ZFW-IN (deleted above), so they are unreferenced by now. Left
@@ -397,6 +400,7 @@ case "${1:-}" in
     echo "--- ZFW-APPS ---";    $IPT -S ZFW-APPS 2>/dev/null || echo "(not loaded)"
     echo "--- ZFW-APPS-IN ---"; $IPT -S ZFW-APPS-IN 2>/dev/null || echo "(not loaded)"
     [ -n "$IPT6" ] && { echo "--- ZFW-APPS-IN6 ---"; $IPT6 -S ZFW-APPS-IN6 2>/dev/null || echo "(not loaded)"; }
+    [ -n "$IPT6" ] && { echo "--- ZFW-APPS6 ---"; $IPT6 -S ZFW-APPS6 2>/dev/null || echo "(not loaded)"; }
     echo "--- deadman ---";     systemctl is-active "${DEADMAN}.timer" 2>/dev/null || echo "inactive"
     ;;
   *)

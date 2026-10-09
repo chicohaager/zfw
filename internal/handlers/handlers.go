@@ -123,7 +123,11 @@ type Server struct {
 	appPorts   func(context.Context) ([]system.AppPort, error)
 	appTitle   func(project string) string
 	notifier   apps.Notifier
-	clock      func() time.Time
+	// appsOpen is how far each app-chain entry was open after the last sync
+	// ("lan" or "any"); a narrowing tears its connections down (flushConntrack).
+	appsOpen       map[string]string
+	flushConntrack func(context.Context, []conntrack.PortKey) (int, error)
+	clock          func() time.Time
 }
 
 // SetLogLevel wires the daemon's runtime log-level control into the
@@ -169,6 +173,7 @@ func NewServer(fw Firewall, rulesPath, compiledPath, geoDir, feedsDir, historyPa
 		notifier:         apps.Notifier{BusURLFile: apps.DefaultBusURLFile},
 		clock:            time.Now,
 		appsKick:         make(chan struct{}, 1),
+		flushConntrack:   conntrack.Flush,
 	}
 }
 

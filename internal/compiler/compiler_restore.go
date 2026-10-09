@@ -123,6 +123,9 @@ func CompileRestoreScript(rs rules.RuleSet, pp system.PublishedPorts, geoFiles m
 	b.WriteString("\n# ===== IPv6 filter (atomic restore) =====\n")
 	b.WriteString(`if [ -n "$IPT6R" ]; then` + "\n")
 	b.WriteString("  " + appsChainCreate("$IPT6", AppsChainHost6))
+	// The v6 document declares DOCKER-USER (see restoreV6), so the jump to
+	// ZFW-APPS6 is always written there and the chain must exist first.
+	b.WriteString("  " + appsChainCreate("$IPT6", AppsChainDocker6))
 	b.WriteString(`  T6="$(mktemp)"` + "\n")
 	b.WriteString("  cat > \"$T6\" <<'ZFW_RESTORE_V6'\n")
 	b.WriteString(v6)
@@ -477,6 +480,7 @@ func dockerUser6Rules(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPort
 		out = append(out,
 			"-i docker0 -j RETURN",
 			"-i br-+ -j RETURN")
+		out = append(out, appsJump(AppsChainDocker6))
 		out = append(out, denyLines(pp, "ZFW-DOCK6-DROP ")...)
 		out = append(out, dnatGuardLines("ZFW-DOCK6-DROP ")...)
 	}

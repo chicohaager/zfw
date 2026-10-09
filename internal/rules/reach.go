@@ -123,19 +123,52 @@ func appendUnique(xs []string, v string) []string {
 	return append(xs, v)
 }
 
-// Decides reports whether any enabled inbound rule names this port on this
-// protocol for this chain — whatever its action, source or schedule. It is
-// the new-app check's (internal/apps) definition of "somebody already chose":
-// a port no rule mentions is only closed by the default policy, so nobody has
-// answered for it yet; a port an allow or a deny names has an answer, and the
-// prompt must not override it. A container port is published, so a zone-auto
-// list rule reaches DOCKER-USER (dockerKnown true), as in the compiler.
+// Decides reports whether some enabled inbound rule already answers "who may
+// reach this port" for this chain. It is the new-app check's (internal/apps)
+// definition of "somebody already chose": a port nothing answers for is only
+// closed by the default policy, so nobody has answered for it yet, and the
+// prompt asks; a port with an answer must not be overridden by the prompt.
+//
+// A rule that names the port (a list or range containing it) answers, whatever
+// its action, source or schedule. A rule for ALL ports answers only when it
+// speaks for the whole LAN — source any or a range containing the LAN, and no
+// schedule. A country or feed deny, or an allow for one admin PC, over all
+// ports says nothing about who else on the LAN may reach a new app; until
+// 2026-10-09 such a rule counted, and one of them silenced the prompt for
+// every port while the DNAT guard kept every new container port closed.
+//
+// A container port is published, so a zone-auto list rule reaches DOCKER-USER
+// (dockerKnown true), as in the compiler.
 func Decides(rs RuleSet, zone, proto string, port int) bool {
 	for _, r := range rs.Rules {
-		if inbound(r) && protoMatch(r.Protocol, proto) && portMatch(r.Ports, port) &&
-			reachesChain(r, zone, true) {
+		if !inbound(r) || !protoMatch(r.Protocol, proto) || !portMatch(r.Ports, port) ||
+			!reachesChain(r, zone, true) {
+			continue
+		}
+		if r.Ports.Type != "all" || speaksForLAN(r, rs.LAN) {
 			return true
 		}
+	}
+	return false
+}
+
+// speaksForLAN: the rule matches every LAN source at every hour.
+func speaksForLAN(r Rule, lan string) bool {
+	if r.Schedule != nil {
+		return false
+	}
+	switch r.Source.Type {
+	case "any":
+		return true
+	case "range":
+		_, n, err := net.ParseCIDR(r.Source.Value)
+		_, ln, lerr := net.ParseCIDR(lan)
+		if err != nil || lerr != nil {
+			return false
+		}
+		ones, bits := n.Mask.Size()
+		lOnes, lBits := ln.Mask.Size()
+		return bits == lBits && ones <= lOnes && n.Contains(ln.IP)
 	}
 	return false
 }
