@@ -106,11 +106,23 @@ func CompileApps(active []apps.Entry, lan string) string {
 		}
 		fmt.Fprintf(&b, "  echo \"[zfw] %s: %d\"\n", chain, len(lines))
 		if absentOK != "" {
-			// Not every host has this chain's parent; without it the chain is
-			// not needed, and saying "missing" would make the daemon retry the
-			// rewrite forever (it re-runs until no "missing" is reported).
+			// A chain added after the others (ZFW-APPS6, 2026-10-09). The
+			// daemon re-runs the whole script every minute while anything says
+			// "missing", flushing every app chain each time — measured on a
+			// ZimaBoard 2 right after the update, before the first apply.
+			// So: without its parent the chain is not needed; with the parent
+			// but without the chain, create it here (unreferenced, harmless)
+			// and let the next apply add the jump.
 			fmt.Fprintf(&b, "elif ! %s; then\n", absentOK)
 			fmt.Fprintf(&b, "  echo \"[zfw] %s not needed (no IPv6 DOCKER-USER: Docker's ip6tables support is off)\"\n", chain)
+			b.WriteString("else\n")
+			fmt.Fprintf(&b, "  %s -N %s\n", ipt, chain)
+			for _, l := range lines {
+				fmt.Fprintf(&b, "  %s -A %s %s\n", ipt, chain, l)
+			}
+			fmt.Fprintf(&b, "  echo \"[zfw] %s created: %d (in effect after the next apply)\"\n", chain, len(lines))
+			b.WriteString("fi\n")
+			return
 		}
 		b.WriteString("else\n")
 		fmt.Fprintf(&b, "  echo \"[zfw] %s missing — apply once to create it\"\n", chain)

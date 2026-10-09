@@ -107,7 +107,11 @@ func TestAppChainsLive(t *testing.T) {
 				full := "BACKEND=" + backend + "\n" + dnatTopology + appsTopology +
 					// before the first apply the chains do not exist: the apps
 					// script must change nothing and say so
-					"bash " + ap + " | grep -c 'missing — apply once' | sed 's/^/premature-missing-lines /'\n" +
+					"bash " + ap + " > " + filepath.Join(dir, "premature") + " 2>&1\n" +
+					"grep -c 'missing — apply once' " + filepath.Join(dir, "premature") + " | sed 's/^/premature-missing-lines /'\n" +
+					"grep -q 'ZFW-APPS6 created: 1' " + filepath.Join(dir, "premature") + " && echo premature-apps6-created\n" +
+					// back to a fresh host for the "before" probes
+					"$IPT6 -F ZFW-APPS6; $IPT6 -X ZFW-APPS6\n" +
 					run(sp) + "P=before\n" + appsProbes +
 					run(ap) + "P=answered\n" + appsProbes +
 					run(sp) + "P=reapplied\n" + appsProbes +
@@ -142,8 +146,14 @@ func TestAppChainsLive(t *testing.T) {
 				if strings.Contains(string(out), "left-after-revert") || !strings.Contains(string(out), "revert-checked") {
 					t.Errorf("engine revert left a ZFW chain behind (or did not run)")
 				}
-				if !strings.Contains(string(out), "premature-missing-lines 4") {
-					t.Errorf("apps script before the first apply: want 4 'missing' notices")
+				// Three "missing" (the v1.0.28 chains), and ZFW-APPS6 created by
+				// the apps script itself — a fourth "missing" would make the daemon
+				// flush and rewrite every app chain each minute until an apply.
+				if !strings.Contains(string(out), "premature-missing-lines 3") {
+					t.Errorf("apps script before the first apply: want 3 'missing' notices")
+				}
+				if !strings.Contains(string(out), "premature-apps6-created") {
+					t.Errorf("apps script before the first apply: ZFW-APPS6 must be created, not reported missing")
 				}
 				if t.Failed() {
 					t.Logf("full output:\n%s", out)

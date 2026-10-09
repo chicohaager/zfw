@@ -1,9 +1,17 @@
 # Release-notes draft — new-app prompt fixes (version left to the maintainer)
 
 Four gaps in the v1.0.28 new-app prompt, found in a code review on 2026-10-09
-(not reported by users, not measured on a device). Each has a test that fails
-without the fix; the IPv6 one runs through real netfilter (nft) in a network
-namespace and was checked against a sabotaged build.
+(not reported by users). Each has a test that fails without the fix; the IPv6
+one runs through real netfilter (nft) in a network namespace and was checked
+against a sabotaged build. **Measured on a ZimaBoard 2 (ZimaOS 1.8.0-beta2) on
+2026-10-09 with build 1.0.29-test.1:** with an all-ports rule for one address in
+place, a new container port was still asked about (pending, HTTP 200 from the
+LAN); an open keep-alive connection kept working after "LAN only" and died at
+"Block" (`flushed conntrack … deleted=1`), new connections timed out; deleting
+the answer rule and applying withdrew the answer (`new-app answer withdrawn`)
+and the port timed out; a container on an IPv6 Docker network answered
+"Everyone" was reached over IPv6 through the DNAT path (timeout → 200), and with
+the new jump removed by hand it timed out again — v1.0.28's behaviour.
 
 1. **One all-ports rule silenced the question for every port.** `rules.Decides`
    counted any inbound rule whose ports matched — including a country or feed
@@ -26,7 +34,9 @@ namespace and was checked against a sabotaged build.
    the v6 DNAT guard dropped it. New chain `ZFW-APPS6`, jumped to from the IPv6
    `DOCKER-USER` in both emitters, filled by `zfw apps`, removed by `zfw revert`, shown
    by `zfw status`. On hosts without an IPv6 `DOCKER-USER` the apps script says "not
-   needed" instead of "missing" (otherwise the daemon would retry every minute).
+   needed"; right after the update, before the first apply, it creates `ZFW-APPS6`
+   itself instead of reporting it missing — the device test caught build test.1
+   rewriting every app chain once a minute until the next apply.
    (live test `TestAppChainsLive`, probes `*-docker-any-wan-v6`)
 
 4. **"Block" did not end open connections.** The app chains judge new connections;
