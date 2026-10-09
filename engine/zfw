@@ -172,7 +172,7 @@ revert(){
       $IPT6 -F DOCKER-USER 2>/dev/null || true
       $IPT6 -A DOCKER-USER -j RETURN 2>/dev/null || true
     fi
-    # App chains (v1.0.28; ZFW-APPS6 added 2026-10-09). Their only jumps lived in
+    # App chains (v1.0.28; ZFW-APPS6 since v1.0.29). Their only jumps lived in
     # ZFW-IN6 (deleted above) and the IPv6 DOCKER-USER (restored to stock above).
     $IPT6 -F ZFW-APPS-IN6 2>/dev/null || true
     $IPT6 -X ZFW-APPS-IN6 2>/dev/null || true
