@@ -16,7 +16,7 @@
 #
 # Usage (on the ZimaOS host):
 #
-#   sudo docker run --rm --privileged --pid=host -v /:/host chicohaager/zfw:1.0.28
+#   sudo docker run --rm --privileged --pid=host -v /:/host chicohaager/zfw:1.0.29
 #
 # (sudo: the ZimaOS login user is not in the docker group.)
 #
