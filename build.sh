@@ -1,7 +1,7 @@
 #!/bin/sh
 # Build zfw.raw sysext modules + release tarballs for one or more arches.
 # Requirements on the build host:
-#   - go 1.27.1 (pinned by the go directive in go.mod; an older go in PATH
+#   - go 1.27.2 (pinned by the go directive in go.mod; an older go in PATH
 #     downloads and switches to it automatically, GOTOOLCHAIN=auto)
 #   - squashfs-tools (mksquashfs)
 #   - GNU tar (for the reproducible packaging flags)

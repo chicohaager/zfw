@@ -178,7 +178,7 @@ control rather than a runtime control:
   it runs in the job that produces the release tarball — bump the pin
   deliberately, not automatically.
 - The Go toolchain itself is pinned by the `go` directive in `go.mod`
-  (1.27.1 as of this revision) and CI reads it from there
+  (1.27.2 as of this revision) and CI reads it from there
   (`go-version-file`), so the vulnerability scan, the tests and the
   release build all run on the toolchain the binary ships with.
 - The CI workflow file (`.github/workflows/ci.yml`) is committed but
