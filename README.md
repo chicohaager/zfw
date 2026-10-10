@@ -310,7 +310,20 @@ be suspicious of any firewall that does.
 
 The flags are what they look like: `--privileged` and `--pid=host` let the
 installer enter the host's namespaces, `-v /:/host` is the filesystem it installs
-into. Uninstalling is `sudo /DATA/zfw/zfw revert` on the host, then removing
+into.
+
+**Updating is the same command.** It installs the newest release over the existing
+one; your rules in `/DATA/zfw/` are not touched:
+
+```sh
+sudo docker run --rm --pull always --privileged --pid=host -v /:/host chicohaager/zfw:latest
+```
+
+`--pull always` matters with `latest`: without it Docker runs whatever `latest` it
+pulled last time and reinstalls the old version. With an exact version tag
+(`chicohaager/zfw:<version>`) it is not needed.
+
+Uninstalling is `sudo /DATA/zfw/zfw revert` on the host, then removing
 `/var/lib/extensions/zfw.raw` (as root) and running `sudo systemd-sysext refresh`.
 
 ### After a ZimaOS update
