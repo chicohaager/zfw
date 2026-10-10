@@ -222,7 +222,7 @@ func isStateToken(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if !((r >= 'A' && r <= 'Z') || r == '_') {
+		if (r < 'A' || r > 'Z') && r != '_' {
 			return false
 		}
 	}

@@ -54,7 +54,7 @@ func TestAppsJumpPlacement(t *testing.T) {
 			t.Errorf("%s: jump %d, user rule %d, catch-all %d — all must be present\n%s", c.name, j, u, d, strings.Join(c.lines, "\n"))
 			continue
 		}
-		if !(u <= j && j < d) {
+		if u > j || j >= d {
 			t.Errorf("%s: want user rule (%d) <= jump (%d) < catch-all (%d)", c.name, u, j, d)
 		}
 	}

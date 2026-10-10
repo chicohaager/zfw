@@ -93,7 +93,7 @@ func TestHistoryAttachIncludesEmptyTimeline(t *testing.T) {
 	// `null`, which crashes the UI's iteration loop. The handler
 	// (not Attach) normalises this; here we just verify Attach
 	// returned the entry at all.
-	if out[1].Finding.ID != "M2" {
+	if out[1].ID != "M2" {
 		t.Errorf("M2 entry missing or wrong: %+v", out[1])
 	}
 }

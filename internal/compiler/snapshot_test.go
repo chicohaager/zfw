@@ -1,6 +1,7 @@
 package compiler
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,7 +61,7 @@ func TestLiveSnapshotAbsent(t *testing.T) {
 	if err := os.WriteFile(p, []byte("#!/bin/bash\nset -eu\n$IPT -F ZFW-IN\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ReadLiveSnapshot(p); err != ErrNoLiveSnapshot {
+	if _, err := ReadLiveSnapshot(p); !errors.Is(err, ErrNoLiveSnapshot) {
 		t.Errorf("err = %v, want ErrNoLiveSnapshot", err)
 	}
 }

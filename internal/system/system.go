@@ -31,7 +31,7 @@ import (
 // input for a per-rule IPv6 source picker; the caller decides how much of
 // it to surface.
 func DetectLAN6() (lan6CIDR, hostIP6 string) {
-	conn, err := net.Dial("udp", "[2001:4860:4860::8888]:80")
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "udp", "[2001:4860:4860::8888]:80")
 	if err != nil {
 		return
 	}
@@ -128,7 +128,7 @@ func DetectLANOK() (lanCIDR, hostIP string, ok bool) {
 
 func detectLANUncached() (lanCIDR, hostIP string, ok bool) {
 	lanCIDR = "192.168.1.0/24"
-	conn, err := net.Dial("udp", "8.8.8.8:80")
+	conn, err := (&net.Dialer{}).DialContext(context.Background(), "udp", "8.8.8.8:80")
 	if err != nil {
 		return
 	}

@@ -520,7 +520,7 @@ func TestRemovingTheLastOutboundRule(t *testing.T) {
 	if iD < 0 || iF < 0 || iX < 0 {
 		t.Fatalf("teardown incomplete: unhook=%d flush=%d delete=%d", iD, iF, iX)
 	}
-	if !(iD < iF && iF < iX) {
+	if iD >= iF || iF >= iX {
 		t.Errorf("teardown out of order: unhook=%d flush=%d delete=%d "+
 			"(-X on a chain still referenced by OUTPUT fails)", iD, iF, iX)
 	}
