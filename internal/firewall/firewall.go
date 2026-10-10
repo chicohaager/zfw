@@ -96,7 +96,7 @@ type Manager struct {
 //
 // Returns "" when the binary is missing or prints neither marker.
 func familyOf(bin string) string {
-	out, err := exec.Command(bin, "-V").CombinedOutput()
+	out, err := exec.CommandContext(context.Background(), bin, "-V").CombinedOutput()
 	if err != nil {
 		return ""
 	}
@@ -144,7 +144,7 @@ func New(bin, conf string) *Manager {
 			if _, err := exec.LookPath(c); err != nil {
 				continue
 			}
-			out, _ := exec.Command(c, "-S", "FORWARD").CombinedOutput()
+			out, _ := exec.CommandContext(context.Background(), c, "-S", "FORWARD").CombinedOutput()
 			if strings.Contains(string(out), "DOCKER-USER") || strings.Contains(string(out), "DOCKER-FORWARD") {
 				return c
 			}

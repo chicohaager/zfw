@@ -1,0 +1,35 @@
+# golangci-lint configuration
+# Check: golangci-lint run ./...   Format: golangci-lint fmt
+version: "2"
+
+linters:
+  default: standard            # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose                # HTTP response body not closed
+    - errorlint                # error comparison without errors.Is/As
+    - nilerr                   # err checked, but nil returned
+    - noctx                    # HTTP/SQL call without a context
+    - rowserrcheck             # rows.Err() not checked
+    - sqlclosecheck            # Rows/Stmt not closed
+    - unconvert                # unnecessary type conversion
+    - copyloopvar              # loop variable copy unnecessary since Go 1.22
+    - usestdlibvars            # "GET" instead of http.MethodGet etc.
+  settings:
+    errcheck:
+      check-type-assertions: true
+  exclusions:
+    generated: lax
+    presets:
+      - std-error-handling      # fmt.Println and friends without errcheck
+    rules:
+      - path: _test\.go
+        linters: [errcheck, bodyclose, noctx]
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -11,8 +11,8 @@ import (
 // across a redirect.
 func TestSafeCheckRedirectRefusesHTTPSDowngrade(t *testing.T) {
 	cb := SafeCheckRedirect(5)
-	orig, _ := http.NewRequest("GET", "https://example.com/", nil)
-	next, _ := http.NewRequest("GET", "http://example.com/", nil)
+	orig, _ := http.NewRequest(http.MethodGet, "https://example.com/", nil)
+	next, _ := http.NewRequest(http.MethodGet, "http://example.com/", nil)
 	if err := cb(next, []*http.Request{orig}); err == nil {
 		t.Fatalf("expected https→http redirect to be refused")
 	}
@@ -22,8 +22,8 @@ func TestSafeCheckRedirectRefusesHTTPSDowngrade(t *testing.T) {
 // direction and must keep working.
 func TestSafeCheckRedirectAllowsHTTPUpgrade(t *testing.T) {
 	cb := SafeCheckRedirect(5)
-	orig, _ := http.NewRequest("GET", "http://example.com/", nil)
-	next, _ := http.NewRequest("GET", "https://example.com/", nil)
+	orig, _ := http.NewRequest(http.MethodGet, "http://example.com/", nil)
+	next, _ := http.NewRequest(http.MethodGet, "https://example.com/", nil)
 	if err := cb(next, []*http.Request{orig}); err != nil {
 		t.Fatalf("http→https upgrade refused: %v", err)
 	}
@@ -34,8 +34,8 @@ func TestSafeCheckRedirectAllowsHTTPUpgrade(t *testing.T) {
 // cannot bounce the fetch into a loopback service.
 func TestSafeCheckRedirectRefusesPublicToLoopback(t *testing.T) {
 	cb := SafeCheckRedirect(5)
-	orig, _ := http.NewRequest("GET", "https://203.0.113.5/", nil)
-	next, _ := http.NewRequest("GET", "https://127.0.0.1/", nil)
+	orig, _ := http.NewRequest(http.MethodGet, "https://203.0.113.5/", nil)
+	next, _ := http.NewRequest(http.MethodGet, "https://127.0.0.1/", nil)
 	if err := cb(next, []*http.Request{orig}); err == nil {
 		t.Fatalf("expected public→loopback redirect to be refused")
 	}
@@ -45,8 +45,8 @@ func TestSafeCheckRedirectRefusesPublicToLoopback(t *testing.T) {
 // an RFC1918 target.
 func TestSafeCheckRedirectRefusesPublicToPrivate(t *testing.T) {
 	cb := SafeCheckRedirect(5)
-	orig, _ := http.NewRequest("GET", "https://203.0.113.5/", nil)
-	next, _ := http.NewRequest("GET", "https://192.168.1.50/", nil)
+	orig, _ := http.NewRequest(http.MethodGet, "https://203.0.113.5/", nil)
+	next, _ := http.NewRequest(http.MethodGet, "https://192.168.1.50/", nil)
 	if err := cb(next, []*http.Request{orig}); err == nil {
 		t.Fatalf("expected public→RFC1918 redirect to be refused")
 	}
@@ -56,8 +56,8 @@ func TestSafeCheckRedirectRefusesPublicToPrivate(t *testing.T) {
 // not turn into a regression that breaks normal CDN-shaped chains.
 func TestSafeCheckRedirectAllowsPublicToPublic(t *testing.T) {
 	cb := SafeCheckRedirect(5)
-	orig, _ := http.NewRequest("GET", "https://203.0.113.5/", nil)
-	next, _ := http.NewRequest("GET", "https://198.51.100.7/", nil)
+	orig, _ := http.NewRequest(http.MethodGet, "https://203.0.113.5/", nil)
+	next, _ := http.NewRequest(http.MethodGet, "https://198.51.100.7/", nil)
 	if err := cb(next, []*http.Request{orig}); err != nil {
 		t.Fatalf("public→public refused: %v", err)
 	}
@@ -68,8 +68,8 @@ func TestSafeCheckRedirectAllowsPublicToPublic(t *testing.T) {
 // "redirect into itself" without tripping the public→private guard.
 func TestSafeCheckRedirectAllowsLoopbackToLoopback(t *testing.T) {
 	cb := SafeCheckRedirect(5)
-	orig, _ := http.NewRequest("GET", "http://127.0.0.1:1234/a", nil)
-	next, _ := http.NewRequest("GET", "http://127.0.0.1:1234/b", nil)
+	orig, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:1234/a", nil)
+	next, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:1234/b", nil)
 	if err := cb(next, []*http.Request{orig}); err != nil {
 		t.Fatalf("loopback→loopback refused: %v", err)
 	}
@@ -79,12 +79,12 @@ func TestSafeCheckRedirectAllowsLoopbackToLoopback(t *testing.T) {
 // surface reduction, so 6 redirects through a 5-hop cap must abort.
 func TestSafeCheckRedirectCapsHops(t *testing.T) {
 	cb := SafeCheckRedirect(5)
-	orig, _ := http.NewRequest("GET", "https://203.0.113.5/", nil)
+	orig, _ := http.NewRequest(http.MethodGet, "https://203.0.113.5/", nil)
 	via := []*http.Request{orig}
 	for i := 0; i < 4; i++ {
 		via = append(via, orig)
 	}
-	next, _ := http.NewRequest("GET", "https://203.0.113.5/x", nil)
+	next, _ := http.NewRequest(http.MethodGet, "https://203.0.113.5/x", nil)
 	// 5 entries in via = the 6th hop request: should abort.
 	if err := cb(next, via); err == nil {
 		t.Fatalf("expected hop cap to abort the chain")
@@ -150,8 +150,8 @@ func TestIsLoopbackURL(t *testing.T) {
 // The .invalid TLD is reserved (RFC 2606) and never resolves.
 func TestSafeCheckRedirectRefusesPublicToUnresolvable(t *testing.T) {
 	cb := SafeCheckRedirect(5)
-	orig, _ := http.NewRequest("GET", "https://203.0.113.5/", nil)
-	next, _ := http.NewRequest("GET", "https://does-not-exist.invalid/", nil)
+	orig, _ := http.NewRequest(http.MethodGet, "https://203.0.113.5/", nil)
+	next, _ := http.NewRequest(http.MethodGet, "https://does-not-exist.invalid/", nil)
 	if err := cb(next, []*http.Request{orig}); err == nil {
 		t.Fatalf("expected public→unresolvable redirect to be refused")
 	}

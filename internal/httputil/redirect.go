@@ -20,6 +20,7 @@
 package httputil
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -54,12 +55,12 @@ func SafeCheckRedirect(maxHops int) func(req *http.Request, via []*http.Request)
 		// A loopback-only original (e.g. the JWKS endpoint pinned at
 		// 127.0.0.1) is already on-host so the asymmetry is fine — it
 		// can only "redirect into itself".
-		if origIsPublic, err := hostIsPublic(orig.Hostname()); err == nil && origIsPublic {
+		if origIsPublic, err := hostIsPublic(req.Context(), orig.Hostname()); err == nil && origIsPublic {
 			// Fail closed when the next hop cannot be resolved: a
 			// DNS-rebinding answer that NXDOMAINs at check time and
 			// flips to a private A record at dial time would otherwise
 			// walk straight past this guard.
-			nextIsPublic, err := hostIsPublic(next.Hostname())
+			nextIsPublic, err := hostIsPublic(req.Context(), next.Hostname())
 			if err != nil {
 				return fmt.Errorf("refusing redirect from public %s to unresolvable %s: %w",
 					orig.Host, next.Host, err)
@@ -78,7 +79,7 @@ func SafeCheckRedirect(maxHops int) func(req *http.Request, via []*http.Request)
 // (false, err) on resolution failure so the caller can decide to allow
 // or refuse — SafeCheckRedirect fails closed: a public original may
 // only redirect to a hop that provably resolves to public addresses.
-func hostIsPublic(host string) (bool, error) {
+func hostIsPublic(ctx context.Context, host string) (bool, error) {
 	if host == "" {
 		return false, fmt.Errorf("empty host")
 	}
@@ -89,7 +90,7 @@ func hostIsPublic(host string) (bool, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		return ipIsPublic(ip), nil
 	}
-	ips, err := net.LookupIP(host)
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 	if err != nil {
 		return false, err
 	}
