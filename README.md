@@ -155,7 +155,7 @@ left closed: a published port counts only if it was not in the inventory of the 
 apply, a host-network app only if its container started after this version first ran.
 
 `localhost`, the host's own IP and the mesh interfaces (`tailscale0`, ZeroTier,
-WireGuard and `tun0` for ZimaOS' own Zima Net) are always allowed — so VPN access
+WireGuard, Nebula (`nebula+`) and `tun0` for ZimaOS' own Zima Net) are always allowed — so VPN access
 and tunnel clients (e.g. Pangolin/Newt) are never affected.
 ZFW governs the **LAN** boundary only.
 

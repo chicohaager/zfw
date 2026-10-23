@@ -288,6 +288,7 @@ func zfwInRules(rs rules.RuleSet, rl []rules.Rule, dockerPorts map[int]bool, ext
 		// tun0's tx counter sits at 668 bytes for days. Adding it moved tx within
 		// two seconds. Listed in BEST-PRACTICES.md and THREAT-MODEL.md.
 		"-i tun0 -j ACCEPT",
+		"-i nebula+ -j ACCEPT",
 		"-p icmp -j ACCEPT",
 		"-p udp --dport 68 -j ACCEPT",
 		"-p udp --dport 41641 -j ACCEPT",
@@ -358,7 +359,8 @@ func dockerUserRules(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPorts
 		"-i tailscale0 -j RETURN",
 		"-i zt+ -j RETURN",
 		"-i wg+ -j RETURN",
-		"-i tun0 -j RETURN")
+		"-i tun0 -j RETURN",
+		"-i nebula+ -j RETURN")
 	for _, iface := range extraBypass {
 		out = append(out, "-i "+iface+" -j RETURN")
 	}
@@ -465,6 +467,7 @@ func dockerUser6Rules(rs rules.RuleSet, rl []rules.Rule, pp system.PublishedPort
 		"-i zt+ -j RETURN",
 		"-i wg+ -j RETURN",
 		"-i tun0 -j RETURN",
+		"-i nebula+ -j RETURN",
 	}
 	for _, iface := range extraBypass {
 		out = append(out, "-i "+iface+" -j RETURN")
@@ -500,6 +503,7 @@ func zfwIn6Rules(rs rules.RuleSet, rl []rules.Rule, extraBypass []string) []stri
 		"-i zt+ -j RETURN",
 		"-i wg+ -j RETURN",
 		"-i tun0 -j RETURN",
+		"-i nebula+ -j RETURN",
 	}
 	for _, iface := range extraBypass {
 		out = append(out, "-i "+iface+" -j RETURN")

@@ -88,6 +88,7 @@ tunnelled or host-local client cannot be cut off:
 | `tailscale0` interface + UDP 41641 | Tailscale mesh — out-of-band access |
 | `zt+` interfaces + UDP 9993 | ZeroTier mesh |
 | `tun0` interface | znet / Zima Net — ZimaOS' own mesh, shipped and preset-enabled since at least v1.7.0 |
+| `nebula+` interfaces | Nebula overlay (`nebula` sysext module, device `nebula1` by default); its UDP listen port still needs a rule |
 | `virbr0` | libvirt / ZimaOS VM networking |
 | ICMP | ping / path-MTU |
 | UDP 68 | DHCP client |

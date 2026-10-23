@@ -89,6 +89,7 @@ func TestDNATGuardClosesLaterPublishedPortsV4(t *testing.T) {
 		"-i zt+ -j RETURN",
 		"-i wg+ -j RETURN",
 		"-i tun0 -j RETURN",
+		"-i nebula+ -j RETURN",
 		"-i vpn+ -j RETURN",
 		"-i docker0 -j RETURN",
 		"-i br-+ -j RETURN",
