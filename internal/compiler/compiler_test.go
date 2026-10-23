@@ -578,6 +578,22 @@ func TestZimaNetTunnelBypassed(t *testing.T) {
 	mustContain(t, out, "$IPT6 -A ZFW-IN6 -i tun0 -j RETURN")
 }
 
+// TestNebulaWildcardBypassed guards the nebula+ entry added 2026-10-23.
+//
+// Nebula (slackhq/nebula, packaged as the `nebula` sysext module) names its
+// TUN device nebula1 by default. A peer arriving on it has passed Nebula's
+// certificate handshake and Nebula's own firewall section — the same trust
+// argument as wg+ and tailscale0. Measured on ZimaOS 1.8.0 (.184,
+// `iptables -L ZFW-IN -nv`): the chain accepted lo, docker0, br-+, virbr0,
+// tailscale0, zt+, wg+ and tun0 only, so traffic on a Nebula interface fell
+// through to the final LOG + DROP. All three emitters are asserted, as for tun0.
+func TestNebulaWildcardBypassed(t *testing.T) {
+	out := Compile(rules.RuleSet{DefaultPolicy: "deny"}, system.PublishedPorts{}, nil)
+	mustContain(t, out, "$IPT -A ZFW-IN -i nebula+ -j ACCEPT")
+	mustContain(t, out, "$IPT -A DOCKER-USER -i nebula+ -j RETURN")
+	mustContain(t, out, "$IPT6 -A ZFW-IN6 -i nebula+ -j RETURN")
+}
+
 // TestExtraBypassIfacesEmittedInAllChains guards the operator-
 // configured extension to the bypass list: ZFW_EXTRA_BYPASS_IFACES
 // names appear in ZFW-IN, ZFW-IN6 and DOCKER-USER so a custom-named

@@ -157,6 +157,10 @@ func emitHostChain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, docker
 		// mesh. Measured 2026-08-14: without it the client's SYNs to :9527 are
 		// dropped by ZFW-IN and it hangs on "connecting". See BEST-PRACTICES.md.
 		"-i tun0 -j ACCEPT",
+		// Nebula — v1.0.30. The nebula sysext module names its TUN device
+		// nebula1 by default; a peer on it passed Nebula's certificate handshake
+		// and Nebula's own firewall, the same trust argument as wg+.
+		"-i nebula+ -j ACCEPT",
 		"-p icmp -j ACCEPT",
 		"-p udp --dport 68 -j ACCEPT",
 		"-p udp --dport 41641 -j ACCEPT",
@@ -232,6 +236,7 @@ func emitV6Chain(b *strings.Builder, rs rules.RuleSet, rl []rules.Rule, extraByp
 	b.WriteString("  $IPT6 -A ZFW-IN6 -i zt+ -j RETURN\n")
 	b.WriteString("  $IPT6 -A ZFW-IN6 -i wg+ -j RETURN\n")
 	b.WriteString("  $IPT6 -A ZFW-IN6 -i tun0 -j RETURN\n")
+	b.WriteString("  $IPT6 -A ZFW-IN6 -i nebula+ -j RETURN\n")
 	for _, iface := range extraBypass {
 		fmt.Fprintf(b, "  $IPT6 -A ZFW-IN6 -i %s -j RETURN\n", iface)
 	}

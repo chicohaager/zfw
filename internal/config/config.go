@@ -30,7 +30,7 @@ type Config struct {
 	PeerToken      string        // shared bearer accepted by /api/peers/receive (follower-side); empty disables inbound receive
 	// ExtraBypassIfaces (v0.5.4) — additional inbound-bypass interface
 	// names appended to every chain on top of the built-in list
-	// (lo / docker0 / br-+ / tailscale0 / zt+ / wg+). Strings may use
+	// (lo / docker0 / br-+ / tailscale0 / zt+ / wg+ / tun0 / nebula+). Strings may use
 	// iptables' "+" wildcard suffix; comma-separated via ZFW_EXTRA_BYPASS_IFACES.
 	// Invalid names are filtered out by the daemon before compile so a
 	// crafted env var cannot inject shell payload into compiled.sh.
