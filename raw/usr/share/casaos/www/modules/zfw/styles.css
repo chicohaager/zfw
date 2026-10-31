@@ -707,6 +707,7 @@ input:focus, select:focus {
 }
 .apps-banner[hidden] { display: none; }
 .apps-banner b { color: var(--text); }
+.session-banner { background: var(--danger-tint); color: var(--danger); border-color: var(--danger); }
 .apps-banner button { margin-left: auto; }
 .apps-panel {
   margin: 0 0 18px; padding: 14px 16px;

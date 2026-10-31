@@ -31,9 +31,41 @@ async function api(path, opts = {}) {
   const tok = localStorage.getItem('access_token');
   if (tok) headers['Authorization'] = 'Bearer ' + tok;
   const r = await fetch(API_BASE + path, { ...opts, headers });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+  // The auth middleware answers 401 in plain text ("invalid session: token
+  // expired"), the handlers answer errors as JSON {error}. Read the body once
+  // as text so both reach the user instead of a bare "HTTP 401".
+  const text = await r.text().catch(() => '');
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch (_) { data = {}; }
+  if (r.status === 401) setSessionExpired(true, text.trim());
+  else if (r.ok) setSessionExpired(false);
+  if (!r.ok) {
+    const err = new Error((data && data.error) || text.trim() || `HTTP ${r.status}`);
+    err.status = r.status;
+    throw err;
+  }
   return data;
+}
+
+// A ZimaOS access token lives 3 hours (exp - iat = 10800 s, measured on
+// ZimaOS 1.8.0). When the one in localStorage has run out, every call
+// answers 401 and before v1.0.31 the only trace was the browser console.
+// Show it above the tabs instead; the next successful call hides it again,
+// so a token renewed in another dashboard tab clears the notice by itself.
+let sessionExpired = false;
+function setSessionExpired(on, reason = '') {
+  sessionExpired = on;
+  const el = $('#session-banner');
+  if (!el) return;
+  el.hidden = !on;
+  if (!on) { el.innerHTML = ''; return; }
+  el.innerHTML = '<b>Your ZimaOS session has expired or is missing.</b> ' +
+    'Reload the ZimaOS dashboard and sign in again if it asks.' +
+    (reason ? ` <small class="mono">(${esc(reason)})</small>` : '') +
+    ' <button class="btn-secondary" id="session-reload">Reload</button>';
+  $('#session-reload').addEventListener('click', () => {
+    try { window.top.location.reload(); } catch (_) { location.reload(); }
+  });
 }
 
 /* ---------- tabs ---------- */
@@ -1515,23 +1547,33 @@ async function runTab(name, fn) {
     await fn();
   } catch (e) {
     console.error('[zfw] tab "' + name + '" failed:', e);
-    setStatus('Error in ' + name + ': ' + e.message, 'err');
+    if (e.status === 401) setStatus('Session expired — see the notice above.', 'err');
+    else setStatus('Error in ' + name + ': ' + e.message, 'err');
   }
 }
 
 async function refreshAll() {
   setStatus('Loading…');
-  await runTab('firewall',  loadFirewall);
   // Don't reload rules over unsaved edits — loadRules replaces the
   // local rule set with the server copy and clears the dirty flag,
   // silently wiping pending changes on a Refresh click.
-  if (!rulesDirty) await runTab('rules', loadRules);
-  await runTab('exposure',  loadExposure);
-  await runTab('apps',      loadApps);
-  await runTab('events',    loadEvents);
-  await runTab('conntrack', loadConntrack);
-  await runTab('audit',     loadAudit);
-  await runTab('versions',  loadVersions);
+  const tabs = [
+    ['firewall',  loadFirewall],
+    ['rules',     rulesDirty ? null : loadRules],
+    ['exposure',  loadExposure],
+    ['apps',      loadApps],
+    ['events',    loadEvents],
+    ['conntrack', loadConntrack],
+    ['audit',     loadAudit],
+    ['versions',  loadVersions],
+  ];
+  for (const [name, fn] of tabs) {
+    if (!fn) continue;
+    await runTab(name, fn);
+    // An expired session fails every tab the same way; stop after the
+    // first 401 instead of sending seven more doomed requests.
+    if (sessionExpired) return;
+  }
   if (($('#status').textContent || '') === 'Loading…') setStatus('');
 }
 
