@@ -53,13 +53,20 @@ jobs:
           else
             echo "tags=$IMAGE:$V" >> "$GITHUB_OUTPUT"
           fi
+      # Two checkouts: the workflow's own commit supplies the tooling
+      # (stage-docker-payload.sh may be newer than an older release tag);
+      # the release tag supplies what goes into the image (Dockerfile,
+      # engine, install.sh) and becomes the build context in src/.
+      - uses: actions/checkout@v7
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
+          path: src
       - name: Download the published release assets
         run: gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D release -p 'zfw-*.tar.gz' -p 'zfw-*.tar.gz.sha256'
       - name: Stage the released modules for the Dockerfile
-        run: sh tools/stage-docker-payload.sh release "${{ steps.ver.outputs.v }}"
+        working-directory: src
+        run: sh ../tools/stage-docker-payload.sh ../release "${{ steps.ver.outputs.v }}"
       - name: Docker Hub secrets present
         env:
           DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -77,7 +84,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
       - uses: docker/build-push-action@v7
         with:
-          context: .
+          context: src
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.ver.outputs.tags }}
@@ -88,7 +95,7 @@ jobs:
           V="${{ steps.ver.outputs.v }}"
           for a in amd64 arm64; do
             got=$(docker run --rm --pull=always --platform "linux/$a" --entrypoint sh "$IMAGE:$V" -c 'sha256sum /payload/zfw.raw' | cut -d' ' -f1)
-            want=$(cut -d' ' -f1 "dist/zfw-$a.raw.sha256")
+            want=$(cut -d' ' -f1 "src/dist/zfw-$a.raw.sha256")
             echo "$a registry=$got release=$want"
             if [ -z "$got" ] || [ "$got" != "$want" ]; then
               echo "::error::$a payload in $IMAGE:$V does not match the release"
