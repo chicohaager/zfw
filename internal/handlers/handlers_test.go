@@ -207,7 +207,7 @@ func TestRulesGetReturnsEmptyOnFreshInstall(t *testing.T) {
 }
 
 // TestStatusReflectsDeadmanLifecycle locks in the dead-man timer state
-// transitions verified live on 2026-05-23 (lan-host): the API's
+// transitions verified live on 2026-05-23 (a test host): the API's
 // firewall.deadman field must mirror what the daemon read from systemctl.
 // If a future refactor accidentally caches Status, this test goes red.
 func TestStatusReflectsDeadmanLifecycle(t *testing.T) {

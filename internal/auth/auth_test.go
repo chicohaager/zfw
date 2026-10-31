@@ -89,7 +89,7 @@ func TestVerifyExpiredToken(t *testing.T) {
 // names, not via sessionIssuers — a test that read the list back would stay
 // green if an entry were dropped, which is exactly the failure that took the
 // UI down after the ZimaOS v1.7.1-beta1 rename ("casaos" → "zimaos").
-// Measured on nas-main: v1.7.0-beta1 mints "casaos", v1.7.1-beta1 mints "zimaos";
+// Measured on the test NAS: v1.7.0-beta1 mints "casaos", v1.7.1-beta1 mints "zimaos";
 // hosts of both generations must keep working.
 func TestVerifyAcceptsBothPlatformIssuers(t *testing.T) {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -106,7 +106,7 @@ func TestVerifyAcceptsBothPlatformIssuers(t *testing.T) {
 
 // TestVerifyRejectsNonSessionIssuer pins the R5 issuer-scoping fix: a
 // token with a valid signature, valid expiry, but a non-session `iss`
-// (the refresh token's "refresh", verified against a live nas-main login)
+// (the refresh token's "refresh", verified against a live login on the test NAS)
 // must be refused so it cannot authorise the firewall control API.
 func TestVerifyRejectsNonSessionIssuer(t *testing.T) {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

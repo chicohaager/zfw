@@ -49,7 +49,7 @@ const clockSkew = 60 * time.Second
 // v1.7.0 and older hosts as well as on v1.7.1+. The refresh token kept its
 // own issuer through the rename and stays rejected.
 //
-// Measured with live logins against nas-main:
+// Measured with live logins against the test NAS:
 //   - 2026-06-12, v1.7.0-beta1: access iss="casaos",  refresh iss="refresh"
 //   - 2026-08-12, v1.7.1-beta1: access iss="zimaos",  refresh iss="refresh"
 //     (POST /v1/users/refresh also returns an access token with iss="zimaos")

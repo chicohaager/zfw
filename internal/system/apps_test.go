@@ -12,7 +12,7 @@ func TestParsePublished(t *testing.T) {
 		// IPv4 + IPv6 publishing of one port: one entry
 		{"0.0.0.0:8086->80/tcp, :::8086->80/tcp", "[{tcp 8086}]"},
 		// bound to one LAN address (the restic-250-server shape)
-		{"192.0.2.24:8000->8000/tcp", "[{tcp 8000}]"},
+		{"192.0.2.30:8000->8000/tcp", "[{tcp 8000}]"},
 		// loopback only: nothing on the LAN can reach it
 		{"127.0.0.1:9000->9000/tcp, [::1]:9000->9000/tcp", "[]"},
 		// loopback and LAN for the same port: the LAN binding counts

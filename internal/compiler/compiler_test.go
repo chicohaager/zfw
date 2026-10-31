@@ -536,7 +536,7 @@ func TestOutboundChainTerminatesInReturn(t *testing.T) {
 		Rules: []rules.Rule{{
 			ID: "rout2", Order: 10, Enabled: true,
 			Name: "Block bad peer", Action: "deny",
-			Source:   rules.Source{Type: "ip", Value: "203.0.113.89"},
+			Source:   rules.Source{Type: "ip", Value: "203.0.113.60"},
 			Ports:    rules.Ports{Type: "all"},
 			Protocol: "both", Zone: "host",
 			Direction: "outbound",
@@ -583,7 +583,7 @@ func TestZimaNetTunnelBypassed(t *testing.T) {
 // Nebula (slackhq/nebula, packaged as the `nebula` sysext module) names its
 // TUN device nebula1 by default. A peer arriving on it has passed Nebula's
 // certificate handshake and Nebula's own firewall section — the same trust
-// argument as wg+ and tailscale0. Measured on ZimaOS 1.8.0 (nas-test,
+// argument as wg+ and tailscale0. Measured on ZimaOS 1.8.0 (second test NAS,
 // `iptables -L ZFW-IN -nv`): the chain accepted lo, docker0, br-+, virbr0,
 // tailscale0, zt+, wg+ and tun0 only, so traffic on a Nebula interface fell
 // through to the final LOG + DROP. All three emitters are asserted, as for tun0.
