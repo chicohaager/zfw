@@ -215,14 +215,15 @@ gzip — the ZimaOS kernel is built without zstd/xz squashfs support.
 
 ### Building the installer image
 
-**Since v1.0.32 CI does this on every release tag** (job `docker` in
-`.github/workflows/ci.yml`): it takes the modules from the tag's own release
-artifact (`tools/stage-docker-payload.sh` verifies every checksum on the way),
-pushes `chicohaager/zfw:<version>` and `:latest` for amd64 and arm64, and pulls
-each architecture back from the registry to compare its payload with the
-release. It needs the repository secrets `DOCKERHUB_USERNAME` and
-`DOCKERHUB_TOKEN`; without them the job fails instead of leaving a release
-without its image. The manual way below stays for a re-push or a fork.
+**Since v1.0.32 a workflow does this whenever a release is published**
+(`.github/workflows/docker.yml`): it downloads the release's tarballs,
+`tools/stage-docker-payload.sh` verifies every checksum and stages the modules,
+and it pushes `chicohaager/zfw:<version>` for amd64 and arm64 — plus `:latest`
+when that tag is the latest release — then pulls each architecture back from
+the registry to compare its payload with the release. Re-push any release with
+`gh workflow run docker.yml -f tag=v<version>`. It needs the repository secrets
+`DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN`; without them the job fails instead
+of leaving a release without its image. The manual way below stays for a re-push or a fork.
 
 The Docker Hub image is built from the artifacts `build.sh` leaves in `dist/` — the
 `Dockerfile` copies `dist/zfw-<arch>.raw` straight in — so run a **full** `sh build.sh`

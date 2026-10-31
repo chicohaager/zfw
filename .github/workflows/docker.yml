@@ -1,0 +1,97 @@
+# Docker Hub installer image — chicohaager/zfw:<version> (+ :latest)
+#
+# Runs when a GitHub release is published, and by hand for any release tag
+# (Actions → "Docker image" → Run workflow, or
+#  `gh workflow run docker.yml -f tag=v1.0.31`) to re-push an image.
+#
+# The image carries the modules of the PUBLISHED release, byte for byte: the
+# job downloads the release's tarballs and tools/stage-docker-payload.sh
+# verifies every checksum before the Dockerfile copies them. No second build.
+#
+# :latest moves only when the tag is the repository's latest release, so a
+# re-push of an older version never turns latest back.
+#
+# Needs the repository secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN; without
+# them the job fails after staging instead of leaving a release without its
+# image unnoticed.
+
+name: Docker image
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v1.0.31"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: chicohaager/zfw
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Release tag and image tags
+        id: ver
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::not a release tag: '$TAG'"
+            exit 1
+          fi
+          V="${TAG#v}"
+          LATEST=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          echo "release $TAG, repository latest $LATEST"
+          echo "v=$V" >> "$GITHUB_OUTPUT"
+          if [ "$LATEST" = "$TAG" ]; then
+            echo "tags=$IMAGE:$V,$IMAGE:latest" >> "$GITHUB_OUTPUT"
+          else
+            echo "tags=$IMAGE:$V" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - name: Download the published release assets
+        run: gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D release -p 'zfw-*.tar.gz' -p 'zfw-*.tar.gz.sha256'
+      - name: Stage the released modules for the Dockerfile
+        run: sh tools/stage-docker-payload.sh release "${{ steps.ver.outputs.v }}"
+      - name: Docker Hub secrets present
+        env:
+          DH_USER: ${{ secrets.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DH_USER" ] || [ -z "$DH_TOKEN" ]; then
+            echo "::error::repository secrets DOCKERHUB_USERNAME / DOCKERHUB_TOKEN are not set — no image pushed for $TAG"
+            exit 1
+          fi
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.ver.outputs.tags }}
+      # A local `docker images` proves nothing; pull each architecture back out
+      # of the registry and compare its payload with the released module.
+      - name: Verify what the registry serves
+        run: |
+          V="${{ steps.ver.outputs.v }}"
+          for a in amd64 arm64; do
+            got=$(docker run --rm --pull=always --platform "linux/$a" --entrypoint sh "$IMAGE:$V" -c 'sha256sum /payload/zfw.raw' | cut -d' ' -f1)
+            want=$(cut -d' ' -f1 "dist/zfw-$a.raw.sha256")
+            echo "$a registry=$got release=$want"
+            if [ -z "$got" ] || [ "$got" != "$want" ]; then
+              echo "::error::$a payload in $IMAGE:$V does not match the release"
+              exit 1
+            fi
+          done
