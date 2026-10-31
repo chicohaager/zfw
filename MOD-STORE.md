@@ -229,7 +229,8 @@ Before pushing a release tag:
       compare `dist/*.tar.gz.sha256` across runs) — **from the tagged
       release commit**, see step 2 above
 - [ ] Docker Hub image pushed and its payload verified against
-      `dist/zfw-<arch>.raw.sha256` per arch (README, "Building the installer image")
+      `dist/zfw-<arch>.raw.sha256` per arch — the tag's CI job `docker` does
+      both; check that it is green (README, "Building the installer image")
 - [ ] Browser-test the UI changes the release introduces
 
 That list is encoded in the project's memory entry
