@@ -1,7 +1,7 @@
 # ZFW Security Disclosure & Bug-Bounty Programme
 
 > **Status:** open as of v1.0.0 (GA). Researchers are welcome.
-> **Maintainer:** Holger Kuehn (Lintux) — `18085347+chicohaager@users.noreply.github.com`
+> **Maintainer:** Holger Kuehn (Lintux) — report privately via [GitHub](https://github.com/chicohaager/zfw/security/advisories/new)
 > **Companion docs:** [SECURITY-REPORT.md](SECURITY-REPORT.md) (three rounds of internal review), [THREAT-MODEL.md](THREAT-MODEL.md) (assets, adversaries, mitigations).
 
 ZFW is a host firewall for ZimaOS that ships as a sysext module +
@@ -69,8 +69,8 @@ when a researcher finds something. This document is the contract.
 
 ## 2. Process
 
-1. **Report**: email `18085347+chicohaager@users.noreply.github.com` with subject
-   line starting `[ZFW]`. PGP key on request.
+1. **Report**: privately through GitHub — [Report a vulnerability](https://github.com/chicohaager/zfw/security/advisories/new)
+   (Security tab). Only the maintainer sees it; no public issue, please.
 2. **Acknowledge**: within **3 working days**.
 3. **Triage**: within **7 working days**, including severity
    classification (Critical / High / Medium / Low / Info).
@@ -107,7 +107,7 @@ A useful report contains:
 A PoC against a host you own is fine. A PoC against a host you do
 not own — the maintainer's test ZimaCube included — requires
 explicit prior agreement; without it, that's testing in production.
-Agreement is requested by e-mail, at the same address as reports.
+Agreement is requested the same way as reports, through the private GitHub report.
 This document publishes no host address of the maintainer's.
 
 ---
