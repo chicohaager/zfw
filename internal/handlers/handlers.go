@@ -4,7 +4,6 @@ package handlers
 import (
 	"context"
 	"crypto/subtle"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/chicohaager/zfw/docs"
 	"github.com/chicohaager/zfw/internal/apps"
 	"github.com/chicohaager/zfw/internal/audit"
 	"github.com/chicohaager/zfw/internal/buildinfo"
@@ -564,12 +564,10 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "version": buildinfo.Version})
 }
 
-// openapiSpec is embedded at compile time so the daemon serves its own
-// OpenAPI 3.0 contract under /api/openapi.{json,yaml} without depending on
-// a file shipped next to the binary. Source: docs/openapi.yaml in the repo.
-//
-//go:embed openapi.yaml
-var openapiSpec []byte
+// openapiSpec is docs/openapi.yaml, embedded at compile time by package docs,
+// so the daemon serves its own OpenAPI 3.0 contract under /api/openapi.{json,yaml}
+// without a file next to the binary and without a copy that can go stale.
+var openapiSpec = docs.OpenAPI
 
 // openapi serves the embedded spec. Both /api/openapi.json and
 // /api/openapi.yaml return the same bytes (the file is YAML; OpenAPI tools

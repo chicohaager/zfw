@@ -386,6 +386,23 @@ func TestOpenAPISpecServed(t *testing.T) {
 	}
 }
 
+// TestOpenAPISpecIsTheDocsFile locks in that the daemon serves docs/openapi.yaml
+// itself, byte for byte. Until 2026-11-10 the handler embedded a gitignored
+// copy that build.sh and CI refreshed with cp: a fresh clone did not compile
+// (pattern openapi.yaml: no matching files found) and a stale local copy was
+// served silently (it differed from docs/ from line 100 on).
+func TestOpenAPISpecIsTheDocsFile(t *testing.T) {
+	want, err := os.ReadFile("../../docs/openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, _ := newTestServer(t, &fakeFirewall{})
+	w := do(s, http.MethodGet, "/api/openapi.yaml", nil)
+	if !bytes.Equal(w.Body.Bytes(), want) {
+		t.Fatalf("served spec (%d bytes) differs from docs/openapi.yaml (%d bytes)", w.Body.Len(), len(want))
+	}
+}
+
 // TestApplyRejectsMalformedJSON locks in the ZFW-S3 guard: the apply
 // handler must NOT silently fall back to safe=false when the request body
 // is malformed JSON — that would deploy rules without the 120 s dead-man

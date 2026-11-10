@@ -62,10 +62,6 @@ echo "SOURCE_DATE_EPOCH: $SOURCE_DATE_EPOCH"
 echo "[1/4] gofmt + go vet + test..."
 mkdir -p "$RAW/usr/bin" "$DIST"
 cd "$ROOT"
-# Single source of truth for the OpenAPI spec lives in docs/; the handlers
-# package embeds it via //go:embed. Copy fresh on every build so the two
-# copies cannot drift.
-cp "$ROOT/docs/openapi.yaml" "$ROOT/internal/handlers/openapi.yaml"
 unformatted="$(gofmt -l .)"
 if [ -n "$unformatted" ]; then
   echo "  ERROR: gofmt needed for:" >&2
